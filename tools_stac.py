@@ -47,7 +47,7 @@ def query_stac_catalog(params: str) -> dict:
                 "collections": [collection],
                 "bbox": bbox,
                 "datetime": f"{date_str}T00:00:00Z/{date_str}T23:59:59Z",
-                "limit": 1,
+                "limit": 3,
             }
 
             try:

@@ -12,7 +12,7 @@ def weather_tool(city_name: str, forecast_days: Optional[int] = 5) -> str:
     """
     #  Geocoding via Nominatim 
     geo_url = "https://nominatim.openstreetmap.org/search"
-    geo_params = {"q": city_name, "format": "json", "limit": 1}
+    geo_params = {"q": city_name, "format": "json", "limit": 3}
     geo_resp = requests.get(geo_url, params=geo_params, headers={"User-Agent": "weather-app"})
     geo_data = geo_resp.json()
     

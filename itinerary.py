@@ -6,7 +6,7 @@ from langchain.tools import tool
 # Geocoding via Nominatim (OpenStreetMap)
 def geocode_place(place_name):
     url = "https://nominatim.openstreetmap.org/search"
-    params = {"q": place_name, "format": "json", "limit": 1}
+    params = {"q": place_name, "format": "json", "limit": 3}
     r = requests.get(url, params=params, headers={"User-Agent": "route-steps-app"})
     r.raise_for_status()
     data = r.json()

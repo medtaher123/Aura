@@ -22,21 +22,6 @@ Core Requirements:
 * Function Usage: Use only necessary tools exactly once. Do not repeat or invent tools.
 * Output Format: ALL outputs MUST be JSON.
 
-Expected JSON Output:
-
-You must ONLY produce one of the following two JSON formats:
-
-### 1) When calling a tool:
-{
-  "action": "<tool_name>",
-  "action_input": <valid input for that tool>
-}
-
-### 2) When returning the final result (after a tool's observation):
-{
-  "action": "Final Answer",
-  "action_input": <the tool output JSON>
-}
 
 Task and Data Extraction Rules:
 
@@ -45,6 +30,25 @@ Task and Data Extraction Rules:
 * When using a tool, output only the tool call.
 * When the tool returns an observation, produce the final JSON response.
 
+Clarity & Structure:
+
+   * Keep your responses clear, concise, and well-organized.
+   * Do not continue reasoning once you have the necessary information.
+   
+Relevance:
+   * Answer only the question asked. Do not assume extra intentions or add unrelated details.
+   
+Final Response Format:
+
+   * Once you obtain an Observation, immediately return the response as:
+    Final Answer: [your clear and concise reply]
+    
+Completeness:
+
+   * Always include all relevant data obtained from tools (e.g., **all URLs**, values, statistics).
+   * Never summarize or omit URLs. If multiple are returned, display them **explicitly and completely**.
+   * Don’t omit tool outputs, even if the user didn’t explicitly request them.
+   
 Dates:
 
 * Extract in dd-mm-yyyy format.
@@ -76,6 +80,7 @@ examples = [
   {
     "question": "USER_QUERY: Check flooding conditions for Lagos Island from March 1 to March 5",
     "response": """{
+      "Final Answer": "No significant flooding events were detected in Lagos Island from March 1 to March 5.",
       "downstream_task": "query_disaster_events_tool",
       "start_date": "2024-03-01",
       "end_date": "2024-03-05",
@@ -84,29 +89,32 @@ examples = [
         "state": "",
         "city": "Lagos Island"
       },
-      "error": false
+      "error": false,
+      "Map generated": "flood_map_Lagos Island_2024-03-01_to_2024-03-05.html\n"
     }"""
   },
   {
-    "question": "USER_QUERY: Detect fires in January 2025 within a 100 km radius",
+    "question": "USER_QUERY: Detect fires in Potsdam in summer 2025 within a 100 km radius",
     "response": """{
+      "Final Answer": "17 fire(s) detected near Potsdam from 2025-06-01 to 2025-08-31 within a radius of 100 km",
       "downstream_task": "detect_fire_tool",
-      "start_date": "2025-01-01",
-      "end_date": "2025-01-31",
+      "start_date": "2025-06-01",
+      "end_date": "2025-08-31",
       "location": {
         "country": "Germany",
         "state": "",
         "city": "Potsdam"
       },
       "error": false,
-      "radius_km": 100
+      "radius_km": 100,
+      "Map generated": "flood_map_Potsdam_2025-06-01_to_2025-08-31.html\n"
     }"""
   },
   {
     "question": "USER_QUERY: Can you check the area for me?",
     "response": """{
       "error": true,
-      "message": "Unable to determine the requested environmental task. Please specify the type of analysis you want (e.g., fire detection, flood analysis, etc.)."
+      "Final Answer": "Unable to determine the requested environmental task. Please specify the type of analysis you want (e.g., fire detection, flood analysis, etc.)."
     }"""
   }
 ]

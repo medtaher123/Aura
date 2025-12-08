@@ -8,6 +8,7 @@ import os
 import re
 from dateparser.search import search_dates
 from calendar import monthrange
+from langchain_ollama import OllamaLLM
 
 MAP_KEY = 'f44596f0cc01c26985abd6bfff78ac92'
 ARCHIVE_DIR = "/home/inesb/Metaplanet_llm-main_v1/Data"
@@ -106,180 +107,154 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
             popup=popup
         ).add_to(m)
 
-    filename = f"fires_{city_name.lower().replace(' ', '_')}_{start_date}_to_{end_date}.html"
+    filename = f"fires_{city_name.lower().replace(' ', '_').replace(',', '')}_{start_date}_to_{end_date}.html"
     m.save(filename)
     return filename, len(df_filtered)
 
 
-# Extract ISO date(s), city name, and radius (km) from natural language queries
-from typing import Optional, Tuple
-from dateparser.search import search_dates
-
-def extract_dates_from_text(date_text: str) -> Optional[Tuple[str, str]]:
+def extract_params_from_text(text: str):
     """
-    Extract a start_date and end_date from free text using only search_dates.
-    Logic adapted from flood_detection.py.
-    Returns (start_date, end_date) as YYYY-MM-DD strings, or (None, None) if not found.
-    """
-    iso_day = re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", date_text)
-    if iso_day:
-        y, m, d = iso_day[0]
-        return f"{y}-{m}-{d}", f"{y}-{m}-{d}"
-
-    # detect YYYY-MM next
-    iso_month = re.findall(r"\b(\d{4})-(\d{2})\b", date_text)
-    if iso_month:
-        y, m = iso_month[0]
-        last = monthrange(int(y), int(m))[1]
-        return f"{y}-{m}-01", f"{y}-{m}-{last:02d}"
-
-    date_text = (date_text or "").strip()
-    try:
-        parsed = search_dates(date_text, languages=["fr", "en"], settings={"DATE_ORDER": "DMY"})
-    except Exception:
-        parsed = None
-
-    if not parsed:
-        return None, None
-
-    tuples = [(m[0].strip(), m[1]) for m in parsed if m and isinstance(m[1], datetime)]
-    if not tuples:
-        return None, None
-
-    if len(tuples) >= 2:
-        dates = sorted([t[1] for t in tuples])
-        return dates[0].strftime("%Y-%m-%d"), dates[-1].strftime("%Y-%m-%d")
-
-    match_text, dt = tuples[0]
-    mt = match_text.strip()
-    if mt.isdigit() and len(mt) == 4:
-        year = int(mt)
-        start = datetime(year, 1, 1)
-        end = datetime(year, 12, 31)
-        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-
-    tokens = [t.strip().lower() for t in mt.replace(',', ' ').split() if t.strip()]
-    has_day_token = False
-    for token in tokens:
-        if token.isdigit():
-            try:
-                day = int(token)
-                if 1 <= day <= 31:
-                    has_day_token = True
-                    break
-            except Exception:
-                pass
-        if token.endswith('er') and token[:-2].isdigit():
-            has_day_token = True
-            break
-    if not has_day_token and dt.month and dt.year:
-        
-        _, last_day = monthrange(dt.year, dt.month)
-        start = datetime(dt.year, dt.month, 1)
-        end = datetime(dt.year, dt.month, last_day)
-        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-
-    return dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%d")
-
-def extract_params_from_text(text):
-    """
-    Extract start_date, end_date, city name, and radius (km) from natural language queries.
+    Extracts start_date, end_date, city/location, and radius using a single LLM call.
+    Returns: (start_date, end_date, location, radius_km)
     """
     if not text:
         return None, None, None, 100
 
-    cleaned_text = " ".join(text.split())
-    lower_text = cleaned_text.lower()
+    # --- Build LLM extraction prompt ---
+    system_prompt = """
+    You are an expert system that extracts structured data from natural language.
+    Your job is to identify:
+    - start_date (YYYY-MM-DD or null)
+    - end_date (YYYY-MM-DD or null)
+    - location (city, region, or country)
+    - radius_km (integer or null)
+    
+    RULES:
+    - If only one date is mentioned, set start_date = end_date.
+    - If a year is mentioned alone (e.g. "in 2022"), return full year range.
+    - If a month is mentioned ("in July 2023"), return first and last day.
+    - If a season is mentioned (winter, summer, etc.), use:
+        * winter: Dec 1 – Feb 28
+        * spring: Mar 1 – May 31
+        * summer: Jun 1 – Aug 31
+        * autumn/fall: Sep 1 – Nov 30
+    - If radius is not mentioned, return null.
+    - ALWAYS answer with pure JSON. NO explanations.
+    """
 
-    # Extract radius
-    rayon_match = re.search(r"(\d+)\s?km", lower_text)
-    rayon_km = int(rayon_match.group(1)) if rayon_match else 100
+    few_shot = """
+    Example 1:
+    User input: "Marseille 2025-01 - 250"
+    Response:
+    {
+      "start_date": "2025-01-01",
+      "end_date": "2025-01-31",
+      "location": "Marseille",
+      "radius_km": 250
+    }
 
-    # Extract city (keep logic, but can be improved)
-    city = None
-    city_patterns = [
-        r"(?:\bà|\ba|\bau|\baux|\bdans|\bautour de|\bprès de|\bproche de|\bvers|\bsur)\s+([A-Za-zÀ-ÖØ-öø-ÿ'\-\s]+?)(?=(?:\s+(?:en|le|la|du|de|des|au|aux|pendant|pour|sur|vers|\d)|[\.,!?]|$))"
-    ]
-    for pattern in city_patterns:
-        match = re.search(pattern, cleaned_text, flags=re.IGNORECASE)
-        if match:
-            city = match.group(1).strip()
-            break
-    if not city:
-        # Fallback: try to find a capitalized word (likely a city)
-        tokens = cleaned_text.split()
-        for token in tokens:
-            if token.istitle():
-                city = token
-                break
-    if city:
-        city = re.sub(r"[\.,!?]+$", "", city).strip()
-        city = city.title()
+    Example 2:
+    User input: "Tunis summer 50"
+    Response:
+    {
+      "start_date": "2024-06-01",
+      "end_date": "2024-08-31",
+      "location": "Tunis",
+      "radius_km": 50
+    }
 
-    # Extract date(s) using the new logic
-    print( "Extracting dates from text:", cleaned_text )
-    start_date, end_date = extract_dates_from_text(cleaned_text)
-    print( "Extracted dates:", start_date, end_date )
-    return start_date, end_date, city, rayon_km
+    Example 3:
+    User input: "Rome December 1st to December 10th 2023"
+    Response:
+    {
+      "start_date": "2023-12-01",
+      "end_date": "2023-12-10",
+      "location": "Rome",
+      "radius_km": null
+    }
+
+    Example 4:
+    User input: "Morocco"
+    Response:
+    {
+      "start_date": null,
+      "end_date": null,
+      "location": "Morocco",
+      "radius_km": null
+    }
+    """
+
+    # --- Invoke LLM ---
+    llm = OllamaLLM(model="mistral", temperature=0.1, system_prompt=system_prompt)
+    prompt = f"{few_shot}\nUser input: \"{text}\"\nReturn JSON:"
+    llm_response = llm.invoke(prompt)
+
+    import json
+    try:
+        data = json.loads(llm_response)
+    except Exception:
+        return {
+            "error": f"❌ LLM returned invalid JSON: {llm_response}"
+        }
+
+    # --- Extract fields ---
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    location = data.get("location")
+    radius_km = data.get("radius_km") or 100  # default radius
+
+    return start_date, end_date, location, radius_km
+
 
 from langchain.tools import tool
 
-@tool
-def detect_fire_tool(query_text: str) -> dict:
+@tool(return_direct=True)
+def detect_fire_tool(query_text: str) -> str:
     """
     Tool to detect fires from a natural language query.
-    This function receives a sentence containing a city, a date (YYYY-MM-DD, month, or year),
-    and optionally a radius in kilometers. It extracts this information and returns a JSON object with the result, following the required format.
     """
     try:
+        print("Detecting fire with query:", query_text)
         start_date, end_date, city, radius_km = extract_params_from_text(query_text)
+        print("Extracted parameters:", start_date, end_date, city, radius_km)
 
         if not start_date or not city:
-            return {
-                "message": "Please specify a city and a date (YYYY-MM-DD, month, or year) in your query.",
-                "error": True
-            }
-
-        # Only support single-day queries for now
-        if start_date != end_date:
-            # Use the first day for detection
-            date_str = start_date
-        else:
-            date_str = start_date
+            return (
+                "ERROR: Please specify a city and a date (YYYY-MM-DD, month, or year) "
+                "in your query."
+            )
 
         result = detect_fire_near_city(start_date, end_date, city, radius_km)
-
+        print("Detection result:", result)
+        # NO FIRES FOUND
         if not result:
-            return {
-                "message": f"No fire detected or there was a problem processing the request for {city} on {date_str}.",
-                "downstream_task": "detect_fire_tool",
-                "start_date": date_str[8:10] + '-' + date_str[5:7] + '-' + date_str[0:4],
-                "end_date": date_str[8:10] + '-' + date_str[5:7] + '-' + date_str[0:4],
-                "location": {
-                    "country": "",
-                    "state": "",
-                    "city": city
-                },
-                "error": False
-            }
+            if start_date == end_date:
+                message = (
+                    f"There were no fires detected near {city} on {start_date} "
+                    f"within a radius of {radius_km} km."
+                )
+            else:
+                message = (
+                    f"There were no fires detected near {city} from {start_date} to {end_date} "
+                    f"within a radius of {radius_km} km."
+                )
+            return f"Final Answer: {message}"
 
+        # FIRES FOUND
         file_html, nb_fires = result
-        message = f"{nb_fires} fire(s) detected near {city} on {date_str} within a radius of {radius_km} km.\nMap: {file_html}"
-        return {
-            "message": message,
-            "downstream_task": "detect_fire_tool",
-            "start_date": date_str[8:10] + '-' + date_str[5:7] + '-' + date_str[0:4],
-            "end_date": date_str[8:10] + '-' + date_str[5:7] + '-' + date_str[0:4],
-            "location": {
-                "country": "",
-                "state": "",
-                "city": city
-            },
-            "error": False
-        }
+
+        if start_date == end_date:
+            message = (
+                f"{nb_fires} fire(s) detected near {city} on {start_date} "
+                f"within a radius of {radius_km} km.\nMap: {file_html}"
+            )
+        else:
+            message = (
+                f"{nb_fires} fire(s) detected near {city} from {start_date} to {end_date} "
+                f"within a radius of {radius_km} km.\nMap: {file_html}"
+            )
+
+        return f"Final Answer: {message}"
 
     except Exception as e:
-        return {
-            "message": f"Unexpected error during processing: {str(e)}",
-            "error": True
-        }
+        return f"ERROR: Unexpected error during processing: {str(e)}"

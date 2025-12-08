@@ -54,7 +54,7 @@ def create_agent_executor():
         verbose=True,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
-        max_iterations=10
+        max_iterations=5
     )
 
     return agent_executor
@@ -68,8 +68,9 @@ def run_query_direct(user_input: str, user_lang: str = "en"):
     Runs a direct STAC query using extracted bbox, dates, collection.
     Also translates the 'message' field back to the user's language if needed.
     """
+    print("Running direct STAC query...")
     result = extract_bbox_and_dates(user_input)
-
+    print(f"Extracted parameters: {result}")
     if "error" in result:
         return {"message": result["error"], "error": True}
 

@@ -13,7 +13,7 @@ OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed
 # Geocoding (name -> lat/lon)
 def geocode_city(city_name: str):
     url = "https://nominatim.openstreetmap.org/search"
-    params = {"q": city_name, "format": "json", "limit": 1}
+    params = {"q": city_name, "format": "json", "limit": 3}
     r = requests.get(url, params=params, headers={"User-Agent": "SurfaceIngressTool"})
     data = r.json()
     if not data:
@@ -141,7 +141,7 @@ def estimate_surface_water_ingress(location_input):
         raise ValueError("Invalid input. Use a city name or a (lat, lon) tuple.")
     location_info = reverse_geocode(lat, lon)
 
-    dem_file = download_dem_opentopo(lat, lon, buffer_deg=0.01)
+    dem_file = download_dem_opentopo(lat, lon, buffer_deg=0.015)
     try:
         with rasterio.open(dem_file) as src:
             dem = src.read(1).astype(np.float32)
@@ -154,9 +154,9 @@ def estimate_surface_water_ingress(location_input):
         slope = np.sqrt(gx**2 + gy**2)
         acc, _ = d8_flow_direction_and_accum(dem)
 
-        low_mask = dem <= np.nanpercentile(dem, 15)
-        flat_mask = slope <= 0.02
-        highacc = acc >= np.percentile(acc, 90)
+        low_mask = dem <= np.nanpercentile(dem, 0.1)
+        flat_mask = slope <= 0.0005
+        highacc = acc >= np.percentile(acc, 99.7)
         risk_mask = (low_mask & flat_mask) | highacc
 
         stats = {
@@ -192,18 +192,11 @@ def estimate_surface_water_ingress(location_input):
             "Mitigation_actions": actions,
             **stats,
             "Maps": {
-                "Elevation": "map_elevation.png",
-                "Slope": "map_slope.png",
-                "FlowAccumulation": "map_flowacc.png",
-                "Risk": "map_risk.png",
                 "Risk_Folium": "map_risk_folium.html"
             },
             "Explanation": (
-                "📊 How to read the maps:\n"
-                "1. Elevation map: higher areas vs lower areas.\n"
-                "2. Slope map: steep slopes indicate fast drainage.\n"
-                "3. Flow map: probable water paths.\n"
-                "4. Risk map: red areas indicate likely accumulation."
+                "How to read the maps:\n"
+                "Risk map: red areas indicate likely accumulation."
             ),
             "Location": location_info
         }
@@ -212,7 +205,7 @@ def estimate_surface_water_ingress(location_input):
             os.remove(dem_file)
 
 
-@tool
+@tool(return_direct=True)
 def estimate_surface_water_ingress_tool(location_input: str) -> dict:
     """
      Full analysis of surface water ingress risk for a given area.
@@ -221,13 +214,7 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
      - A city name (str), e.g., "Paris", or
      - A coordinate tuple (lat, lon), e.g., (48.8566, 2.3522).
 
-     Returns a dictionary containing:
-     1. Ingress_paths_estimate: Textual description of probable water flow paths (D8).
-     2. Mitigation_actions: List of recommended actions to reduce ingress risk.
-     3. Statistics: DEM statistics and risk-area metrics.
-     4. Maps: Paths to generated Matplotlib and Folium maps.
-     5. Explanation: How to read the maps.
-     6. error: Error message if the computation fails.
+    The final output is: Final Answer: <message>
 
     Process:
      - Geocoding (city name -> lat/lon) if needed.
@@ -239,27 +226,48 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
     """
     try:
         result = estimate_surface_water_ingress(location_input)
-        return {
-            "Ingress_paths_estimate": result.get("Ingress_paths_estimate", "Not available"),
-            "Mitigation_actions": result.get("Mitigation_actions", []),
-            "Statistics": {
-                "DEM_shape": result.get("DEM_shape"),
-                "Elevation_min": result.get("Elevation_min"),
-                "Elevation_max": result.get("Elevation_max"),
-                "Elevation_mean": result.get("Elevation_mean"),
-                "Slope_mean": result.get("Slope_mean"),
-                "Risk_zone_percent": result.get("Risk_zone_percent")
-            },
-            "Maps": result.get("Maps", {}),
-            "Explanation": result.get("Explanation", "Not available"),
-            "error": result.get("error")
-        }
+
+        ingress = result.get("Ingress_paths_estimate", "Not available")
+        mitigation = result.get("Mitigation_actions", [])
+        stats = result.get("Statistics", {})
+        maps = result.get("Maps", {})
+        explanation = result.get("Explanation", "Not available")
+
+        # -------- TEXT ASSEMBLY --------
+        message_parts = []
+
+        message_parts.append(f"📍 *Surface Water Ingress Risk Analysis for*: **{location_input}**\n")
+
+        message_parts.append("### 🌊 Estimated Water Flow Paths")
+        message_parts.append(ingress)
+
+        if mitigation:
+            message_parts.append("\n### 🛠 Recommended Mitigation Actions")
+            for action in mitigation:
+                message_parts.append(f"- {action}")
+
+        if stats:
+            message_parts.append("\n### 📊 Terrain & Risk Statistics")
+            message_parts.append(f"- DEM Shape: {stats.get('DEM_shape')}")
+            message_parts.append(f"- Elevation Min/Max/Mean: {stats.get('Elevation_min')} / "
+                                 f"{stats.get('Elevation_max')} / {stats.get('Elevation_mean')}")
+            message_parts.append(f"- Mean Slope: {stats.get('Slope_mean')}")
+            message_parts.append(f"- Risk Zone Coverage: {stats.get('Risk_zone_percent')}%")
+
+        if maps:
+            message_parts.append("\n### 🗺 Generated Maps")
+            for key, path in maps.items():
+                message_parts.append(f"- **{key}**: {path}")
+
+        if explanation:
+            message_parts.append("\n### ℹ️ How to Interpret the Maps")
+            message_parts.append(explanation)
+
+        # Join message
+        message = "\n".join(message_parts)
+
+        return f"Final Answer: {message}"
+
     except Exception as e:
-        return {
-            "error": str(e),
-            "Ingress_paths_estimate": "Not available",
-            "Mitigation_actions": [],
-            "Statistics": {},
-            "Maps": {},
-            "Explanation": "Not available"
-        }
+        error_message = f"An error occurred while processing the request: {str(e)}"
+        return f"Final Answer: {error_message}"

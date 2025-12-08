@@ -12,20 +12,9 @@ from geographic_info import geo_info_tool
 from itinerary import get_route_info
 from weather import weather_tool
 from dateparser.search import search_dates
-import spacy  
-
-import spacy
-from langdetect import detect
-
-
-# Load spaCy models globally
-nlp_en = spacy.load("en_core_web_sm")
-nlp_fr = spacy.load("fr_core_news_sm")
-nlp_it = spacy.load("it_core_news_sm")
-nlp_es = spacy.load("es_core_news_sm")
-nlp_multi = spacy.load("xx_ent_wiki_sm")  # multilingual fallback
-
-
+from geopy.geocoders import Nominatim
+from langchain_ollama import OllamaLLM
+geolocator = Nominatim(user_agent="my_app")
 
 month_map = {
     "janvier": "01", "février": "02", "mars": "03", "avril": "04",
@@ -290,28 +279,14 @@ def adjust_date(user_input: str) -> str:
         return f"❌ Error adjusting date: {str(e)}"
 
 
-
-
 def extract_bbox_and_dates(user_input: str) -> dict:
     try:
+        print(f"Debug: extract_bbox_and_dates called with input: {user_input}")
         # Ensure input is a string
-        if isinstance(user_input, dict):
-            user_input = user_input.get("user_input", "")
         if not user_input:
-            return {"error": "❌ No input provided."}
-
-        user_input_original = str(user_input).strip()
-        if not user_input_original:
             return {"error": "❌ Empty input string."}
 
-        user_input_lower = user_input_original.lower()
-
-        # --- Détection des dates ---
-        start_date, end_date = extract_dates_from_text(user_input_original)
-        if not start_date or not end_date:
-            return {"error": "❌ Unable to determine dates."}
-
-        # --- Détection de la collection ---
+        user_input_lower = user_input.lower()
         collection_map = {
             "sentinel-1": "sentinel-1-grd",
             "sentinel 1": "sentinel-1-grd",
@@ -342,42 +317,101 @@ def extract_bbox_and_dates(user_input: str) -> dict:
                     "error": "❌ Collection not recognized. Please specify: sentinel-1, sentinel-2, modis, viirs."
                 }
 
-            def get_spacy_model(text: str):
-                lang = detect(text)
-                if lang == "en":
-                    return nlp_en
-                elif lang == "fr":
-                    return nlp_fr
-                elif lang == "it":
-                    return nlp_it
-                elif lang == "es":
-                    return nlp_es
-                else:
-                    return nlp_multi  # fallback for Arabic or other languages
+        # --- LLM call to extract date and city ---
+        system_prompt = """
+        You are an assistant specialized in extracting structured information from user requests.
+        Extract the start date, end date, and location (city, region, or country) from the user's text.
+        Return ONLY a JSON object in this exact format:
 
-            model = get_spacy_model(user_input_original)
-            doc = model(user_input_original)
-            city_candidates = [ent.text for ent in doc.ents if ent.label_ in ("GPE", "LOC")]
+        {
+        "start_date": "YYYY-MM-DD" or null,
+        "end_date": "YYYY-MM-DD" or null,
+        "location": "city/region/country name" or null
+        }
 
+        Do NOT include any explanations, instructions, or extra text. 
+        If a date is not specified, start_date and end_date should be null. If just one date is given, use it for both start_date and end_date.
+        Always respond with valid JSON.
+        """
 
-            if not city_candidates:
-                return {"error": "❌ Unable to detect any city, region, or country in the request."}
+        few_shot_examples = """
+        Example 1:
+        User input: "Show me satellite images of Paris in 2024"
+        Response:
+        {
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+        "location": "Paris"
+        }
 
-            # Pick the first candidate
-            city = city_candidates[0].strip().title()
+        Example 2:
+        User input: "I need images from Tunisia between 2023-12-01 and 2023-12-10"
+        Response:
+        {
+        "start_date": "2023-12-01",
+        "end_date": "2023-12-10",
+        "location": "Tunisia"
+        }
 
+        Example 3:
+        User input: "Get satellite imagery of Nice"
+        Response:
+        {
+        "start_date": null,
+        "end_date": null,
+        "location": "Nice"
+        }
+        
+        Example 4:
+        User input: "I was in italy last summer, show me satellite images there"
+        Response:
+        {
+        "start_date": "2024-06-01",
+        "end_date": 2024-08-31",
+        "location": "Italy"
+        }
+        
+        Example 5:
+        User input: "there was a flood in luxembourg, show me satellite images there on july 15 2023"
+        Response:
+        {
+        "start_date": "2023-07-15",
+        "end_date": "2023-07-15",
+        "location": "Luxembourg"
+        }
+        """
 
-        # Clean up city string
-        city = city.strip().title()
+        llm = OllamaLLM(
+            model="mistral",
+            temperature=0.3,
+            system_prompt=system_prompt
+        )
 
-        # Get bounding box
-        bbox_result = get_city_bbox(city)
+        prompt = f"Extract start date, end date, and location from the following text as JSON. {few_shot_examples}\n User input: \"{user_input}\""
+        llm_response = llm.invoke(prompt)
+        print(f"Debug: LLM response: {llm_response}")
+        import json
+        try:
+            extracted = json.loads(llm_response)
+        except Exception:
+            return {"error": f"❌ LLM response could not be parsed as JSON: {llm_response}"}
+
+        start_date = extracted.get("start_date")
+        end_date = extracted.get("end_date")
+        city_name = extracted.get("location")
+        if start_date is None or end_date is None:
+            start_date, end_date = extract_dates_from_text(user_input)
+        if not city_name:
+            return {"error": "❌ Unable to determine location."}
+
+        # --- Use existing get_city_bbox for bounding box ---
+        bbox_result = get_city_bbox(city_name)
         if not bbox_result or len(bbox_result) != 5:
-            return {"error": f"❌ Location '{city}' not found or bbox unavailable."}
+            return {"error": f"❌ Location '{city_name}' not found or bbox unavailable."}
 
-        min_lon, min_lat, max_lon, max_lat, city_name = bbox_result
+        min_lon, min_lat, max_lon, max_lat, city_name_final = bbox_result
         if None in (min_lon, min_lat, max_lon, max_lat):
-            return {"error": f"❌ Location '{city}' not found or bbox unavailable."}
+            return {"error": f"❌ Location '{city_name}' not found or bbox unavailable."}
 
         bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
 
@@ -386,13 +420,11 @@ def extract_bbox_and_dates(user_input: str) -> dict:
             "start_date": start_date,
             "end_date": end_date,
             "collection": collection,
-            "city": city_name,
+            "city": city_name_final,
         }
 
     except Exception as e:
         return {"error": f"❌ Error in extract_bbox_and_dates: {str(e)}"}
-
-
 
 
 def query_stac_with_retries(bbox_str, start_date_str, end_date_str, collection, query_func):
