@@ -88,10 +88,10 @@ jobs:
               --health-check-configuration "{
                 \"Protocol\": \"HTTP\",
                 \"Path\": \"/_stcore/health\",
-                \"Interval\": 30,
-                \"Timeout\": 10,
+                \"Interval\": 20,
+                \"Timeout\": 5,
                 \"HealthyThreshold\": 1,
-                \"UnhealthyThreshold\": 3
+                \"UnhealthyThreshold\": 10
               }" \
               --region ${{ env.AWS_REGION }}
             
