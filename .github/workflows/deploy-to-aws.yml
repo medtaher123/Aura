@@ -79,6 +79,9 @@ jobs:
                   },
                   \"ImageRepositoryType\": \"ECR\"
                 },
+                \"AuthenticationConfiguration\": {
+                  \"AccessRoleArn\": \"arn:aws:iam::637423200916:role/service-role/AppRunnerECRAccessRole\"
+                },
                 \"AutoDeploymentsEnabled\": true
               }" \
               --instance-configuration "{
@@ -86,9 +89,8 @@ jobs:
                 \"Memory\": \"12 GB\"
               }" \
               --health-check-configuration "{
-                \"Protocol\": \"HTTP\",
-                \"Path\": \"/_stcore/health\",
-                \"Interval\": 20,
+                \"Protocol\": \"TCP\",
+                \"Interval\": 10,
                 \"Timeout\": 5,
                 \"HealthyThreshold\": 1,
                 \"UnhealthyThreshold\": 10

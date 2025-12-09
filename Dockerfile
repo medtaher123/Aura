@@ -32,11 +32,19 @@ RUN pip3 install --no-cache-dir --ignore-installed -r requirements.txt --break-s
 COPY . .
 
 # Pre-download Mistral model during build (so it's baked into the image)
-RUN ollama serve & \
+# Set OLLAMA_MODELS to ensure it's stored in the image layer
+ENV OLLAMA_MODELS=/app/.ollama/models
+RUN mkdir -p /app/.ollama && \
+    ollama serve & \
     OLLAMA_PID=$! && \
+    echo "Waiting for Ollama to start..." && \
     sleep 10 && \
+    echo "Pulling mistral model..." && \
     ollama pull mistral && \
-    kill $OLLAMA_PID || true
+    echo "Model downloaded successfully" && \
+    ollama list && \
+    kill $OLLAMA_PID && \
+    wait $OLLAMA_PID 2>/dev/null || true
 
 # Expose ports
 EXPOSE 8501 11434
@@ -44,20 +52,12 @@ EXPOSE 8501 11434
 # Create startup script
 RUN echo '#!/bin/bash\n\
 set -e\n\
-echo "Starting Ollama server..."\n\
+export OLLAMA_MODELS=/app/.ollama/models\n\
 ollama serve &\n\
-OLLAMA_PID=$!\n\
-echo "Waiting for Ollama to be ready..."\n\
 sleep 5\n\
-echo "Model already pre-downloaded, skipping pull..."\n\
-echo "Starting Streamlit app..."\n\
-streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true\n\
-wait $OLLAMA_PID\n\
+ollama list || echo "Failed to list models"\n\
+exec streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false\n\
 ' > /app/start.sh && chmod +x /app/start.sh
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
 # Run the startup script
 CMD ["/app/start.sh"]
