@@ -49,15 +49,13 @@ RUN mkdir -p /app/.ollama && \
 # Expose ports
 EXPOSE 8501 11434
 
-# Create startup script
-RUN echo '#!/bin/bash\n\
-set -e\n\
-export OLLAMA_MODELS=/app/.ollama/models\n\
-ollama serve &\n\
-sleep 5\n\
-ollama list || echo "Failed to list models"\n\
-exec streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false\n\
-' > /app/start.sh && chmod +x /app/start.sh
+# Copy startup script
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+# Add Docker health check
+HEALTHCHECK --interval=20s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8501/health || exit 1
 
 # Run the startup script
 CMD ["/app/start.sh"]

@@ -10,6 +10,7 @@ env:
   AWS_REGION: eu-west-3
   ECR_REPOSITORY: metaplanet-llm-demo
   APP_RUNNER_SERVICE: metaplanet-llm-demo-service
+  APPRUNNER_ACCESS_ROLE_ARN: arn:aws:iam::637423200916:role/service-role/AppRunnerECRAccessRole
 
 jobs:
   deploy:
@@ -69,7 +70,7 @@ jobs:
           
           if [ -z "$SERVICE_ARN" ]; then
             echo "Creating new App Runner service..."
-            aws apprunner create-service \
+            CREATE_OUTPUT=$(aws apprunner create-service \
               --service-name ${{ env.APP_RUNNER_SERVICE }} \
               --source-configuration "{
                 \"ImageRepository\": {
@@ -80,45 +81,61 @@ jobs:
                   \"ImageRepositoryType\": \"ECR\"
                 },
                 \"AuthenticationConfiguration\": {
-                  \"AccessRoleArn\": \"arn:aws:iam::637423200916:role/service-role/AppRunnerECRAccessRole\"
+                  \"AccessRoleArn\": \"${{ env.APPRUNNER_ACCESS_ROLE_ARN }}\"
                 },
-                \"AutoDeploymentsEnabled\": true
+                \"AutoDeploymentsEnabled\": false
               }" \
               --instance-configuration "{
                 \"Cpu\": \"4 vCPU\",
-                \"Memory\": \"12 GB\"
+                \"Memory\": \"12 GB\",
+                \"InstanceRoleArn\": null
               }" \
               --health-check-configuration "{
-                \"Protocol\": \"TCP\",
-                \"Interval\": 10,
-                \"Timeout\": 5,
+                \"Protocol\": \"HTTP\",
+                \"Path\": \"/health\",
+                \"Interval\": 20,
+                \"Timeout\": 10,
                 \"HealthyThreshold\": 1,
-                \"UnhealthyThreshold\": 10
+                \"UnhealthyThreshold\": 5
               }" \
-              --region ${{ env.AWS_REGION }}
+              --region ${{ env.AWS_REGION }} \
+              --output json)
             
-            echo "Waiting for service creation..."
-            aws apprunner wait service-created \
-              --service-arn $(aws apprunner list-services --region ${{ env.AWS_REGION }} \
-                --query "ServiceSummaryList[?ServiceName=='${{ env.APP_RUNNER_SERVICE }}'].ServiceArn" \
-                --output text) \
-              --region ${{ env.AWS_REGION }}
+            if [ $? -ne 0 ]; then
+              echo "Failed to create App Runner service"
+              exit 1
+            fi
+            
+            SERVICE_URL=$(echo $CREATE_OUTPUT | jq -r '.Service.ServiceUrl')
+            echo "Service creation initiated. Deployment will continue in the background."
           else
-            echo "Updating existing App Runner service..."
-            aws apprunner start-deployment \
+            echo "Updating existing App Runner service with new image..."
+            UPDATE_OUTPUT=$(aws apprunner update-service \
               --service-arn $SERVICE_ARN \
-              --region ${{ env.AWS_REGION }}
+              --source-configuration "{
+                \"ImageRepository\": {
+                  \"ImageIdentifier\": \"${{ steps.build-image.outputs.image }}\",
+                  \"ImageConfiguration\": {
+                    \"Port\": \"8501\"
+                  },
+                  \"ImageRepositoryType\": \"ECR\"
+                },
+                \"AuthenticationConfiguration\": {
+                  \"AccessRoleArn\": \"${{ env.APPRUNNER_ACCESS_ROLE_ARN }}\"
+                },
+                \"AutoDeploymentsEnabled\": false
+              }" \
+              --region ${{ env.AWS_REGION }} \
+              --output json)
             
-            echo "Waiting for deployment to complete..."
-            aws apprunner wait service-updated \
-              --service-arn $SERVICE_ARN \
-              --region ${{ env.AWS_REGION }}
+            if [ $? -ne 0 ]; then
+              echo "Failed to update App Runner service"
+              exit 1
+            fi
+            
+            SERVICE_URL=$(echo $UPDATE_OUTPUT | jq -r '.Service.ServiceUrl')
+            echo "Service update initiated. Deployment will continue in the background."
           fi
-          
-          # Get the service URL
-          SERVICE_URL=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
-            --query "ServiceSummaryList[?ServiceName=='${{ env.APP_RUNNER_SERVICE }}'].ServiceUrl" \
-            --output text)
           
           echo "service-url=$SERVICE_URL" >> $GITHUB_OUTPUT
           echo "Service deployed successfully!"
