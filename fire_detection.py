@@ -10,10 +10,11 @@ from dateparser.search import search_dates
 from calendar import monthrange
 from langchain_ollama import OllamaLLM
 
-MAP_KEY = 'f44596f0cc01c26985abd6bfff78ac92'
-ARCHIVE_DIR = "/home/inesb/Metaplanet_llm-main_v1/Data"
+MAP_KEY = "f44596f0cc01c26985abd6bfff78ac92"
+ARCHIVE_DIR = "./Data"
 
 # ARCHIVE_DIR = r"C:\MEPDev\LLM_Demo\langgraph_project\Data"
+
 
 # Calculate the great-circle distance between two points on the Earth (Haversine formula)
 def haversine(lat1, lon1, lat2, lon2):
@@ -21,31 +22,35 @@ def haversine(lat1, lon1, lat2, lon2):
     phi1, phi2 = np.radians(lat1), np.radians(lat2)
     dphi = np.radians(lat2 - lat1)
     dlambda = np.radians(lon2 - lon1)
-    a = np.sin(dphi/2)**2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda/2)**2
+    a = np.sin(dphi / 2) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2) ** 2
     return 2 * R * np.arcsin(np.sqrt(a))
+
 
 # Get latitude and longitude for a city name using OpenStreetMap Nominatim API
 def get_city_coordinates(city_name):
-    url = f'https://nominatim.openstreetmap.org/search?q={city_name}&format=json&limit=1'
+    url = (
+        f"https://nominatim.openstreetmap.org/search?q={city_name}&format=json&limit=1"
+    )
     try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
         data = response.json()
         if not data:
             return None, None
-        return float(data[0]['lat']), float(data[0]['lon'])
+        return float(data[0]["lat"]), float(data[0]["lon"])
     except:
         return None, None
+
 
 # Find the archive file that contains data for the given date
 def find_archive_file_for_range(start_date_obj, end_date_obj):
     for filename in sorted(os.listdir(ARCHIVE_DIR)):
         if filename.endswith(".csv") and "fire_archive_" in filename:
             try:
-                parts = filename.replace(".csv","").split("_")
+                parts = filename.replace(".csv", "").split("_")
                 start_year = int(parts[2])
-                end_year   = int(parts[3])
-                file_start = datetime(start_year,1,21).date()
-                file_end   = datetime(end_year,1,20).date()
+                end_year = int(parts[3])
+                file_start = datetime(start_year, 1, 21).date()
+                file_end = datetime(end_year, 1, 20).date()
 
                 # Check if ranges overlap
                 if not (end_date_obj < file_start or start_date_obj > file_end):
@@ -65,7 +70,7 @@ def should_use_api(start_date, end_date):
 # Detect fires near a city for a given date and radius (km)
 def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
-    end_date_obj   = datetime.strptime(end_date, "%Y-%m-%d").date()
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
     lat_city, lon_city = get_city_coordinates(city_name)
     if lat_city is None:
@@ -74,7 +79,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     use_api = should_use_api(start_date, end_date)
 
     if use_api:
-        url = f'https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3'
+        url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
         df = pd.read_csv(url)
     else:
         file_path = find_archive_file_for_range(start_date_obj, end_date_obj)
@@ -87,24 +92,29 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         return None
 
     df["acq_date"] = pd.to_datetime(df["acq_date"]).dt.date
-    df = df[(df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)].copy()
+    df = df[
+        (df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)
+    ].copy()
     if df.empty:
         return None
 
-    df["distance"] = df.apply(lambda row: haversine(lat_city, lon_city, row["latitude"], row["longitude"]), axis=1)
+    df["distance"] = df.apply(
+        lambda row: haversine(lat_city, lon_city, row["latitude"], row["longitude"]),
+        axis=1,
+    )
     df_filtered = df[df["distance"] <= radius_km]
 
     m = folium.Map(location=[lat_city, lon_city], zoom_start=7)
     for _, row in df_filtered.iterrows():
         popup = f"Brightness: {row.get('brightness', row.get('bright_ti4', 'N/A'))}, Date: {row['acq_date']}, Time: {row['acq_time']}"
         folium.CircleMarker(
-            location=[row['latitude'], row['longitude']],
+            location=[row["latitude"], row["longitude"]],
             radius=5,
-            color='red',
+            color="red",
             fill=True,
-            fill_color='red',
+            fill_color="red",
             fill_opacity=0.7,
-            popup=popup
+            popup=popup,
         ).add_to(m)
 
     filename = f"fires_{city_name.lower().replace(' ', '_').replace(',', '')}_{start_date}_to_{end_date}.html"
@@ -186,16 +196,15 @@ def extract_params_from_text(text: str):
 
     # --- Invoke LLM ---
     llm = OllamaLLM(model="mistral", temperature=0.1, system_prompt=system_prompt)
-    prompt = f"{few_shot}\nUser input: \"{text}\"\nReturn JSON:"
+    prompt = f'{few_shot}\nUser input: "{text}"\nReturn JSON:'
     llm_response = llm.invoke(prompt)
 
     import json
+
     try:
         data = json.loads(llm_response)
     except Exception:
-        return {
-            "error": f"❌ LLM returned invalid JSON: {llm_response}"
-        }
+        return {"error": f"❌ LLM returned invalid JSON: {llm_response}"}
 
     # --- Extract fields ---
     start_date = data.get("start_date")
@@ -207,6 +216,7 @@ def extract_params_from_text(text: str):
 
 
 from langchain.tools import tool
+
 
 @tool(return_direct=True)
 def detect_fire_tool(query_text: str) -> str:
