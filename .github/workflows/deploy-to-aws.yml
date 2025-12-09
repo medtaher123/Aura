@@ -1,0 +1,131 @@
+name: Deploy to AWS App Runner
+
+on:
+  push:
+    branches:
+      - main  # Triggers on push to main branch
+  workflow_dispatch:  # Allows manual triggering from GitHub UI
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: metaplanet-llm
+  APP_RUNNER_SERVICE: metaplanet-llm
+
+jobs:
+  deploy:
+    name: Build and Deploy to AWS
+    runs-on: ubuntu-latest
+    
+    permissions:
+      id-token: write  # Required for OIDC authentication
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Create ECR repository if it doesn't exist
+        continue-on-error: true
+        run: |
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} || echo "Repository already exists"
+      
+      - name: Build, tag, and push Docker image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Building Docker image..."
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          echo "Pushing to ECR..."
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      
+      - name: Deploy to AWS App Runner
+        id: deploy-apprunner
+        run: |
+          echo "Checking if App Runner service exists..."
+          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+            --query "ServiceSummaryList[?ServiceName=='${{ env.APP_RUNNER_SERVICE }}'].ServiceArn" \
+            --output text)
+          
+          if [ -z "$SERVICE_ARN" ]; then
+            echo "Creating new App Runner service..."
+            aws apprunner create-service \
+              --service-name ${{ env.APP_RUNNER_SERVICE }} \
+              --source-configuration "{
+                \"ImageRepository\": {
+                  \"ImageIdentifier\": \"${{ steps.build-image.outputs.image }}\",
+                  \"ImageConfiguration\": {
+                    \"Port\": \"8501\"
+                  },
+                  \"ImageRepositoryType\": \"ECR\"
+                },
+                \"AutoDeploymentsEnabled\": true
+              }" \
+              --instance-configuration "{
+                \"Cpu\": \"4 vCPU\",
+                \"Memory\": \"12 GB\"
+              }" \
+              --health-check-configuration "{
+                \"Protocol\": \"HTTP\",
+                \"Path\": \"/_stcore/health\",
+                \"Interval\": 30,
+                \"Timeout\": 10,
+                \"HealthyThreshold\": 1,
+                \"UnhealthyThreshold\": 3
+              }" \
+              --region ${{ env.AWS_REGION }}
+            
+            echo "Waiting for service creation..."
+            aws apprunner wait service-created \
+              --service-arn $(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+                --query "ServiceSummaryList[?ServiceName=='${{ env.APP_RUNNER_SERVICE }}'].ServiceArn" \
+                --output text) \
+              --region ${{ env.AWS_REGION }}
+          else
+            echo "Updating existing App Runner service..."
+            aws apprunner start-deployment \
+              --service-arn $SERVICE_ARN \
+              --region ${{ env.AWS_REGION }}
+            
+            echo "Waiting for deployment to complete..."
+            aws apprunner wait service-updated \
+              --service-arn $SERVICE_ARN \
+              --region ${{ env.AWS_REGION }}
+          fi
+          
+          # Get the service URL
+          SERVICE_URL=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+            --query "ServiceSummaryList[?ServiceName=='${{ env.APP_RUNNER_SERVICE }}'].ServiceUrl" \
+            --output text)
+          
+          echo "service-url=$SERVICE_URL" >> $GITHUB_OUTPUT
+          echo "Service deployed successfully!"
+      
+      - name: Summary
+        run: |
+          echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service URL:** https://${{ steps.deploy-apprunner.outputs.service-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ steps.build-image.outputs.image }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Note:** First startup may take 5-10 minutes while Ollama downloads the Mistral model." >> $GITHUB_STEP_SUMMARY
