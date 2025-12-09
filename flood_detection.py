@@ -1,16 +1,13 @@
 # flood.py
 import requests
-import pycountry
-import dateparser
-from dateparser.search import search_dates
+import pycountry 
 from datetime import datetime
-from typing import Optional
 import folium
 import re
 from geopy.geocoders import Nominatim
 import time
 from langchain.tools import tool
-from calendar import monthrange
+from langchain_ollama import OllamaLLM
 
 VALID_DISASTER_TYPES = [
     "flood", "storm", "earthquake",
@@ -36,16 +33,36 @@ def get_emdat_by_iso3(iso3_code):
 
 def filter_disasters_between_dates(events, start_date, end_date, disaster_type="flood"):
     filtered = []
+    start_date = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date = datetime.strptime(end_date, "%Y-%m-%d")
+    # Now you can get the date part
+    start_date = start_date.date()
+    end_date = end_date.date()
     for event in events:
         #Gestion differente pour les  accidents industriels et transport
-        if disaster_type == "industrial accident":
-            if event.get("subgroupname", "").lower() != "industrial accident":
+        if "industrial accident" in disaster_type:
+            if "industrial accident" not in event.get("subgroupname", "").lower():
                 continue
-        elif disaster_type == "transport":
-            if event.get("subgroupname", "").lower() != "transport":
+        elif "transport" in disaster_type:
+            if "transport" not in event.get("subgroupname", "").lower():
+                continue
+        elif "extreme temperature" in disaster_type:
+            if "extreme temperature" not in event.get("disastertype", "").lower():
+                continue
+        elif "drought" in disaster_type:
+            if "drought" not in event.get("disastertype", "").lower():
+                continue
+        elif "storm" in disaster_type:
+            if "storm" not in event.get("disastertype", "").lower():
+                continue
+        elif "earthquake" in disaster_type:
+            if "earthquake" not in event.get("disastertype", "").lower():
+                continue
+        elif "flood" in disaster_type:
+            if "flood" not in event.get("disastertype", "").lower():
                 continue
         else:
-            if event.get("disastertype", "").lower() != disaster_type:
+            if disaster_type not in event.get("disastertype", "").lower():
                 continue
 
         try:
@@ -61,7 +78,8 @@ def filter_disasters_between_dates(events, start_date, end_date, disaster_type="
             ).date()
         except Exception:
             continue
-
+        print(f"Event from {start_event} to {end_event}")
+        print(f"Filtering between {start_date} and {end_date}")
         if start_event <= end_date and end_event >= start_date:
             filtered.append(event)
     return filtered
@@ -90,83 +108,100 @@ def format_event_human_readable(event):
         "--------------------------------------------------"
     )
 
-def extract_dates_from_text(date_text: str) -> Optional[tuple[datetime.date, datetime.date]]:
+def extract_params_from_text(text: str):
     """
-    Extract a start_date and end_date from free text using only search_dates.
+    Extracts start_date, end_date, country, and disaster_type using a single LLM call.
+    Returns: (start_date, end_date, country, disaster_type)
+    """
+    if not text:
+        return None, None, None, None
+    # --- Build LLM extraction prompt ---
+    system_prompt = """
+    You are an expert system that extracts structured data from natural language.
+    Your job is to identify:
+    - start_date (YYYY-MM-DD or null)
+    - end_date (YYYY-MM-DD or null)
+    - country (from city or country names mentioned)
+    - disaster_type (flood, storm, earthquake, extreme temperature, drought, industrial accident, transport)
+    
+    RULES:
+    - If only one date is mentioned, set start_date = end_date.
+    - If a year is mentioned alone (e.g. "in 2022"), return full year range.
+    - If a month is mentioned ("in July 2023"), return first and last day.
+    - If a season is mentioned (winter, summer, etc.), use:
+        * winter: Dec 1 – Feb 28
+        * spring: Mar 1 – May 31
+        * summer: Jun 1 – Aug 31
+        * autumn/fall: Sep 1 – Nov 30
+    - ALWAYS answer with pure JSON. NO explanations.
+    """
 
-    Rules:
-    - Use `search_dates` to detect date expressions in the text.
-    - If multiple dates are detected, start_date = min(date) and end_date = max(date).
-    - If a single date expression is detected:
-      - If the matched phrase looks like a four-digit year (e.g. "2024"), treat as full year
-        (start_date = YYYY-01-01, end_date = YYYY-12-31).
-      - If the matched phrase contains a month but no day, treat as that full month
-        (start_date = first day of month, end_date = last day of month).
-      - Otherwise treat as a single-day period (start_date == end_date).
-    - If nothing is found, return None.
+    few_shot = """
+    Example 1:
+    User input: "industrial accident in Marseille 2025-01"
+    Response:
+    {
+      "start_date": "2025-01-01",
+      "end_date": "2025-01-31",
+      "country": "France",
+    "disaster_type": "industrial accident"
+    }
+
+    Example 2:
+    User input: "Tunis summer extreme temperature"
+    Response:
+    {
+      "start_date": "2024-06-01",
+      "end_date": "2024-08-31",
+      "country": "Tunisia",
+      "disaster_type": "extreme temperature"
+    }
+
+    Example 3:
+    User input: "flood Rome December 1st to December 10th 2023"
+    Response:
+    {
+      "start_date": "2023-12-01",
+      "end_date": "2023-12-10",
+      "country": "Italy",
+      "disaster_type": "flood"
+    }
+
+    Example 4:
+    User input: "Morocco"
+    Response:
+    {
+      "start_date": null,
+      "end_date": null,
+      "location": "Morocco",
+      "disaster_type": null
+    }
     """
-    date_text = (date_text or "").strip()
+
+    # --- Invoke LLM ---
+    llm = OllamaLLM(model="mistral", temperature=0.1, system_prompt=system_prompt)
+    prompt = f"{few_shot}\nUser input: \"{text}\"\nReturn JSON:"
+    llm_response = llm.invoke(prompt)
+
+    import json
     try:
-        parsed = search_dates(date_text, languages=["fr", "en"], settings={"DATE_ORDER": "DMY"})
+        data = json.loads(llm_response)
     except Exception:
-        parsed = None
+        return {
+            "error": f"❌ LLM returned invalid JSON: {llm_response}"
+        }
 
-    if not parsed:
-        return None
+    # --- Extract fields ---
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    country = data.get("country")
+    disaster_type = data.get("disaster_type")
 
-    # parsed: list of (matched_text, datetime)
-    tuples = [(m[0].strip(), m[1]) for m in parsed if m and isinstance(m[1], datetime)]
-    if not tuples:
-        return None
-
-    # If multiple detected -> take min/max
-    if len(tuples) >= 2:
-        dates = sorted([t[1] for t in tuples])
-        return dates[0].date(), dates[-1].date()
-
-    # Single match: examine the matched phrase and the datetime to decide range handling
-    match_text, dt = tuples[0]
-    # If the matched text is just a 4-digit year use the full year
-    mt = match_text.strip()
-    if mt.isdigit() and len(mt) == 4:
-        year = int(mt)
-        start = datetime(year, 1, 1).date()
-        end = datetime(year, 12, 31).date()
-        return start, end
-
-    # Check for month-only (no explicit day). We decide this by checking for a day token
-    # (a numeric token representing a day like '1' or '01' or '1er'). If absent and dt.day == 1,
-    # we treat the expression as month-year and set the end to the month last day.
-    tokens = [t.strip().lower() for t in mt.replace(',', ' ').split() if t.strip()]
-    has_day_token = False
-    for token in tokens:
-        # simple digit
-        if token.isdigit():
-            try:
-                val = int(token)
-                if 1 <= val <= 31:
-                    has_day_token = True
-                    break
-            except Exception:
-                pass
-        # french ordinal like '1er'
-        if token.endswith('er') and token[:-2].isdigit():
-            has_day_token = True
-            break
-
-        if not has_day_token and dt.month and dt.year:
-            # month-only: end = last day of the month
-            _, last_day = monthrange(dt.year, dt.month)
-            start = datetime(dt.year, dt.month, 1).date()
-            end = datetime(dt.year, dt.month, last_day).date()
-            return start, end
-
-    # Default single day
-    return dt.date(), dt.date()
+    return start_date, end_date, country, disaster_type
 
 def generate_disaster_map(events, disaster_type="flood", country="Unknown", start_date=None, map_filename=None):
     # Always force the map filename to 'map.html'
-    map_filename = "map.html"
+    map_filename = "Map.html"
 
     map_ = folium.Map(location=[45, 10], zoom_start=4)
     geolocator = Nominatim(user_agent="disaster_mapper")
@@ -224,27 +259,20 @@ def generate_disaster_map(events, disaster_type="flood", country="Unknown", star
     return map_filename
 
 
-@tool
+@tool(return_direct=True)
 def query_disaster_events_tool(params: str) -> dict:
     """
     Search for natural & technological disasters
     (flood, storm, earthquake, extreme temperature, drought,
     industrial accident, transport) in a country and for a given date or date range.
     
-    params : free text like "France 2015-06-29 temperature"
+    params : user_query "flood events in France in 2020", "industrial accidents in Germany in septembre 2019".
     """
 
-    words = params.split()
-    if not words:
-        return {"message": "Empty input.", "error": True}
-
-    country_name = words[0]  # first word = country
-    rest = ' '.join(words[1:])
-    # Use search_dates to extract date(s) from the rest
-
-    disaster_words = [w for w in rest.split() if w.strip()]
-    disaster_type = ' '.join(disaster_words).lower() or 'flood'
-
+    start_date, end_date, country_name,disaster_type = extract_params_from_text(params)
+    print(f"Extracted params - start_date: {start_date}, end_date: {end_date}, country: {country_name}, disaster_type: {disaster_type}")
+    if not disaster_type:
+        disaster_type = "flood"  # default
     # Ajustements pour certains types
     if "temperature" in disaster_type:
         disaster_type = "extreme temperature"
@@ -261,31 +289,16 @@ def query_disaster_events_tool(params: str) -> dict:
         return {"message": f"Country '{country_name}' not recognized.", "error": True}
 
     # -----------------------
-    # Date extraction
-    # -----------------------
-    dates = extract_dates_from_text(params)
-    if not dates:
-        return {"message": f"Unable to interpret the date or date range", "error": True}
-    start_date, end_date = dates
-
-    # -----------------------
     # Retrieve events
     # -----------------------
     events = get_emdat_by_iso3(iso3)
     if not events:
-        return {"message": f"No data found for country '{country_name}' (code {iso3}).", "error": True}
-
+        human_text = f"No data found for country '{country_name}' (code {iso3})."
+        return f"Final Answer: {human_text}"
     filtered = filter_disasters_between_dates(events, start_date, end_date, disaster_type)
     if not filtered:
-        return {
-            "message": f"No '{disaster_type}' events found in {country_name} between {start_date} and {end_date}.",
-            "downstream_task": "disaster_events",
-            "start_date": start_date.strftime('%d-%m-%Y'),
-            "end_date": end_date.strftime('%d-%m-%Y'),
-            "location": {"country": country_name, "state": "", "city": ""},
-            "events": [],
-            "error": False,
-        }
+        human_text = f"No '{disaster_type}' events found in {country_name} between {start_date} and {end_date}."
+        return f"Final Answer: {human_text}"
 
     # Generating the map
 
@@ -314,14 +327,4 @@ def query_disaster_events_tool(params: str) -> dict:
     human_text = f"{len(events_list)} '{disaster_type}' event(s) found in {country_name} between {start_date} and {end_date}."
     if map_file:
         human_text += f" Map generated: {map_file}"
-
-    return {
-        "message": human_text,
-        "downstream_task": "disaster_events",
-        "start_date": start_date.strftime('%d-%m-%Y'),
-        "end_date": end_date.strftime('%d-%m-%Y'),
-        "location": {"country": country_name, "state": "", "city": ""},
-        "events": events_list,
-        "map_file": map_file,
-        "error": False,
-    }
+    return f"Final Answer: {human_text}"

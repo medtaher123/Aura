@@ -14,6 +14,7 @@ from weather import weather_tool
 from dateparser.search import search_dates
 from geopy.geocoders import Nominatim
 from langchain_ollama import OllamaLLM
+
 geolocator = Nominatim(user_agent="my_app")
 
 month_map = {

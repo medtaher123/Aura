@@ -2,6 +2,7 @@
 import re
 from langdetect import detect
 from deep_translator import GoogleTranslator
+from langchain.tools import tool
 
 
 # Détection de la  langue
@@ -104,17 +105,37 @@ def translate_to_english(text: str) -> str:
         return text
 
 
-
-#  Traduction → langue utilisateur (réponse finale)
-def translate_from_english(text: str, target_lang: str) -> str:
+def translate_from_english(text: str, target_lang: str=None) -> str:
     try:
-        if target_lang == "en":
+        if target_lang == "en" or not target_lang:
             return text
-        safe = protect(text)
-        translated = GoogleTranslator(source="auto", target=target_lang).translate(safe)
-        return unprotect(translated)
-    except:
+
+        # Detect URLs and file paths
+        urls = re.findall(r'https?://\S+|www\.\S+', text)
+        paths = re.findall(r'([a-zA-Z]:\\[^\s]+|/[\w/.-]+\.html|/[\w/.-]+)', text)
+
+        # Combine all protected segments
+        protected_segments = urls + paths
+        placeholders = {f"__PLACEHOLDER_{i}__": seg for i, seg in enumerate(protected_segments)}
+
+        # Replace them in the text
+        safe_text = text
+        for ph, seg in placeholders.items():
+            safe_text = safe_text.replace(seg, ph)
+
+        # Translate the rest
+        translated = GoogleTranslator(source="auto", target=target_lang).translate(safe_text)
+
+        # Restore the placeholders
+        for ph, seg in placeholders.items():
+            translated = translated.replace(ph, seg)
+
+        return translated
+
+    except Exception as e:
+        print(f"Translation error: {e}")
         return text
+
 
 
 # Pipeline : détecter + traduire vers anglais

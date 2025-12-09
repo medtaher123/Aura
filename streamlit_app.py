@@ -127,6 +127,12 @@ def translate_query_pipeline(user_text):
     en, detected_lang = detect_and_translate_to_english(user_text)
     return en, detected_lang
 
+def translate_to_original_query_pipeline(user_text,detected_lang):
+    """
+    1) Translate to the user language using translate_from_english_tool
+    """
+    translated_text = translate_from_english(user_text,detected_lang)
+    return translated_text
 
 # PROCESSING
 if submitted and user_input:
@@ -151,6 +157,7 @@ if submitted and user_input:
 
                 # Keep JSON structure intact and only translate the message field
                 result = json_output
+                result=translate_to_original_query_pipeline(result,detected_lang)
 
             st.session_state.last_result = result
             st.session_state.last_feedback = {"type": "success", "text": "✅ Request processed successfully!"}
