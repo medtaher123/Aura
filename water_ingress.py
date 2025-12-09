@@ -141,7 +141,7 @@ def estimate_surface_water_ingress(location_input):
         raise ValueError("Invalid input. Use a city name or a (lat, lon) tuple.")
     location_info = reverse_geocode(lat, lon)
 
-    dem_file = download_dem_opentopo(lat, lon, buffer_deg=0.015)
+    dem_file = download_dem_opentopo(lat, lon, buffer_deg=0.1)
     try:
         with rasterio.open(dem_file) as src:
             dem = src.read(1).astype(np.float32)
@@ -154,7 +154,7 @@ def estimate_surface_water_ingress(location_input):
         slope = np.sqrt(gx**2 + gy**2)
         acc, _ = d8_flow_direction_and_accum(dem)
 
-        low_mask = dem <= np.nanpercentile(dem, 0.1)
+        low_mask = dem <= np.nanpercentile(dem, 0.05)
         flat_mask = slope <= 0.0005
         highacc = acc >= np.percentile(acc, 99.7)
         risk_mask = (low_mask & flat_mask) | highacc
@@ -174,7 +174,7 @@ def estimate_surface_water_ingress(location_input):
         plt.imsave("map_elevation.png", dem, cmap="terrain")
         plt.imsave("map_slope.png", slope, cmap="inferno")
         plt.imsave("map_flowacc.png", acc, cmap="Blues")
-        plt.imsave("map_risk.png", risk_mask.astype(float), cmap="Reds")
+        plt.imsave("Map_risk.png", risk_mask.astype(float), cmap="Reds")
 
         # Folium map
         risk_coords = np.argwhere(risk_mask)
@@ -185,14 +185,14 @@ def estimate_surface_water_ingress(location_input):
                 folium.CircleMarker(location=[rlat, rlon], radius=2, color='red', fill=True, fill_opacity=0.7).add_to(folium_map)
             except Exception:
                 continue
-        folium_map.save("map_risk_folium.html")
+        folium_map.save("Map_risk_folium.html")
 
         return {
             "Ingress_paths_estimate": "Water follows the D8 flow paths towards low points.",
             "Mitigation_actions": actions,
             **stats,
             "Maps": {
-                "Risk_Folium": "map_risk_folium.html"
+                "Risk_Folium": "Map_risk_folium.html"
             },
             "Explanation": (
                 "How to read the maps:\n"

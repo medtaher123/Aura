@@ -5,9 +5,6 @@ import requests
 import folium
 import numpy as np
 import os
-import re
-from dateparser.search import search_dates
-from calendar import monthrange
 from langchain_ollama import OllamaLLM
 
 MAP_KEY = "f44596f0cc01c26985abd6bfff78ac92"
@@ -117,7 +114,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
             popup=popup,
         ).add_to(m)
 
-    filename = f"fires_{city_name.lower().replace(' ', '_').replace(',', '')}_{start_date}_to_{end_date}.html"
+    filename = f"Fires.html"
     m.save(filename)
     return filename, len(df_filtered)
 

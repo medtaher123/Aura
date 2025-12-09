@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_ba656ccbcfad6c38ec2417dd457a1440 {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_ba656ccbcfad6c38ec2417dd457a1440" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_ba656ccbcfad6c38ec2417dd457a1440 = L.map(
+                "map_ba656ccbcfad6c38ec2417dd457a1440",
+                {
+                    center: [45.0, 10.0],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 4,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_af885a474ff664eaf89163c1ca063285 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_af885a474ff664eaf89163c1ca063285.addTo(map_ba656ccbcfad6c38ec2417dd457a1440);
+        
+    
+            var marker_eb56de34f196a74544227f39e3c5205d = L.marker(
+                [42.625894, 2.506509],
+                {
+}
+            ).addTo(map_ba656ccbcfad6c38ec2417dd457a1440);
+        
+    
+            var icon_c27d9d3e4b08d0d1150a7cb3769259ff = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "gray",
+  "iconColor": "white",
+  "icon": "info-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_eebfd67793098d1c66fc59315544faa7 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_22ef99c6dd96810619cf9142ab0314ed = $(`<div id="html_22ef99c6dd96810619cf9142ab0314ed" style="width: 100.0%; height: 100.0%;">Pyrénées-Orientales, Aude, Ariège, and Haute-Garonne departments, France<br>From 21/1/2020 to 23/1/2020</div>`)[0];
+                popup_eebfd67793098d1c66fc59315544faa7.setContent(html_22ef99c6dd96810619cf9142ab0314ed);
+            
+        
+
+        marker_eb56de34f196a74544227f39e3c5205d.bindPopup(popup_eebfd67793098d1c66fc59315544faa7)
+        ;
+
+        
+    
+    
+                marker_eb56de34f196a74544227f39e3c5205d.setIcon(icon_c27d9d3e4b08d0d1150a7cb3769259ff);
+            
+    
+            var marker_63d9d45c8b0c41c3cdef908ed4dcecac = L.marker(
+                [49.4532855, 3.606899],
+                {
+}
+            ).addTo(map_ba656ccbcfad6c38ec2417dd457a1440);
+        
+    
+            var icon_9007a76530b289d0303458de24d0d4d7 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "gray",
+  "iconColor": "white",
+  "icon": "info-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_29700dfeb1a1c59cbbba157f767903e1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_a86e24857ad1c26aab5e3d8917863229 = $(`<div id="html_a86e24857ad1c26aab5e3d8917863229" style="width: 100.0%; height: 100.0%;">Aisne, Ardennes, Aube, Calvados, Côtes-d’Armor, Eure, Eure-et-Loir, Finistère, lLoire-Atlantique, Loiret, Manche, Marne, Haute-Marne, lMeurthe-et-Moselle, lMeuse, lMorbihan, lMoselle, Nord, Oise, Orne, lPas-de-Calais, lBas-Rhin, le Haut-Rhin, Paris, lSeine-Maritime, lSeine-et-Marne, Yvelines, Somme, Vosges, Yvonne, Essonne, Val-d’Oise; Corse;, France<br>From 8/2/2020 to 8/2/2020</div>`)[0];
+                popup_29700dfeb1a1c59cbbba157f767903e1.setContent(html_a86e24857ad1c26aab5e3d8917863229);
+            
+        
+
+        marker_63d9d45c8b0c41c3cdef908ed4dcecac.bindPopup(popup_29700dfeb1a1c59cbbba157f767903e1)
+        ;
+
+        
+    
+    
+                marker_63d9d45c8b0c41c3cdef908ed4dcecac.setIcon(icon_9007a76530b289d0303458de24d0d4d7);
+            
+    
+            var marker_6dc1509037a84a645f0022694b6995b3 = L.marker(
+                [44.0700773, 7.2565002],
+                {
+}
+            ).addTo(map_ba656ccbcfad6c38ec2417dd457a1440);
+        
+    
+            var icon_f3f0edb8320acf97cca740b5ca0bab16 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "gray",
+  "iconColor": "white",
+  "icon": "info-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_000283f51aa7ed554e5b1b1ba93f3c0c = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_3a8489cc81f835fe19798ce3baebdb35 = $(`<div id="html_3a8489cc81f835fe19798ce3baebdb35" style="width: 100.0%; height: 100.0%;">Roya Valley, Vésubie, Tinée (Provence-Alpes-Côte d'Azur Region), France<br>From 2/10/2020 to 4/10/2020</div>`)[0];
+                popup_000283f51aa7ed554e5b1b1ba93f3c0c.setContent(html_3a8489cc81f835fe19798ce3baebdb35);
+            
+        
+
+        marker_6dc1509037a84a645f0022694b6995b3.bindPopup(popup_000283f51aa7ed554e5b1b1ba93f3c0c)
+        ;
+
+        
+    
+    
+                marker_6dc1509037a84a645f0022694b6995b3.setIcon(icon_f3f0edb8320acf97cca740b5ca0bab16);
+            
+</script>
+</html>
