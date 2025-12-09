@@ -6,6 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import folium
 from langchain.tools import tool
+from rasterio.features import geometry_mask
+from shapely.geometry import Point, shape
 
 # OpenTopography API key
 OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed1")
@@ -13,12 +15,18 @@ OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed
 # Geocoding (name -> lat/lon)
 def geocode_city(city_name: str):
     url = "https://nominatim.openstreetmap.org/search"
-    params = {"q": city_name, "format": "json", "limit": 3}
+    params = {"q": city_name, "format": "json", "limit": 1, "polygon_geojson": 1}
     r = requests.get(url, params=params, headers={"User-Agent": "SurfaceIngressTool"})
     data = r.json()
     if not data:
         raise ValueError(f"City not found: {city_name}")
-    return float(data[0]["lat"]), float(data[0]["lon"])
+    
+    lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
+    bbox = [float(x) for x in data[0]["boundingbox"]]
+    polygon = data[0].get("geojson")  # le polygone réel de la ville
+    return lat, lon, bbox, polygon
+
+
 
 # Reverse geocoding (lat/lon -> city/country)
 def reverse_geocode(lat: float, lon: float):
@@ -32,15 +40,23 @@ def reverse_geocode(lat: float, lon: float):
     country_code = address.get("country_code")
     return {"city": city, "country": country, "country_iso": country_code.upper() if country_code else None}
 
-#Télécharger DEM
-def download_dem_opentopo(lat: float, lon: float, buffer_deg=0.01, dem_file="dem_city.tif"):
-    min_lat, max_lat = lat - buffer_deg, lat + buffer_deg
-    min_lon, max_lon = lon - buffer_deg, lon + buffer_deg
+def download_dem_opentopo(lat: float, lon: float, bbox=None, polygon=None, dem_file="dem_city.tif"):
+    # 1️⃣ Calculer la bounding box pour le téléchargement
+    if bbox:
+        min_lat, max_lat = bbox[0], bbox[1]
+        min_lon, max_lon = bbox[2], bbox[3]
+    else:
+        buffer_deg = 0.1
+        min_lat, max_lat = lat - buffer_deg, lat + buffer_deg
+        min_lon, max_lon = lon - buffer_deg, lon + buffer_deg
+
+    # 2️⃣ Télécharger le DEM
     url = "https://portal.opentopography.org/API/globaldem"
     params = {
         "demtype": "SRTMGL3",
         "west": min_lon, "south": min_lat, "east": max_lon, "north": max_lat,
-        "outputFormat": "GTiff", "API_Key": OPENTOP_API_KEY
+        "outputFormat": "GTiff",
+        "API_Key": OPENTOP_API_KEY
     }
     r = requests.get(url, params=params, stream=True)
     if r.status_code != 200:
@@ -49,7 +65,22 @@ def download_dem_opentopo(lat: float, lon: float, buffer_deg=0.01, dem_file="dem
         for chunk in r.iter_content(chunk_size=8192):
             if chunk:
                 f.write(chunk)
+    print('polygon:', polygon)
+    # 3️⃣ Appliquer le masque polygone si fourni
+    if polygon:
+        with rasterio.open(dem_file, "r+") as src:
+            dem = src.read(1).astype(np.float32)
+            if src.nodata is not None:
+                dem[dem == src.nodata] = np.nan
+
+            mask = geometry_mask([polygon], transform=src.transform, invert=True, out_shape=dem.shape)
+            dem_masked = np.where(mask, dem, np.nan)
+
+            # Remplacer le DEM par le DEM masqué
+            src.write(dem_masked, 1)
+
     return dem_file
+
 
 #D8 Flow Direction & Accumulation
 def d8_flow_direction_and_accum(dem: np.ndarray):
@@ -134,14 +165,18 @@ def mitigation_rules(dem, slope, acc, risk_mask):
 #Estimation principale
 def estimate_surface_water_ingress(location_input):
     if isinstance(location_input, str):
-        lat, lon = geocode_city(location_input)
+        lat, lon, bbox, polygon = geocode_city(location_input)
+        location_info = reverse_geocode(lat, lon)
     elif isinstance(location_input, (tuple, list)) and len(location_input) == 2:
         lat, lon = location_input
+        # call reverse geocode for coordinates
+        location_info = reverse_geocode(lat, lon)
     else:
         raise ValueError("Invalid input. Use a city name or a (lat, lon) tuple.")
-    location_info = reverse_geocode(lat, lon)
 
-    dem_file = download_dem_opentopo(lat, lon, buffer_deg=0.1)
+
+    dem_file = download_dem_opentopo(lat, lon, bbox=bbox)
+
     try:
         with rasterio.open(dem_file) as src:
             dem = src.read(1).astype(np.float32)
@@ -178,11 +213,20 @@ def estimate_surface_water_ingress(location_input):
 
         # Folium map
         risk_coords = np.argwhere(risk_mask)
-        folium_map = folium.Map(location=[lat, lon], zoom_start=14)
+        folium_map = folium.Map(location=[lat, lon], zoom_start=15)
+        
+        polygon_shape = shape(polygon)  # ton polygone GeoJSON
+
+        risk_coords_filtered = []
         for y, x in risk_coords:
+            rlon, rlat = rasterio.transform.xy(transform, y, x)
+            if polygon_shape.contains(Point(rlon, rlat)):
+                risk_coords_filtered.append((y, x))
+                
+        for y, x in risk_coords_filtered:
             try:
                 rlon, rlat = rasterio.transform.xy(transform, y, x)
-                folium.CircleMarker(location=[rlat, rlon], radius=2, color='red', fill=True, fill_opacity=0.7).add_to(folium_map)
+                folium.CircleMarker(location=[rlat, rlon], radius=0.5, color='red', fill=True, fill_opacity=0.5).add_to(folium_map)
             except Exception:
                 continue
         folium_map.save("Map_risk_folium.html")
