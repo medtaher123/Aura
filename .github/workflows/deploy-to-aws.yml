@@ -7,9 +7,9 @@ on:
   workflow_dispatch:  # Allows manual triggering from GitHub UI
 
 env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: metaplanet-llm
-  APP_RUNNER_SERVICE: metaplanet-llm
+  AWS_REGION: eu-west-3
+  ECR_REPOSITORY: metaplanet-llm-demo
+  APP_RUNNER_SERVICE: metaplanet-llm-demo-service
 
 jobs:
   deploy:
