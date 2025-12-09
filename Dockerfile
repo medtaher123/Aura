@@ -1,17 +1,23 @@
 # Multi-stage build for MetaplanetLLM with Ollama
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# Install system dependencies including Python 3.12
 RUN apt-get update && apt-get install -y \
-    python3.11 \
+    python3.12 \
     python3-pip \
     curl \
     wget \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Set python3.12 as default python3
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# Upgrade pip
+RUN pip3 install --upgrade pip setuptools wheel --break-system-packages
 
 # Install Ollama
 RUN curl -fsSL https://ollama.ai/install.sh | sh
