@@ -51,3 +51,4 @@ def tmp_images_dir(tmp_path):
     os.chdir(tmp_path)
     yield tmp_path
     os.chdir(cwd)
+
