@@ -48,7 +48,6 @@ def _control_network(request, monkeypatch):
             # If network blocking fails, continue anyway
             pass
 
-
 @pytest.fixture
 def tmp_images_dir(tmp_path):
     """Répertoire temporaire pour fichiers/images générés."""
