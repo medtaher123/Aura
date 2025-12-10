@@ -29,24 +29,20 @@ def _control_network(request, monkeypatch):
     Bloque le réseau pour tous les tests,
     SAUF pour test_regression.py (tests d'intégration).
     """
+    try:
+        # Nom du fichier test en cours
+        test_file = request.node.fspath.basename
 
-    # Nom du fichier test en cours
-    test_file = request.node.fspath.basename
+        # Autoriser réseau pour les tests de régression
+        if test_file == "test_regression.py":
+            print("Réseau autorisé pour test_regression.py")
+            return
 
-    # Autoriser réseau pour les tests de régression
-    if test_file == "test_regression.py":
-        print("Réseau autorisé pour test_regression.py")
-        return
-
-    # Only block network for tests that actually need it
-    # Skip blocking for collection/import phase
-    if request.node.nodeid.startswith("tests/"):
-        # Sinon : bloquer le réseau
-        try:
-            disable_network(monkeypatch)
-        except Exception:
-            # If network blocking fails, continue anyway
-            pass
+        # Bloquer le réseau pour les autres tests
+        disable_network(monkeypatch)
+    except Exception as e:
+        # If network blocking fails, continue anyway (don't break setup)
+        print(f"Warning: Could not disable network: {e}")
 
 @pytest.fixture
 def tmp_images_dir(tmp_path):
