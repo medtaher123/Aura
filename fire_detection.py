@@ -40,19 +40,42 @@ def get_city_coordinates(city_name):
 
 # Find the archive file that contains data for the given date
 def find_archive_file_for_range(start_date_obj, end_date_obj):
+    # --- SPECIAL CASE FILES (explicit date ranges) ----
+    SPECIAL_FILES = [
+        {
+            "filename": "fire_archive_SV-C2_673436.csv",
+            "start": date(2024, 11, 1),
+            "end": date(2025, 6, 30)
+        },
+        {
+            "filename": "fire_nrt_SV-C2_673436.csv",
+            "start": date(2025, 7, 1),
+            "end": date(2025, 10, 14)
+        }
+    ]
+
+    for sf in SPECIAL_FILES:
+        if not (end_date_obj < sf["start"] or start_date_obj > sf["end"]):
+            full_path = os.path.join(ARCHIVE_DIR, sf["filename"])
+            if os.path.exists(full_path):
+                return full_path
+
+    # ---- DEFAULT LOGIC FOR ALL OTHER ARCHIVE FILES ----
     for filename in sorted(os.listdir(ARCHIVE_DIR)):
         if filename.endswith(".csv") and "fire_archive_" in filename:
             try:
                 parts = filename.replace(".csv", "").split("_")
                 start_year = int(parts[2])
                 end_year = int(parts[3])
+
                 file_start = datetime(start_year, 1, 21).date()
                 file_end = datetime(end_year, 1, 20).date()
 
-                # Check if ranges overlap
+                # Check overlap
                 if not (end_date_obj < file_start or start_date_obj > file_end):
                     return os.path.join(ARCHIVE_DIR, filename)
-            except:
+
+            except Exception:
                 continue
 
     return None
@@ -76,16 +99,19 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     use_api = should_use_api(start_date, end_date)
 
     if use_api:
+        print("Using API for fire data")
         url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
         df = pd.read_csv(url)
     else:
         file_path = find_archive_file_for_range(start_date_obj, end_date_obj)
         if not file_path:
+            print("No archive file found for the given date range.")
             return None
         df = pd.read_csv(file_path)
 
     # Ensure date column exists
     if "acq_date" not in df.columns:
+        print("Date column 'acq_date' not found in data.")
         return None
 
     df["acq_date"] = pd.to_datetime(df["acq_date"]).dt.date
