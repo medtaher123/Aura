@@ -11,40 +11,15 @@ from translate import detect_and_translate_to_english, translate_from_english
 # MULTILINGUAL LABELS (English defaults)
 # ---------------------------------------------------
 LABELS = {
-    "fr": {
-        "results_for": "Results for collection",
-        "cloud": "Cloud",
-        "date": "Date",
-    },
-    "en": {
-        "results_for": "Results for collection",
-        "cloud": "Cloud",
-        "date": "Date",
-    },
-    "es": {
-        "results_for": "Resultados para la colección",
-        "cloud": "Nube",
-        "date": "Fecha",
-    },
-    "ar": {
-        "results_for": "نتائج المجموعة",
-        "cloud": "السحب",
-        "date": "التاريخ",
-    },
-    "it": {
-        "results_for": "Risultati per la collezione",
-        "cloud": "Nuvolosità",
-        "date": "Data",
-    },
-    "de": {
-        "results_for": "Ergebnisse für die Sammlung",
-        "cloud": "Wolken",
-        "date": "Datum",
-    },
+    "fr": {"results_for": "Results for collection", "cloud": "Cloud", "date": "Date"},
+    "en": {"results_for": "Results for collection", "cloud": "Cloud", "date": "Date"},
+    "es": {"results_for": "Resultados para la colección", "cloud": "Nube", "date": "Fecha"},
+    "ar": {"results_for": "نتائج المجموعة", "cloud": "السحب", "date": "التاريخ"},
+    "it": {"results_for": "Risultati per la collezione", "cloud": "Nuvolosità", "date": "Data"},
+    "de": {"results_for": "Ergebnisse für die Sammlung", "cloud": "Wolken", "date": "Datum"},
 }
 
 def get_labels(lang_code: str):
-    """Return labels adapted to the detected language."""
     base = lang_code.split("-")[0] if lang_code else "en"
     return LABELS.get(base, LABELS["en"])
 
@@ -62,25 +37,27 @@ st.markdown("</div>", unsafe_allow_html=True)
 st.title("🛰️🔥 Metaplanet Earth Agent")
 
 # ---------------------------------------------------
-# FORM
+# SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
-with st.form("query_form"):
-    user_input = st.text_input("📥 Enter your request:")
-    submitted = st.form_submit_button("🔍 Search")
+if "messages" not in st.session_state:
+    print("Initializing chat messages...")
+    st.session_state.messages = []
 
-# Initialize agent
 if "agent_executor" not in st.session_state:
     st.session_state.agent_executor = create_agent_executor()
 
+if "last_lang" not in st.session_state:
+    st.session_state.last_lang = "en"
+print("Session state:", st.session_state)
+if "messages" in st.session_state:
+    print('Loaded messages from session state:', st.session_state.messages)
+    
 agent_executor = st.session_state.agent_executor
 
-# Memory
-st.session_state.setdefault("last_result", None)
-st.session_state.setdefault("last_feedback", None)
-st.session_state.setdefault("last_lang", "en")  # language of the user request
 
-
-# Satellite query detection
+# ---------------------------------------------------
+# HELPERS
+# ---------------------------------------------------
 def is_satellite_query(text: str) -> bool:
     text = text.lower()
     keywords = [
@@ -91,8 +68,13 @@ def is_satellite_query(text: str) -> bool:
     ]
     return any(k in text for k in keywords)
 
-
-# Extract HTML names
+def inject_into_memory(agent_executor, user_text, assistant_text):
+    memory = agent_executor.memory
+    memory.save_context(
+        {"input": user_text},
+        {"output": assistant_text}
+    )
+    
 def extract_all_html_filenames(text: str):
     return re.findall(r'([\w\-]+\.html)', text)
 
@@ -118,136 +100,98 @@ def display_all_html_from_text(text: str):
             st.warning(f"⚠️ HTML file `{name}` not found.")
 
 
-# Multilingual pivot pipeline
 def translate_query_pipeline(user_text):
-    """
-    1) Detect user language
-    2) Translate to English
-    """
     en, detected_lang = detect_and_translate_to_english(user_text)
     return en, detected_lang
 
-def translate_to_original_query_pipeline(user_text,detected_lang):
-    """
-    1) Translate to the user language using translate_from_english_tool
-    """
-    translated_text = translate_from_english(user_text,detected_lang)
-    return translated_text
 
-# PROCESSING
-if submitted and user_input:
+def translate_to_original_query_pipeline(user_text, detected_lang):
+    return translate_from_english(user_text, detected_lang)
+
+
+# ---------------------------------------------------
+# DISPLAY CHAT HISTORY
+# ---------------------------------------------------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+
+# ---------------------------------------------------
+# CHAT INPUT
+# ---------------------------------------------------
+user_input = st.chat_input("Ask me anything about Earth observation or STAC...")
+
+if user_input:
+    # Store user message
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.write(user_input)
+
+    # Process
     with st.spinner("⏳ Processing..."):
         try:
             english_query, detected_lang = translate_query_pipeline(user_input)
-            st.session_state["last_lang"] = detected_lang
+            st.session_state.last_lang = detected_lang
 
-            # STAC direct query
+            # Satellite detection
             if is_satellite_query(english_query):
-                raw = run_query_direct(english_query)
-                result = raw
+                result = run_query_direct(english_query)
+
+                # 🔑 Inject summary into LLM memory
+                inject_into_memory(
+                    agent_executor,
+                    english_query,
+                    result["message"] if isinstance(result, dict) and "message" in result else str(result)
+                )
 
             else:
-                # Conversational agent → must return JSON according to your rules
                 response = agent_executor.invoke({"input": english_query})
-
                 if isinstance(response, dict):
                     json_output = response.get("output", str(response))
                 else:
                     json_output = str(response)
+                result = translate_to_original_query_pipeline(json_output, detected_lang)
 
-                # Keep JSON structure intact and only translate the message field
-                result = json_output
-                result=translate_to_original_query_pipeline(result,detected_lang)
-
-            st.session_state.last_result = result
-            st.session_state.last_feedback = {"type": "success", "text": "✅ Request processed successfully!"}
+            # Store assistant message placeholder
+            st.session_state.messages.append({"role": "assistant", "content": str(result)})
 
         except Exception as e:
-            st.session_state.last_result = None
-            st.session_state.last_feedback = {
-                "type": "error",
-                "text": f"❌ Error while processing request: {str(e)}",
-            }
+            error_msg = f"❌ Error: {str(e)}"
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            result = error_msg
 
-# ---------------------------------------------------
-# FEEDBACK DISPLAY
-# ---------------------------------------------------
-feedback = st.session_state.get("last_feedback")
 
-if feedback:
-    msg_type = feedback.get("type", "info")
-    msg = feedback.get("text", "")
+    # ---------------------------------------------------
+    # DISPLAY ASSISTANT RESPONSE
+    # ---------------------------------------------------
+    with st.chat_message("assistant"):
+        # Handle structured results
+        if isinstance(result, dict) and result.get("error"):
+            st.error(result["message"])
 
-    if msg_type == "success":
-        st.success(msg)
-    elif msg_type == "error":
-        st.error(msg)
-    elif msg_type == "warning":
-        st.warning(msg)
-    else:
-        st.info(msg)
+        elif isinstance(result, dict) and "images" in result:
+            labels = get_labels(st.session_state.last_lang)
+            st.write(f"### {labels['results_for']} `{result.get('collection', 'unknown')}`:")
+            for img in result["images"]:
+                cloud = img.get("cloud_cover", "N/A")
+                caption = f"🗓️ {labels['date']}: {img['date']} | ☁️ {labels['cloud']}: {cloud}"
+                st.image(img.get("thumbnail") or img.get("url") or "", caption=caption, width=300)
 
-    if feedback.get("hint"):
-        st.info(feedback["hint"])
-    if feedback.get("caption"):
-        st.caption(feedback["caption"])
-
-# ---------------------------------------------------
-# RESULT DISPLAY
-# ---------------------------------------------------
-result = st.session_state.last_result
-user_lang = st.session_state.get("last_lang", "en")
-labels = get_labels(user_lang)
-
-if result is not None:
-
-    # --------- JSON ERROR CASE ---------
-    if isinstance(result, dict) and result.get("error") is True:
-        st.error(result.get("message", "Unknown error."))
-        st.stop()
-
-    # --------- STAC IMAGES ---------
-    if isinstance(result, dict) and "images" in result:
-        st.write(f"### {labels['results_for']} `{result.get('collection', 'unknown')}`:")
-
-        for img in result["images"]:
-            cloud = img.get("cloud_cover", "N/A")
-            caption = (
-                f"🗓️ {labels['date']}: {img['date']} | "
-                f"☁️ {labels['cloud']}: {cloud if not isinstance(cloud, float) else f'{cloud:.2f}%'}"
-            )
-            thumb = img.get("thumbnail") or img.get("vignette") or img.get("url") or ""
-            st.image(thumb, caption=caption, width=300)
-
-        st.stop()
-
-    # --------- FOLIUM MAP ---------
-    if isinstance(result, dict) and "folium_map" in result:
-        st.write("### Generated Map:")
-        fmap = result["folium_map"]
-        if hasattr(fmap, "get_root"):
+        elif isinstance(result, dict) and "folium_map" in result:
+            st.write("### Generated Map:")
+            fmap = result["folium_map"]
             components.html(fmap.get_root().render(), height=600)
+
+        elif isinstance(result, str) and (result.endswith(".html") or ".html" in result):
+            st.write(result)
+            display_all_html_from_text(result)
+
+        elif isinstance(result, dict) and "message" in result:
+            st.write(result["message"])
+            map_file = result.get("map_file") or result.get("map")
+            if isinstance(map_file, str) and map_file.endswith(".html"):
+                display_all_html_from_text(map_file)
+
         else:
-            st.warning("⚠️ Could not render map.")
-        st.stop()
-
-    # --------- HTML file detection ---------
-    if isinstance(result, str) and (result.endswith(".html") or ".html" in result):
-        st.write("### Result:")
-        st.write(result)
-        display_all_html_from_text(result)
-        st.stop()
-
-    # --------- JSON Result with message or map ---------
-    if isinstance(result, dict) and result.get("message"):
-        st.write("### Result:")
-        st.write(result.get("message"))
-        # If map_file is provided, try to render it
-        map_file = result.get("map_file") or result.get("map") or result.get("folium_map")
-        if isinstance(map_file, str) and map_file.endswith(".html"):
-            display_all_html_from_text(map_file)
-        st.stop()
-
-    # --------- JSON or Text Response ---------
-    st.write("### Result:")
-    st.write(result)
+            st.write(result)

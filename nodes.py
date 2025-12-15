@@ -5,7 +5,7 @@ from langchain.agents import initialize_agent, AgentType
 from tools_risk import get_all_tools, extract_bbox_and_dates, query_stac_catalog_with_retry
 from prompts import get_prompt_config
 from translate import translate_from_english
-
+from langchain.memory import ConversationBufferWindowMemory
 # ---------------------------------------------------
 # TOOL: Build query parameters from user input
 # ---------------------------------------------------
@@ -31,26 +31,36 @@ def build_query_params_from_input(user_input: str) -> str:
 # ---------------------------------------------------
 # CREATE AGENT EXECUTOR
 # ---------------------------------------------------
+
 def create_agent_executor():
     """
-    Initialize the structured chat agent using FewShotPromptTemplate and Ollama LLM
+    Initialize the structured chat agent with memory
     """
-    # Retrieve the prompt configuration
+    # Prompt
     prompt_template = get_prompt_config("few_shot")
 
-    # Pass the FewShotPromptTemplate directly to the LLM (do NOT call .format())
+    # LLM
     llm = OllamaLLM(
         model="mistral",
         temperature=0.1,
-        system_prompt=prompt_template,  # Correct usage
+        system_prompt=prompt_template,
     )
 
+    # Tools
     tools = get_all_tools()
 
+    # Memory
+    memory = ConversationBufferWindowMemory(
+        memory_key="chat_history",
+        k=7,  # keep only last 5 messages
+        return_messages=True
+    )
+    # Agent with memory
     agent_executor = initialize_agent(
         llm=llm,
         tools=tools,
         agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+        memory=memory,
         verbose=True,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
@@ -58,6 +68,7 @@ def create_agent_executor():
     )
 
     return agent_executor
+
 
 
 # ---------------------------------------------------

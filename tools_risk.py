@@ -12,8 +12,10 @@ from geographic_info import geo_info_tool
 from itinerary import get_route_info
 from weather import weather_tool
 from dateparser.search import search_dates
+from general_chat import general_question_tool
 from geopy.geocoders import Nominatim
 from langchain_ollama import OllamaLLM
+
 
 geolocator = Nominatim(user_agent="my_app")
 
@@ -531,4 +533,5 @@ def get_all_tools():
         geo_info_tool,
         get_route_info,
         weather_tool,
+        general_question_tool,
     ]

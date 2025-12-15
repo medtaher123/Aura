@@ -24,8 +24,9 @@ Core Requirements:
 
 Task and Data Extraction Rules:
 
-* Use one of the predefined tools: get_date, get_time, calculator, get_external_data, get_weather_data, get_satellite_data, get_summary_stats, get_map_link, geo_info_tool, get_route_info, detect_fire_tool, query_disaster_events_tool, estimate_surface_water_ingress_tool, weather_tool
+* Use one of the predefined tools: get_date, get_time, calculator, get_external_data, get_weather_data, get_satellite_data, get_summary_stats, get_map_link, geo_info_tool, get_route_info, detect_fire_tool, query_disaster_events_tool, estimate_surface_water_ingress_tool, weather_tool, general_question_tool.
 * If multiple tasks are mentioned, select different tools. Never repeat or loop.
+* If a question does NOT require satellite data, geospatial analysis, fire detection, flood detection, risks, weather, or maps, use the `general_question_tool`.
 * When using a tool, output only the tool call.
 * When the tool returns an observation, produce the final JSON response.
 
