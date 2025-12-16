@@ -37,9 +37,8 @@ def get_city_coordinates(city_name):
         try:
             response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             data = response.json()
-            if not data:
-                return None, None
-            return float(data[0]["lat"]), float(data[0]["lon"])
+            if data:
+                return float(data[0]["lat"]), float(data[0]["lon"])         
         except Exception:
             if attempt < 4:
                 time.sleep(1)

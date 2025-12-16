@@ -102,7 +102,7 @@ Metaplanet_llm-main_v1/
 
 ### Old Imports (Root Level)
 ```python
-from nodes import create_agent_executor, run_query_direct
+from nodes import create_agent_executor
 from prompts import get_prompt_config
 from translate import translate_from_english, detect_and_translate_to_english
 from tools_risk import get_all_tools
@@ -112,7 +112,6 @@ from tools_risk import get_all_tools
 ```python
 from src.services import (
     create_agent_executor,
-    run_query_direct,
     translate_from_english,
     detect_and_translate_to_english,
     get_llm
