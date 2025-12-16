@@ -67,7 +67,7 @@ def get_city_info(city_name: str):
 
 
 # --- TOOL LangChain ---
-@tool
+@tool("geo_info_tool", return_direct=True)
 def geo_info_tool(name: str) -> str:
     """
     Retrieve geographic information about a country or a city.

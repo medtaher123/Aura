@@ -3,7 +3,7 @@ import requests
 from typing import Optional
 from langchain.tools import tool
 
-@tool
+@tool("weather_tool", return_direct=True)
 def weather_tool(city_name: str, forecast_days: Optional[int] = 5) -> str:
     """
     Retrieve current weather and forecasts for a city.

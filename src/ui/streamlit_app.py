@@ -194,7 +194,8 @@ if user_input:
     with st.chat_message("assistant"):
         # Handle structured results
         if isinstance(result, dict) and result.get("error"):
-            st.error(result["message"])
+            error_msg = result.get("message") or result.get("error") or str(result)
+            st.error(error_msg)
 
         elif isinstance(result, dict) and "images" in result:
             labels = get_labels(st.session_state.last_lang)

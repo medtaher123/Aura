@@ -20,17 +20,14 @@ def query_stac_catalog(params: str) -> dict:
     "10.1,36.7,10.3,36.9 2023-07-01 2023-07-10 sentinel-2-l2a"
     """
     try:
-        # REGEX CORRIGÉE ET ROBUSTE
         match = re.match(
             r"([0-9\.\,\-]+)\s+(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})\s+([\w\-]+)",
             params.strip(),
         )
         if not match:
-            return f"Final Answer: Invalid parameters format for STAC params: {params}"
+            return {"error": f"Invalid parameters format for STAC params: {params}"}
 
         bbox_str, start_date, end_date, collection = match.groups()
-
-        # BBOX propre
         bbox = [float(x) for x in bbox_str.split(",")]
         date_format = "%Y-%m-%d"
 
@@ -58,14 +55,14 @@ def query_stac_catalog(params: str) -> dict:
                 )
                 response.raise_for_status()
             except Timeout:
-                return "Final Answer: Timeout while calling STAC API."
+                return {"error": "Timeout while calling STAC API."}
             except RequestException as exc:
-                return f"Final Answer: STAC network error: {exc}"
+                return {"error": f"STAC network error: {exc}"}
 
             try:
                 items = response.json().get("features", [])
             except ValueError as exc:
-                return f"Final Answer: Invalid STAC response: {exc}"
+                return {"error": f"Invalid STAC response: {exc}"}
 
             if items:
                 item = items[0]
@@ -78,13 +75,18 @@ def query_stac_catalog(params: str) -> dict:
 
             current += timedelta(days=1)
 
-        # Aucune image
         if not all_images:
-            return (
-                "Final Answer: "
-                f"No images found for {collection} between {start_date} and {end_date} "
-                f"for bbox {bbox_str}."
-            )
+            return {
+                "message": (
+                    f"No images found for {collection} between {start_date} and {end_date} "
+                    f"for bbox {bbox_str}."
+                ),
+                "collection": collection,
+                "bbox": bbox_str,
+                "start_date": start_date,
+                "end_date": end_date,
+                "images": [],
+            }
 
         urls = [img["thumbnail"] for img in all_images if img.get("thumbnail")]
         details = "\n".join(
@@ -93,11 +95,19 @@ def query_stac_catalog(params: str) -> dict:
                 for img in all_images
             ]
         )
-        return (
-            "Final Answer: "
-            f"Found {len(all_images)} images for {collection} between {start_date} and {end_date} "
-            f"for bbox {bbox_str}.\n{details}\nThumbnails: {', '.join(urls)}"
-        )
+
+        return {
+            "message": (
+                f"Found {len(all_images)} images for {collection} between {start_date} and {end_date} "
+                f"for bbox {bbox_str}.\n{details}\nThumbnails: {', '.join(urls)}"
+            ),
+            "collection": collection,
+            "bbox": bbox_str,
+            "start_date": start_date,
+            "end_date": end_date,
+            "images": all_images,
+            "thumbnails": urls,
+        }
 
     except Exception as exc:
-        return f"Final Answer: Unexpected STAC error: {exc}"
+        return {"error": f"Unexpected STAC error: {exc}"}

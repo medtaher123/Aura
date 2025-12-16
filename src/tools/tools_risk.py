@@ -8,7 +8,6 @@ from langchain_ollama import OllamaLLM
 # Local package imports (relative to src/tools)
 from .tools_stac import query_stac_catalog
 from .tools_geocode import get_city_bbox
-from .tools_weather import get_weather_data
 from .fire_detection import detect_fire_tool
 from .flood_detection import query_disaster_events_tool
 from .water_ingress import estimate_surface_water_ingress_tool
@@ -526,7 +525,6 @@ def get_all_tools():
         query_stac_catalog,
         query_stac_catalog_with_retry,
         adjust_date,
-        get_weather_data,
         date_subtract,
         detect_fire_tool,
         query_disaster_events_tool,
