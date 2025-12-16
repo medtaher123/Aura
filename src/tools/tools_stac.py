@@ -8,7 +8,7 @@ STAC_API_URL = "https://earth-search.aws.element84.com/v1"
 REQUEST_TIMEOUT = 10
 
 
-@tool
+@tool(return_direct=True)
 def query_stac_catalog(params: str) -> dict:
     """
     Query the STAC EarthSearch catalog to retrieve satellite images for a bbox,

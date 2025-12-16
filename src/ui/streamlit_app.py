@@ -16,7 +16,6 @@ MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 from src.services import (
     create_agent_executor,
-    run_query_direct,
     detect_and_translate_to_english,
     translate_from_english,
 )
@@ -68,23 +67,6 @@ agent_executor = st.session_state.agent_executor
 # ---------------------------------------------------
 # HELPERS
 # ---------------------------------------------------
-def is_satellite_query(text: str) -> bool:
-    text = text.lower()
-    keywords = [
-        "sentinel", "modis", "viirs", "ndvi", "stac",
-        "satellite", "satellites",
-        "صور فضائية", "قمر صناعي", "الاقمار الصناعية",
-        "satélite", "satelitales", "satellitare", "satelliten",
-    ]
-    return any(k in text for k in keywords)
-
-def inject_into_memory(agent_executor, user_text, assistant_text):
-    memory = agent_executor.memory
-    memory.save_context(
-        {"input": user_text},
-        {"output": assistant_text}
-    )
-    
 def extract_all_html_filenames(text: str):
     return re.findall(r'([\w\-]+\.html)', text)
 
@@ -160,24 +142,19 @@ if user_input:
             english_query, detected_lang = translate_query_pipeline(user_input)
             st.session_state.last_lang = detected_lang
 
-            # Satellite detection
-            if is_satellite_query(english_query):
-                result = run_query_direct(english_query)
+            response = agent_executor.invoke({"input": english_query})
 
-                # 🔑 Inject summary into LLM memory
-                inject_into_memory(
-                    agent_executor,
-                    english_query,
-                    result["message"] if isinstance(result, dict) and "message" in result else str(result)
-                )
-
+            if isinstance(response, dict):
+                agent_output = response.get("output", response)
             else:
-                response = agent_executor.invoke({"input": english_query})
-                if isinstance(response, dict):
-                    json_output = response.get("output", str(response))
-                else:
-                    json_output = str(response)
-                result = translate_to_original_query_pipeline(json_output, detected_lang)
+                agent_output = response
+
+            if isinstance(agent_output, dict):
+                result = dict(agent_output)
+                if "message" in result and isinstance(result["message"], str):
+                    result["message"] = translate_to_original_query_pipeline(result["message"], detected_lang)
+            else:
+                result = translate_to_original_query_pipeline(str(agent_output), detected_lang)
 
             # Store assistant message placeholder
             st.session_state.messages.append({"role": "assistant", "content": str(result)})

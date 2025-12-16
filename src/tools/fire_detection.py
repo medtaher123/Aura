@@ -1,5 +1,6 @@
 # fire_detection.py
 from datetime import datetime, timedelta, date
+import time
 import pandas as pd
 import requests
 import folium
@@ -28,17 +29,22 @@ def haversine(lat1, lon1, lat2, lon2):
 
 # Get latitude and longitude for a city name using OpenStreetMap Nominatim API
 def get_city_coordinates(city_name):
+    print("Getting coordinates for city:", city_name)
     url = (
         f"https://nominatim.openstreetmap.org/search?q={city_name}&format=json&limit=1"
     )
-    try:
-        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        data = response.json()
-        if not data:
+    for attempt in range(5):
+        try:
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            data = response.json()
+            if not data:
+                return None, None
+            return float(data[0]["lat"]), float(data[0]["lon"])
+        except Exception:
+            if attempt < 4:
+                time.sleep(1)
+                continue
             return None, None
-        return float(data[0]["lat"]), float(data[0]["lon"])
-    except:
-        return None, None
 
 
 # Find the archive file that contains data for the given date
@@ -60,11 +66,13 @@ def find_archive_file_for_range(start_date_obj, end_date_obj):
     for sf in SPECIAL_FILES:
         if not (end_date_obj < sf["start"] or start_date_obj > sf["end"]):
             full_path = os.path.join(ARCHIVE_DIR, sf["filename"])
+            print("Using special file:", full_path)
             if os.path.exists(full_path):
                 return full_path
 
     # ---- DEFAULT LOGIC FOR ALL OTHER ARCHIVE FILES ----
     for filename in sorted(os.listdir(ARCHIVE_DIR)):
+        print("Checking archive file:", filename)
         if filename.endswith(".csv") and "fire_archive_" in filename:
             try:
                 parts = filename.replace(".csv", "").split("_")
@@ -92,10 +100,12 @@ def should_use_api(start_date, end_date):
 
 # Detect fires near a city for a given date and radius (km)
 def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
+    print("Detecting fires near city:", city_name)
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
     lat_city, lon_city = get_city_coordinates(city_name)
+    print("City coordinates:", lat_city, lon_city)
     if lat_city is None:
         return None
 
@@ -107,6 +117,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         df = pd.read_csv(url)
     else:
         file_path = find_archive_file_for_range(start_date_obj, end_date_obj)
+        print("Using archive file for fire data:", file_path)
         if not file_path:
             print("No archive file found for the given date range.")
             return None

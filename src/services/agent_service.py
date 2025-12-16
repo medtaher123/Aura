@@ -5,7 +5,6 @@ from langchain.agents import initialize_agent, AgentType
 from ..tools.tools_risk import get_all_tools, extract_bbox_and_dates, query_stac_catalog_with_retry
 from ..core.prompts import get_prompt_config
 from ..services.translate_service import translate_from_english
-from langchain.memory import ConversationBufferWindowMemory
 
 
 # ---------------------------------------------------
@@ -36,7 +35,7 @@ def build_query_params_from_input(user_input: str) -> str:
 
 def create_agent_executor():
     """
-    Initialize the structured chat agent with memory
+    Initialize the structured chat agent (stateless)
     """
     # Prompt
     prompt_template = get_prompt_config("few_shot")
@@ -51,21 +50,13 @@ def create_agent_executor():
     # Tools
     tools = get_all_tools()
 
-    # Memory
-    memory = ConversationBufferWindowMemory(
-        memory_key="chat_history",
-        k=7,  # keep only last 5 messages
-        return_messages=True
-    )
-    # Agent with memory
     agent_executor = initialize_agent(
         llm=llm,
         tools=tools,
         agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
-        memory=memory,
         verbose=True,
         handle_parsing_errors=True,
-        return_intermediate_steps=True,
+        return_intermediate_steps=False,
         max_iterations=5
     )
 
