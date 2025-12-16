@@ -91,10 +91,8 @@ def geo_info_tool(name: str) -> str:
         info = get_city_info(name)
 
     if not info:
-        return f"No results found for '{name}'."
+        return f"Final Answer: No results found for '{name}'."
 
     # Formater en texte lisible
     summary = "\n".join([f"{k} : {v}" for k, v in info.items()])
-    return summary
-
-
+    return f"Final Answer:\n{summary}"

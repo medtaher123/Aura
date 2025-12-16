@@ -26,7 +26,7 @@ def query_stac_catalog(params: str) -> dict:
             params.strip(),
         )
         if not match:
-            return {"error": f"Invalid parameters format for STAC params: {params}"}
+            return f"Final Answer: Invalid parameters format for STAC params: {params}"
 
         bbox_str, start_date, end_date, collection = match.groups()
 
@@ -58,14 +58,14 @@ def query_stac_catalog(params: str) -> dict:
                 )
                 response.raise_for_status()
             except Timeout:
-                return {"error": "⏳ Timeout while calling STAC API.", "error_type": "timeout"}
+                return "Final Answer: Timeout while calling STAC API."
             except RequestException as exc:
-                return {"error": f"STAC network error: {exc}", "error_type": "network"}
+                return f"Final Answer: STAC network error: {exc}"
 
             try:
                 items = response.json().get("features", [])
             except ValueError as exc:
-                return {"error": f"Invalid STAC response: {exc}"}
+                return f"Final Answer: Invalid STAC response: {exc}"
 
             if items:
                 item = items[0]
@@ -80,24 +80,24 @@ def query_stac_catalog(params: str) -> dict:
 
         # Aucune image
         if not all_images:
-            return {
-                "message": f"No images found for {collection} between {start_date} and {end_date}.",
-                "collection": collection,
-                "bbox": bbox_str,
-                "start_date": start_date,
-                "end_date": end_date,
-                "images": [],
-            }
+            return (
+                "Final Answer: "
+                f"No images found for {collection} between {start_date} and {end_date} "
+                f"for bbox {bbox_str}."
+            )
 
-        # Réponse finale propre
-        return {
-            "collection": collection,
-            "bbox": bbox_str,
-            "start_date": start_date,
-            "end_date": end_date,
-            "images": all_images,
-            "urls": [img["thumbnail"] for img in all_images if img.get("thumbnail")],
-        }
+        urls = [img["thumbnail"] for img in all_images if img.get("thumbnail")]
+        details = "\n".join(
+            [
+                f"- {img['date']}: cloud_cover={img.get('cloud_cover', 'N/A')}% thumbnail={img.get('thumbnail', '')}"
+                for img in all_images
+            ]
+        )
+        return (
+            "Final Answer: "
+            f"Found {len(all_images)} images for {collection} between {start_date} and {end_date} "
+            f"for bbox {bbox_str}.\n{details}\nThumbnails: {', '.join(urls)}"
+        )
 
     except Exception as exc:
-        return {"error": f"Unexpected STAC error: {exc}"}
+        return f"Final Answer: Unexpected STAC error: {exc}"

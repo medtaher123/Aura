@@ -1,5 +1,6 @@
 #water_ingress.py
 import os
+from pathlib import Path
 import requests
 import rasterio
 import numpy as np
@@ -11,6 +12,8 @@ from shapely.geometry import Point, shape
 
 # OpenTopography API key
 OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed1")
+MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Geocoding (name -> lat/lon)
 def geocode_city(city_name: str):
@@ -206,10 +209,10 @@ def estimate_surface_water_ingress(location_input):
         actions = mitigation_rules(dem, slope, acc, risk_mask)
 
         # Matplotlib maps
-        plt.imsave("map_elevation.png", dem, cmap="terrain")
-        plt.imsave("map_slope.png", slope, cmap="inferno")
-        plt.imsave("map_flowacc.png", acc, cmap="Blues")
-        plt.imsave("Map_risk.png", risk_mask.astype(float), cmap="Reds")
+        plt.imsave(MAPS_DIR / "map_elevation.png", dem, cmap="terrain")
+        plt.imsave(MAPS_DIR / "map_slope.png", slope, cmap="inferno")
+        plt.imsave(MAPS_DIR / "map_flowacc.png", acc, cmap="Blues")
+        plt.imsave(MAPS_DIR / "Map_risk.png", risk_mask.astype(float), cmap="Reds")
 
         # Folium map
         risk_coords = np.argwhere(risk_mask)
@@ -229,14 +232,15 @@ def estimate_surface_water_ingress(location_input):
                 folium.CircleMarker(location=[rlat, rlon], radius=0.5, color='red', fill=True, fill_opacity=0.5).add_to(folium_map)
             except Exception:
                 continue
-        folium_map.save("Map_risk_folium.html")
+        map_html_path = MAPS_DIR / "Map_risk_folium.html"
+        folium_map.save(map_html_path)
 
         return {
             "Ingress_paths_estimate": "Water follows the D8 flow paths towards low points.",
             "Mitigation_actions": actions,
             **stats,
             "Maps": {
-                "Risk_Folium": "Map_risk_folium.html"
+                "Risk_Folium": map_html_path.name
             },
             "Explanation": (
                 "How to read the maps:\n"

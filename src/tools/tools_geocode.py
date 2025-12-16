@@ -22,6 +22,3 @@ def get_city_bbox(city_name):
             return None, None, None, None, city_name
     except Exception:
         return None, None, None, None, city_name
-
-
-

@@ -1,4 +1,4 @@
-# flood.py
+# flood_detection.py
 import requests
 import pycountry 
 from datetime import datetime
@@ -8,12 +8,16 @@ from geopy.geocoders import Nominatim
 import time
 from langchain.tools import tool
 from langchain_ollama import OllamaLLM
+from pathlib import Path
 
 VALID_DISASTER_TYPES = [
     "flood", "storm", "earthquake",
     "extreme temperature", "drought",
     "industrial accident", "transport"
 ]
+
+MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_iso3_from_country_name(name):
     try:
@@ -184,12 +188,23 @@ def extract_params_from_text(text: str):
     llm_response = llm.invoke(prompt)
 
     import json
+    import re
+    
+    # Try to extract JSON from the response
     try:
         data = json.loads(llm_response)
-    except Exception:
-        return {
-            "error": f"❌ LLM returned invalid JSON: {llm_response}"
-        }
+    except Exception as e:
+        # Try to find JSON in the response
+        json_match = re.search(r'\{[^{}]*\}', llm_response, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+            except:
+                print(f"Error parsing LLM response: {e}")
+                return None, None, None, None
+        else:
+            print(f"Error parsing LLM response: {e}")
+            return None, None, None, None
 
     # --- Extract fields ---
     start_date = data.get("start_date")
@@ -200,8 +215,8 @@ def extract_params_from_text(text: str):
     return start_date, end_date, country, disaster_type
 
 def generate_disaster_map(events, disaster_type="flood", country="Unknown", start_date=None, map_filename=None):
-    # Always force the map filename to 'map.html'
-    map_filename = "Map.html"
+    # Always force the map filename to 'Map.html'
+    map_filename = MAPS_DIR / "Map.html"
 
     map_ = folium.Map(location=[45, 10], zoom_start=4)
     geolocator = Nominatim(user_agent="disaster_mapper")
@@ -256,7 +271,7 @@ def generate_disaster_map(events, disaster_type="flood", country="Unknown", star
 
     map_.save(map_filename)
     print(f"Map generated: {map_filename} (open it in a browser)")
-    return map_filename
+    return map_filename.name
 
 
 @tool(return_direct=True)

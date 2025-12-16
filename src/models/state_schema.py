@@ -4,5 +4,4 @@ from typing import Optional
 
 class MyStateSchema(BaseModel):
     input: str
-    output: Optional[str] = None 
-
+    output: Optional[str] = None

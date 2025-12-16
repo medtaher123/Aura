@@ -1,11 +1,25 @@
-﻿# streamlit_app.py
+# streamlit_app.py
+import sys
+from pathlib import Path
 import streamlit as st
 from PIL import Image
-from nodes import run_query_direct, create_agent_executor
 import streamlit.components.v1 as components
 import re
-import os
-from translate import detect_and_translate_to_english, translate_from_english
+
+# Ensure project root is on sys.path so absolute imports work when running via `streamlit run src/ui/streamlit_app.py`
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+MAPS_DIR = PROJECT_ROOT / "src" / "maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
+
+from src.services import (
+    create_agent_executor,
+    run_query_direct,
+    detect_and_translate_to_english,
+    translate_from_english,
+)
 
 # ---------------------------------------------------
 # MULTILINGUAL LABELS (English defaults)
@@ -29,7 +43,7 @@ def get_labels(lang_code: str):
 # ---------------------------------------------------
 st.set_page_config(page_title="STAC & Fire Chatbot", layout="centered")
 
-logo = Image.open("metaplanet_sas_logo.jpeg")
+logo = Image.open(Path(__file__).resolve().parent / "assets" / "metaplanet_sas_logo.jpeg")
 st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
 st.image(logo, width=150)
 st.markdown("</div>", unsafe_allow_html=True)
@@ -40,7 +54,6 @@ st.title("🛰️🔥 Metaplanet Earth Agent")
 # SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
 if "messages" not in st.session_state:
-    print("Initializing chat messages...")
     st.session_state.messages = []
 
 if "agent_executor" not in st.session_state:
@@ -48,9 +61,6 @@ if "agent_executor" not in st.session_state:
 
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
-print("Session state:", st.session_state)
-if "messages" in st.session_state:
-    print('Loaded messages from session state:', st.session_state.messages)
     
 agent_executor = st.session_state.agent_executor
 
@@ -80,17 +90,33 @@ def extract_all_html_filenames(text: str):
 
 
 def display_html_file(filename: str):
-    if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f:
-            html = f.read()
-        components.html(html, height=600, width=800)
+    path = Path(filename)
+    candidates = []
+    if path.is_absolute():
+        candidates.append(path)
     else:
-        st.warning(f"⚠️ HTML file `{filename}` does not exist.")
+        candidates.extend([
+            MAPS_DIR / path.name,
+            PROJECT_ROOT / path.name,
+            Path.cwd() / path.name,
+        ])
+
+    for candidate in candidates:
+        if candidate.exists():
+            with candidate.open("r", encoding="utf-8") as f:
+                html = f.read()
+            components.html(html, height=600, width=800)
+            return
+
+    st.warning(f"⚠️ HTML file `{filename}` does not exist.")
 
 
 def display_all_html_from_text(text: str):
     found = extract_all_html_filenames(text)
-    html_files = [f for f in os.listdir(".") if f.endswith(".html")]
+    html_files = set()
+    for root in [MAPS_DIR, PROJECT_ROOT, Path.cwd()]:
+        if root.exists():
+            html_files.update([p.name for p in root.glob("*.html")])
 
     for name in found:
         if name in html_files:

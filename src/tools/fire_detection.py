@@ -5,10 +5,13 @@ import requests
 import folium
 import numpy as np
 import os
+from pathlib import Path
 from langchain_ollama import OllamaLLM
 
 MAP_KEY = "f44596f0cc01c26985abd6bfff78ac92"
 ARCHIVE_DIR = "./Data"
+MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ARCHIVE_DIR = r"C:\MEPDev\LLM_Demo\langgraph_project\Data"
 
@@ -140,9 +143,9 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
             popup=popup,
         ).add_to(m)
 
-    filename = f"Fires.html"
+    filename = MAPS_DIR / "Fires.html"
     m.save(filename)
-    return filename, len(df_filtered)
+    return filename.name, len(df_filtered)
 
 
 def extract_params_from_text(text: str):

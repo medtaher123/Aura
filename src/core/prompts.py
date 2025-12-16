@@ -48,7 +48,7 @@ Completeness:
 
    * Always include all relevant data obtained from tools (e.g., **all URLs**, values, statistics).
    * Never summarize or omit URLs. If multiple are returned, display them **explicitly and completely**.
-   * Don’t omit tool outputs, even if the user didn’t explicitly request them.
+   * Don't omit tool outputs, even if the user didn't explicitly request them.
 
 Error Handling:
 

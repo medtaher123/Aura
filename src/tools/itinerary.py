@@ -1,6 +1,7 @@
 #itinerary.py
 import requests
 import folium
+from pathlib import Path
 from langchain.tools import tool
 
 # Geocoding via Nominatim (OpenStreetMap)
@@ -110,6 +111,11 @@ def format_step(step):
 
 
 # Map generation
+# Map generation
+MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def create_map(lat1, lon1, lat2, lon2, route_data, start, end):
     m = folium.Map(location=[lat1, lon1], zoom_start=12)
     for leg in route_data.get("routes", []):
@@ -124,9 +130,9 @@ def create_map(lat1, lon1, lat2, lon2, route_data, start, end):
     folium.Marker([lat1, lon1], tooltip=f"Departure: {start}", icon=folium.Icon(color="green")).add_to(m)
     folium.Marker([lat2, lon2], tooltip=f"Arrival: {end}", icon=folium.Icon(color="red")).add_to(m)
 
-    file_name = "itinerary.html"
-    m.save(file_name)
-    return file_name
+    file_path = MAPS_DIR / "itinerary.html"
+    m.save(file_path)
+    return file_path.name
 
 
 @tool("get_route_info", return_direct=True)
@@ -138,22 +144,22 @@ def get_route_info(query: str) -> str:
     Output: a structured dict with route summary (distance, duration, steps) and a saved HTML map.
     """
     if "->" not in query:
-        return {"message": "Expected format: 'Start -> End'.", "downstream_task": "route", "error": True}
+        return "Final Answer: Expected format: 'Start -> End'."
 
     start, end = [x.strip() for x in query.split("->")]
 
     lat1, lon1 = geocode_place(start)
     lat2, lon2 = geocode_place(end)
     if not lat1 or not lon1 or not lat2 or not lon2:
-        return {"message": f"Location not found: {start} or {end}", "downstream_task": "route", "error": True}
+        return f"Final Answer: Location not found: {start} or {end}"
 
     try:
         data = get_route((lat1, lon1), (lat2, lon2))
     except requests.RequestException as e:
-        return {"message": f"Network error: {e}", "downstream_task": "route", "error": True}
+        return f"Final Answer: Network error: {e}"
 
     if not data or data.get("code") != "Ok" or not data.get("routes"):
-        return {"message": "Unable to compute route.", "downstream_task": "route", "error": True}
+        return "Final Answer: Unable to compute route."
 
     route = data["routes"][0]
     total_dist = human_distance(route["distance"])
@@ -168,14 +174,9 @@ def get_route_info(query: str) -> str:
 
     file_name = create_map(lat1, lon1, lat2, lon2, data, start, end)
 
-    return {
-        "message": f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}.",
-        "downstream_task": "route",
-        "distance": total_dist,
-        "duration": total_dur,
-        "steps": steps_txt,
-        "map_file": file_name,
-        "start": start,
-        "end": end,
-        "error": False,
-    }
+    steps_block = "\n".join(steps_txt)
+    return (
+        "Final Answer: "
+        f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}. "
+        f"Map saved to {file_name}.\n{steps_block}"
+    )

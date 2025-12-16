@@ -17,7 +17,7 @@ def weather_tool(city_name: str, forecast_days: Optional[int] = 5) -> str:
     geo_data = geo_resp.json()
     
     if not geo_data:
-        return {"message": f"City '{city_name}' not found.", "downstream_task": "weather", "location": {"city": city_name}, "error": True}
+        return f"Final Answer: City '{city_name}' not found."
 
     lat, lon = float(geo_data[0]["lat"]), float(geo_data[0]["lon"])
 
@@ -32,7 +32,7 @@ def weather_tool(city_name: str, forecast_days: Optional[int] = 5) -> str:
     }
     weather_resp = requests.get(weather_url, params=weather_params)
     if weather_resp.status_code != 200:
-        return {"message": f"Unable to fetch weather data. Status: {weather_resp.status_code}", "downstream_task": "weather", "location": {"city": city_name}, "error": True}
+        return f"Final Answer: Unable to fetch weather data. Status: {weather_resp.status_code}"
 
     weather_data = weather_resp.json()
     current = weather_data.get("current_weather", {})
@@ -54,10 +54,4 @@ def weather_tool(city_name: str, forecast_days: Optional[int] = 5) -> str:
         if days_left == 0:
             break
     
-    return {
-        "message": result,
-        "downstream_task": "weather",
-        "location": {"city": city_name},
-        "forecast_days": forecast_days,
-        "error": False,
-    }
+    return f"Final Answer: {result}"

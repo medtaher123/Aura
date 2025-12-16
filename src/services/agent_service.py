@@ -1,11 +1,13 @@
-# nodes.py
+#agent_service.py
 from langchain.tools import tool
 from langchain_ollama import OllamaLLM
 from langchain.agents import initialize_agent, AgentType
-from tools_risk import get_all_tools, extract_bbox_and_dates, query_stac_catalog_with_retry
-from prompts import get_prompt_config
-from translate import translate_from_english
+from ..tools.tools_risk import get_all_tools, extract_bbox_and_dates, query_stac_catalog_with_retry
+from ..core.prompts import get_prompt_config
+from ..services.translate_service import translate_from_english
 from langchain.memory import ConversationBufferWindowMemory
+
+
 # ---------------------------------------------------
 # TOOL: Build query parameters from user input
 # ---------------------------------------------------
@@ -15,7 +17,7 @@ def build_query_params_from_input(user_input: str) -> str:
     Extracts bbox, dates, collection from a free-text input and builds
     the 'params' string expected by STAC.
     """
-    extraction_result = extract_bbox_and_dates({"user_input": user_input})
+    extraction_result = extract_bbox_and_dates(user_input)
 
     if "error" in extraction_result:
         return extraction_result["error"]
