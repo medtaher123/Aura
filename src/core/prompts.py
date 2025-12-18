@@ -2,116 +2,36 @@
 prompts.py - Contains all prompt templates and examples for the satellite imagery assistant
 """
 
-from langchain.prompts import FewShotPromptTemplate, PromptTemplate
-from calendar import monthrange
+from typing import Sequence
 
 # ===========================
 
-# SYSTEM PROMPT (UPDATED)
+# PROMPT
 
 # ===========================
 
-system_prompt = """
-You are an assistant helping users query satellite imagery data for specific environmental tasks such as flood detection, fire detection, satellite images. You must strictly follow these rules:
 
-Core Requirements:
-
-* Language: Respond in the language of the user. Internally translate to English for reasoning, then translate the final "Final Answer" field back.
-* User Query Format: First message: "USER_QUERY: <user_query>". 
-* Function Usage: Use only necessary tools exactly once. Do not repeat or invent tools.
-* Output Format: ALL outputs MUST be JSON.
-
-
-Task and Data Extraction Rules:
-
-* Use one of the predefined tools: get_date, get_time, calculator, geo_info_tool, get_route_info, detect_fire_tool, query_disaster_events_tool, estimate_surface_water_ingress_tool, weather_tool, general_question_tool, geoserver_risk_mask_tool.
-* If multiple tasks are mentioned, select different tools. Never repeat or loop.
-* If a question does NOT require satellite data, geospatial analysis, fire detection, flood detection, risks, weather, or maps, use the `general_question_tool`.
-* When using a tool, output only the tool call.
-* When the tool returns an observation, produce the final JSON response.
-
-Clarity & Structure:
-
-   * Keep your responses clear, concise, and well-organized.
-   * Do not continue reasoning once you have the necessary information.
-   
-Relevance:
-
-   * Answer only the question asked. Do not assume extra intentions or add unrelated details.
-   
-Final Response Format:
-
-   * Once you obtain an Observation, immediately return the response as:
-    Final Answer: [your clear and concise reply]
-    
-Completeness:
-
-   * Always include all relevant data obtained from tools (e.g., **all URLs**, values, statistics).
-   * Never summarize or omit URLs. If multiple are returned, display them **explicitly and completely**.
-   * Don't omit tool outputs, even if the user didn't explicitly request them.
-
-Error Handling:
-
-* Include "error": true if critical information is missing or ambiguous.
-  """
-
-# ===========================
-
-# FEW-SHOT EXAMPLE TEMPLATE
-
-# ===========================
-
-example_template = PromptTemplate(
-  input_variables=["question", "response"],
-  template="""
-  Question: {question}
-  {response}
-  """
+_LANGGRAPH_ROUTER_PROMPT_TEMPLATE = (
+    "You are a tool router for an Earth-observation assistant.\n"
+    "\n"
+    "GOAL:\n"
+    "- Select exactly ONE tool to run.\n"
+    "- Provide the tool input as a SINGLE STRING.\n"
+    "\n"
+    "AVAILABLE TOOLS:\n"
+    "{tool_names}\n"
+    "\n"
+    "CRITICAL RULES:\n"
+    "- Use only ONE tool.\n"
+    "- NEVER invent tool outputs, observations, results, URLs, or data.\n"
+    "- If the request does NOT require satellite/geospatial analysis, fire/flood risk, weather, maps, routing, or STAC queries, choose `general_question_tool`.\n"
+    "\n"
+    "OUTPUT FORMAT (STRICT):\n"
+    "- Return ONLY valid JSON.\n"
+    "- No markdown, no backticks, no explanations, no extra keys.\n"
+    "- Must match exactly:\n"
+    '{{"action": "<tool_name>", "action_input": "<string>"}}\n'
 )
-
-examples = [
-  {
-    "question": "USER_QUERY: Check flooding conditions for Lagos Island from March 1 to March 5",
-    "response": """{
-      "Final Answer": "No significant flooding events were detected in Lagos Island from March 1 to March 5.",
-      "downstream_task": "query_disaster_events_tool",
-      "start_date": "2024-03-01",
-      "end_date": "2024-03-05",
-      "location": {
-        "country": "Nigeria",
-        "state": "",
-        "city": "Lagos Island"
-      },
-      "error": false,
-      "Map generated": "flood_map_Lagos Island_2024-03-01_to_2024-03-05.html\n"
-    }"""
-  },
-  {
-    "question": "USER_QUERY: Detect fires in Potsdam in summer 2025 within a 100 km radius",
-    "response": """{
-      "Final Answer": "17 fire(s) detected near Potsdam from 2025-06-01 to 2025-08-31 within a radius of 100 km",
-      "downstream_task": "detect_fire_tool",
-      "start_date": "2025-06-01",
-      "end_date": "2025-08-31",
-      "location": {
-        "country": "Germany",
-        "state": "",
-        "city": "Potsdam"
-      },
-      "error": false,
-      "radius_km": 100,
-      "Map generated": "flood_map_Potsdam_2025-06-01_to_2025-08-31.html\n"
-    }"""
-  },
-  {
-    "question": "USER_QUERY: Can you check the area for me?",
-    "response": """{
-      "error": true,
-      "Final Answer": "Unable to determine the requested environmental task. Please specify the type of analysis you want (e.g., fire detection, flood analysis, etc.)."
-    }"""
-  }
-]
-
 
 # ===========================
 
@@ -119,43 +39,30 @@ examples = [
 
 # ===========================
 
-few_shot_prompt = FewShotPromptTemplate(
-  examples=examples,
-  example_prompt=example_template,
-  prefix=system_prompt,
-  suffix="""
-  Question: {input}
-  Response (JSON format required):
-  """,
-  input_variables=["input"],
-  example_separator="\n" + "-"*50 + "\n"
-)
+_LANGGRAPH_ROUTER_FEW_SHOT = """
+FEW-SHOT EXAMPLES (follow the pattern exactly):
 
-# ===========================
+Example 1
+User: show me storm events in Germany between 2010 and 2025
+Assistant: {"action":"query_disaster_events_tool","action_input":"storm events in Germany between 2010 and 2025"}
 
-# SIMPLE PROMPT
+Example 2
+User: are there fires in Potsdam in summer 2025 within a 100 km radius
+Assistant: {"action":"detect_fire_tool","action_input":"fires in Potsdam in summer 2025 within a 100 km radius"}
 
-# ===========================
+Example 3
+User: Show me Sentinel-2 images of Casablanca in September 2025
+Assistant: {"action":"query_stac_catalog","action_input":"Show me Sentinel-2 images of Casablanca in September 2025"}
 
-simple_prompt = PromptTemplate(
-  input_variables=["input"],
-  template="""
-  {system_prompt}
+Example 4 (ambiguous / missing info)
+User: Can you check the area for me?
+Assistant: {"action":"general_question_tool","action_input":"Can you check the area for me?"}
+""".strip()
 
-  Question: {input}
-  Response (JSON format required):
-  """
-)
-
-# ===========================
-
-# PROMPT CONFIG SELECTOR
-
-# ===========================
-
-def get_prompt_config(mode="few_shot"):
-  """Returns the requested prompt configuration"""
-  return {
-  "few_shot": few_shot_prompt,
-  "simple": simple_prompt
-  }.get(mode, few_shot_prompt)
+def get_router_prompt(tool_names: Sequence[str]) -> str:
+    """
+    LangGraph router prompt: forces the LLM to output a strict JSON tool decision.
+    """
+    names = ", ".join(sorted({str(n) for n in tool_names if n}))
+    base = _LANGGRAPH_ROUTER_PROMPT_TEMPLATE.format(tool_names=names)
+    return base + "\n\n" + _LANGGRAPH_ROUTER_FEW_SHOT
