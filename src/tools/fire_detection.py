@@ -37,8 +37,42 @@ def haversine(lat1, lon1, lat2, lon2):
 
 
 # Get latitude and longitude for a city name using OpenStreetMap Nominatim API
+def _candidate_location_queries(location: str) -> list[str]:
+    raw = (location or "").strip()
+    if not raw:
+        return []
+
+    candidates: list[str] = [raw]
+
+    lowered = raw.lower()
+    if lowered.endswith(" region"):
+        candidates.append(raw[: -len(" region")].strip())
+    if lowered.endswith(", region"):
+        candidates.append(raw[: -len(", region")].strip())
+
+    # Very common: users include accents; Nominatim often handles it, but keep as-is.
+    # Add a France hint for regions like Ile-de-France.
+    if "france" not in lowered:
+        candidates.append(f"{raw}, France")
+
+    # De-duplicate while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in candidates:
+        c2 = c.strip()
+        if c2 and c2 not in seen:
+            seen.add(c2)
+            out.append(c2)
+    return out
+
+
+class GeocodingError(RuntimeError):
+    pass
+
+
 def get_city_coordinates(city_name):
     print("Getting coordinates for city:", city_name)
+<<<<<<< Updated upstream
     url = (
         f"https://nominatim.openstreetmap.org/search?q={city_name}&format=json&limit=1"
     )
@@ -55,6 +89,43 @@ def get_city_coordinates(city_name):
                 time.sleep(1)
                 continue
             return None, None
+=======
+    url = "https://nominatim.openstreetmap.org/search"
+    headers = {"User-Agent": "MetaplanetLLM/1.0 (contact: local)"}
+
+    candidates = _candidate_location_queries(city_name)
+    if not candidates:
+        return None, None
+
+    for query in candidates:
+        for attempt in range(5):
+            try:
+                print(f"Geocoding attempt {attempt + 1}/5 with query: {query}")
+                response = requests.get(
+                    url,
+                    params={"q": query, "format": "json", "limit": 1},
+                    headers=headers,
+                    timeout=10,
+                )
+                if response.status_code in (429, 503):
+                    # Nominatim throttling/backpressure
+                    time.sleep(1)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                if data:
+                    return float(data[0]["lat"]), float(data[0]["lon"])
+                # No match for this query; break to try the next candidate
+                break
+            except Exception:
+                if attempt < 4:
+                    time.sleep(1)
+                    continue
+                # Exhausted retries for this query; move to next candidate
+                break
+
+    return None, None
+>>>>>>> Stashed changes
 
 
 # Find the archive file that contains data for the given date
@@ -125,7 +196,9 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     lat_city, lon_city = get_city_coordinates(city_name)
     print("City coordinates:", lat_city, lon_city)
     if lat_city is None:
-        return None
+        raise GeocodingError(
+            f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
+        )
 
     use_api = should_use_api(start_date, end_date)
 
@@ -324,7 +397,11 @@ def detect_fire_tool(query_text: str) -> str:
 
         return f"Final Answer: {message}"
 
+<<<<<<< Updated upstream
     except (FireArchiveMissingError, FireDataUnavailableError) as e:
+=======
+    except GeocodingError as e:
+>>>>>>> Stashed changes
         return f"ERROR: {str(e)}"
     except Exception as e:
         return f"ERROR: Unexpected error during processing: {str(e)}"
