@@ -11,6 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.services.agent_runner import invoke_agent
+
 MAPS_DIR = PROJECT_ROOT / "src" / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -142,12 +144,7 @@ if user_input:
             english_query, detected_lang = translate_query_pipeline(user_input)
             st.session_state.last_lang = detected_lang
 
-            response = agent_executor.invoke({"input": english_query})
-
-            if isinstance(response, dict):
-                agent_output = response.get("output", response)
-            else:
-                agent_output = response
+            agent_output = invoke_agent(agent_executor, english_query)
 
             if isinstance(agent_output, dict):
                 result = dict(agent_output)

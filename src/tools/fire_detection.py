@@ -35,12 +35,14 @@ def get_city_coordinates(city_name):
     )
     for attempt in range(5):
         try:
+            print('trying to get city coordinates, attempt', attempt + 1)
             response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             data = response.json()
             if data:
                 return float(data[0]["lat"]), float(data[0]["lon"])         
         except Exception:
             if attempt < 4:
+                print("Retrying...")
                 time.sleep(1)
                 continue
             return None, None
