@@ -9,6 +9,7 @@ from .geographic_info import geo_info_tool
 from .itinerary import get_route_info
 from .weather import weather_tool
 from .general_chat import general_question_tool
+from .risk_geoserver import geoserver_risk_mask_tool
 
 
 @tool
@@ -64,4 +65,5 @@ def get_all_tools():
         get_route_info,
         weather_tool,
         general_question_tool,
+        geoserver_risk_mask_tool,
     ]
