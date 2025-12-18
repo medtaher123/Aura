@@ -10,11 +10,20 @@ from pathlib import Path
 from langchain_ollama import OllamaLLM
 
 MAP_KEY = "f44596f0cc01c26985abd6bfff78ac92"
-ARCHIVE_DIR = "./Data"
+_DEFAULT_ARCHIVE_DIR = Path(__file__).resolve().parents[3] / "Data"
+ARCHIVE_DIR = os.getenv("FIRE_ARCHIVE_DIR", str(_DEFAULT_ARCHIVE_DIR))
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ARCHIVE_DIR = r"C:\MEPDev\LLM_Demo\langgraph_project\Data"
+
+
+class FireArchiveMissingError(RuntimeError):
+    pass
+
+
+class FireDataUnavailableError(RuntimeError):
+    pass
 
 
 # Calculate the great-circle distance between two points on the Earth (Haversine formula)
@@ -50,6 +59,13 @@ def get_city_coordinates(city_name):
 
 # Find the archive file that contains data for the given date
 def find_archive_file_for_range(start_date_obj, end_date_obj):
+    archive_dir = Path(ARCHIVE_DIR)
+    if not archive_dir.exists() or not archive_dir.is_dir():
+        raise FireArchiveMissingError(
+            f"Fire archive folder not found: '{archive_dir}'. "
+            "Create it and add FIRMS CSV archives, or set FIRE_ARCHIVE_DIR to the correct path."
+        )
+
     # --- SPECIAL CASE FILES (explicit date ranges) ----
     SPECIAL_FILES = [
         {
@@ -66,15 +82,16 @@ def find_archive_file_for_range(start_date_obj, end_date_obj):
 
     for sf in SPECIAL_FILES:
         if not (end_date_obj < sf["start"] or start_date_obj > sf["end"]):
-            full_path = os.path.join(ARCHIVE_DIR, sf["filename"])
+            full_path = archive_dir / sf["filename"]
             print("Using special file:", full_path)
-            if os.path.exists(full_path):
-                return full_path
+            if full_path.exists():
+                return str(full_path)
 
     # ---- DEFAULT LOGIC FOR ALL OTHER ARCHIVE FILES ----
-    for filename in sorted(os.listdir(ARCHIVE_DIR)):
+    for entry in sorted(archive_dir.iterdir()):
+        filename = entry.name
         print("Checking archive file:", filename)
-        if filename.endswith(".csv") and "fire_archive_" in filename:
+        if entry.is_file() and filename.endswith(".csv") and "fire_archive_" in filename:
             try:
                 parts = filename.replace(".csv", "").split("_")
                 start_year = int(parts[2])
@@ -85,7 +102,7 @@ def find_archive_file_for_range(start_date_obj, end_date_obj):
 
                 # Check overlap
                 if not (end_date_obj < file_start or start_date_obj > file_end):
-                    return os.path.join(ARCHIVE_DIR, filename)
+                    return str(entry)
 
             except Exception:
                 continue
@@ -120,8 +137,11 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         file_path = find_archive_file_for_range(start_date_obj, end_date_obj)
         print("Using archive file for fire data:", file_path)
         if not file_path:
-            print("No archive file found for the given date range.")
-            return None
+            raise FireDataUnavailableError(
+                "No fire archive CSV found for the requested date range. "
+                f"Checked folder: '{Path(ARCHIVE_DIR)}'. "
+                "Add the required FIRMS archive CSV files there (or set FIRE_ARCHIVE_DIR)."
+            )
         df = pd.read_csv(file_path)
 
     # Ensure date column exists
@@ -304,5 +324,7 @@ def detect_fire_tool(query_text: str) -> str:
 
         return f"Final Answer: {message}"
 
+    except (FireArchiveMissingError, FireDataUnavailableError) as e:
+        return f"ERROR: {str(e)}"
     except Exception as e:
         return f"ERROR: Unexpected error during processing: {str(e)}"
