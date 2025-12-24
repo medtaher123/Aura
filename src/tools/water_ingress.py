@@ -7,6 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import folium
 from langchain.tools import tool
+
+from .contracts import make_tool_response
 from rasterio.features import geometry_mask
 from shapely.geometry import Point, shape
 
@@ -314,8 +316,44 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         # Join message
         message = "\n".join(message_parts)
 
-        return f"Final Answer: {message}"
+        artifacts = {"maps": [], "thumbnails": [], "urls": []}
+        if isinstance(maps, dict):
+            for _, path in maps.items():
+                if isinstance(path, str) and path.endswith(".html"):
+                    artifacts["maps"].append(path)
+
+        location_info = result.get("Location") or {}
+        coords = None
+        try:
+            if isinstance(location_info, dict):
+                lat = location_info.get("latitude")
+                lon = location_info.get("longitude")
+                if lat is not None and lon is not None:
+                    coords = {"lat": float(lat), "lon": float(lon)}
+        except Exception:
+            coords = None
+
+        country = None
+        city = None
+        if isinstance(location_info, dict):
+            country = location_info.get("country")
+            city = location_info.get("city")
+
+        return make_tool_response(
+            tool_name="estimate_surface_water_ingress_tool",
+            message=message,
+            artifacts=artifacts,
+            country=country,
+            city=city,
+            coordinates=coords,
+            data={"result": result},
+            error=False,
+        )
 
     except Exception as e:
         error_message = f"An error occurred while processing the request: {str(e)}"
-        return f"Final Answer: {error_message}"
+        return make_tool_response(
+            tool_name="estimate_surface_water_ingress_tool",
+            message=error_message,
+            error=True,
+        )

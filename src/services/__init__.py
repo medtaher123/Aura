@@ -8,9 +8,14 @@ from .translate_service import (
     translate_from_english,
     detect_and_translate_to_english,
 )
-from .agent_service import create_agent_executor
-from .extraction_service import extract_location_from_text
 from .llm_service import get_llm
+
+
+def create_agent_executor():
+    # Lazy import to avoid circular imports when tools import submodules from src.services.
+    from .agent_service import create_agent_executor as _create_agent_executor
+
+    return _create_agent_executor()
 
 __all__ = [
     "detect_language",
@@ -18,6 +23,5 @@ __all__ = [
     "translate_from_english",
     "detect_and_translate_to_english",
     "create_agent_executor",
-    "extract_location_from_text",
     "get_llm",
 ]

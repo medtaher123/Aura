@@ -11,6 +11,7 @@ import folium
 import requests
 from langchain.tools import tool
 from langchain_ollama import OllamaLLM
+from .contracts import make_tool_response
 from shapely.geometry import shape
 
 from .tools_geocode import get_city_bbox
@@ -237,7 +238,7 @@ def _make_map(
     return out_path.name
 
 
-@tool("geoserver_risk_mask_tool", return_direct=True)
+@tool("geoserver_risk_mask_tool")
 def geoserver_risk_mask_tool(query_text: str) -> dict[str, Any]:
     """Query GeoServer risk polygons with filters (WFS) and display them as a mask on a map (WMS or GeoJSON).
 
@@ -245,9 +246,7 @@ def geoserver_risk_mask_tool(query_text: str) -> dict[str, Any]:
     filtering by risk type, region, confidence, inference date range, or area.
 
     Example user inputs:
-    - "Show flood risk mask in Tunis with confidence > 0.7"
-    - "Display fire predictions in Sfax for last week"
-    - "Show polygons for region Ariana between 2025-12-01 and 2025-12-10"
+    - "Show flood risk mask in Tunis"
     """
     try:
         system_prompt = """
@@ -326,24 +325,33 @@ Rules:
             render_mode=str(filters.get("render_mode") or "auto").lower(),
         )
 
-        return {
-            "message": "GeoServer risk mask generated.",
-            "layer": layer_name,
-            "cql_filter": cql,
-            "feature_count": summary.get("feature_count"),
-            "total_area_m2": summary.get("total_area_m2"),
-            "avg_confidence": summary.get("avg_confidence"),
-            "map_file": map_file,
-            "geoserver": {
-                "base_url": GEOSERVER_BASE_URL,
-                "wms_url": f"{GEOSERVER_BASE_URL}/wms",
-                "wfs_url": f"{GEOSERVER_BASE_URL}/wfs",
+        return make_tool_response(
+            tool_name="geoserver_risk_mask_tool",
+            message="GeoServer risk mask generated.",
+            artifacts={"maps": [map_file], "thumbnails": [], "urls": []},
+            start_date=filters.get("start_date"),
+            end_date=filters.get("end_date"),
+            city=filters.get("location"),
+            data={
+                "layer": layer_name,
+                "cql_filter": cql,
+                "filters": filters,
+                "feature_count": summary.get("feature_count"),
+                "total_area_m2": summary.get("total_area_m2"),
+                "avg_confidence": summary.get("avg_confidence"),
+                "map_file": map_file,
+                "geoserver": {
+                    "base_url": GEOSERVER_BASE_URL,
+                    "wms_url": f"{GEOSERVER_BASE_URL}/wms",
+                    "wfs_url": f"{GEOSERVER_BASE_URL}/wfs",
+                },
             },
-            "error": False,
-        }
+            error=False,
+        )
 
     except Exception as e:
-        return {
-            "error": True,
-            "message": f"GeoServer tool error: {str(e)}",
-        }
+        return make_tool_response(
+            tool_name="geoserver_risk_mask_tool",
+            message=f"GeoServer tool error: {str(e)}",
+            error=True,
+        )

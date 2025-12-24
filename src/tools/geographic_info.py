@@ -2,6 +2,8 @@
 import requests
 from langchain.tools import tool
 
+from .contracts import make_tool_response
+
 # --- Country Info ---
 def get_country_info(country_name: str):
     """Return main information about a country via the restcountries.com API."""
@@ -68,7 +70,7 @@ def get_city_info(city_name: str):
 
 # --- TOOL LangChain ---
 @tool("geo_info_tool", return_direct=True)
-def geo_info_tool(name: str) -> str:
+def geo_info_tool(name: str) -> dict:
     """
     Retrieve geographic information about a country or a city.
 
@@ -91,8 +93,40 @@ def geo_info_tool(name: str) -> str:
         info = get_city_info(name)
 
     if not info:
-        return f"Final Answer: No results found for '{name}'."
+        return make_tool_response(
+            tool_name="geo_info_tool",
+            message=f"No results found for '{name}'.",
+            city=name,
+            error=True,
+        )
 
     # Formater en texte lisible
     summary = "\n".join([f"{k} : {v}" for k, v in info.items()])
-    return f"Final Answer:\n{summary}"
+
+    # Best-effort structured fields
+    country = None
+    city = None
+    coordinates = None
+    info_type = str(info.get("Type") or "").lower()
+    if info_type == "country":
+        country = info.get("Name")
+    elif info_type == "city":
+        city = name
+        country = info.get("Country")
+        try:
+            lat = info.get("Latitude")
+            lon = info.get("Longitude")
+            if lat is not None and lon is not None:
+                coordinates = {"lat": float(lat), "lon": float(lon)}
+        except Exception:
+            coordinates = None
+
+    return make_tool_response(
+        tool_name="geo_info_tool",
+        message=summary,
+        country=country,
+        city=city,
+        coordinates=coordinates,
+        data={"info": info},
+        error=False,
+    )

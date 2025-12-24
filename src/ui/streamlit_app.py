@@ -1,17 +1,19 @@
 # streamlit_app.py
 import sys
 from pathlib import Path
+import traceback
 import streamlit as st
 from PIL import Image
-import streamlit.components.v1 as components
-import re
 
 # Ensure project root is on sys.path so absolute imports work when running via `streamlit run src/ui/streamlit_app.py`
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.services.agent_runner import invoke_agent
+from src.services.agent_runner import invoke_agent, coerce_tool_response
+from src.ui.html_artifacts import display_html_file
+from src.tools.contracts import make_tool_response
+
 
 MAPS_DIR = PROJECT_ROOT / "src" / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -21,23 +23,6 @@ from src.services import (
     detect_and_translate_to_english,
     translate_from_english,
 )
-
-# ---------------------------------------------------
-# MULTILINGUAL LABELS (English defaults)
-# ---------------------------------------------------
-LABELS = {
-    "fr": {"results_for": "Results for collection", "cloud": "Cloud", "date": "Date"},
-    "en": {"results_for": "Results for collection", "cloud": "Cloud", "date": "Date"},
-    "es": {"results_for": "Resultados para la colección", "cloud": "Nube", "date": "Fecha"},
-    "ar": {"results_for": "نتائج المجموعة", "cloud": "السحب", "date": "التاريخ"},
-    "it": {"results_for": "Risultati per la collezione", "cloud": "Nuvolosità", "date": "Data"},
-    "de": {"results_for": "Ergebnisse für die Sammlung", "cloud": "Wolken", "date": "Datum"},
-}
-
-def get_labels(lang_code: str):
-    base = lang_code.split("-")[0] if lang_code else "en"
-    return LABELS.get(base, LABELS["en"])
-
 
 # ---------------------------------------------------
 # CONFIGURATION
@@ -67,59 +52,6 @@ agent_executor = st.session_state.agent_executor
 
 
 # ---------------------------------------------------
-# HELPERS
-# ---------------------------------------------------
-def extract_all_html_filenames(text: str):
-    return re.findall(r'([\w\-]+\.html)', text)
-
-
-def display_html_file(filename: str):
-    path = Path(filename)
-    candidates = []
-    if path.is_absolute():
-        candidates.append(path)
-    else:
-        candidates.extend([
-            MAPS_DIR / path.name,
-            PROJECT_ROOT / path.name,
-            Path.cwd() / path.name,
-        ])
-
-    for candidate in candidates:
-        if candidate.exists():
-            with candidate.open("r", encoding="utf-8") as f:
-                html = f.read()
-            components.html(html, height=600, width=800)
-            return
-
-    st.warning(f"⚠️ HTML file `{filename}` does not exist.")
-
-
-def display_all_html_from_text(text: str):
-    found = extract_all_html_filenames(text)
-    html_files = set()
-    for root in [MAPS_DIR, PROJECT_ROOT, Path.cwd()]:
-        if root.exists():
-            html_files.update([p.name for p in root.glob("*.html")])
-
-    for name in found:
-        if name in html_files:
-            st.write(f"### Displaying `{name}`:")
-            display_html_file(name)
-        else:
-            st.warning(f"⚠️ HTML file `{name}` not found.")
-
-
-def translate_query_pipeline(user_text):
-    en, detected_lang = detect_and_translate_to_english(user_text)
-    return en, detected_lang
-
-
-def translate_to_original_query_pipeline(user_text, detected_lang):
-    return translate_from_english(user_text, detected_lang)
-
-
-# ---------------------------------------------------
 # DISPLAY CHAT HISTORY
 # ---------------------------------------------------
 for msg in st.session_state.messages:
@@ -141,58 +73,58 @@ if user_input:
     # Process
     with st.spinner("⏳ Processing..."):
         try:
-            english_query, detected_lang = translate_query_pipeline(user_input)
+            english_query, detected_lang = detect_and_translate_to_english(user_input)
             st.session_state.last_lang = detected_lang
 
             agent_output = invoke_agent(agent_executor, english_query)
 
-            if isinstance(agent_output, dict):
-                result = dict(agent_output)
-                if "message" in result and isinstance(result["message"], str):
-                    result["message"] = translate_to_original_query_pipeline(result["message"], detected_lang)
-            else:
-                result = translate_to_original_query_pipeline(str(agent_output), detected_lang)
+            result = coerce_tool_response(agent_output)
+            if isinstance(result.get("message"), str):
+                result["message"] = translate_from_english(result["message"], detected_lang)
 
-            # Store assistant message placeholder
-            st.session_state.messages.append({"role": "assistant", "content": str(result)})
+            st.session_state.messages.append({"role": "assistant", "content": str(result.get("message", ""))})
 
         except Exception as e:
+            # Ensure errors are visible in server logs AND do not crash the UI.
+            traceback.print_exc()
             error_msg = f"❌ Error: {str(e)}"
+            result = make_tool_response(
+                tool_name="ui",
+                message=error_msg,
+                artifacts={"maps": [], "thumbnails": [], "urls": []},
+                error=True,
+            )
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
-            result = error_msg
 
 
     # ---------------------------------------------------
     # DISPLAY ASSISTANT RESPONSE
     # ---------------------------------------------------
     with st.chat_message("assistant"):
-        # Handle structured results
-        if isinstance(result, dict) and result.get("error"):
-            error_msg = result.get("message") or result.get("error") or str(result)
-            st.error(error_msg)
+        # Defensive: coerce any unexpected shapes into a ToolResponse.
+        if not isinstance(result, dict):
+            result = make_tool_response(
+                tool_name="ui",
+                message=str(result),
+                artifacts={"maps": [], "thumbnails": [], "urls": []},
+                error=True,
+            )
 
-        elif isinstance(result, dict) and "images" in result:
-            labels = get_labels(st.session_state.last_lang)
-            st.write(f"### {labels['results_for']} `{result.get('collection', 'unknown')}`:")
-            for img in result["images"]:
-                cloud = img.get("cloud_cover", "N/A")
-                caption = f"🗓️ {labels['date']}: {img['date']} | ☁️ {labels['cloud']}: {cloud}"
-                st.image(img.get("thumbnail") or img.get("url") or "", caption=caption, width=300)
-
-        elif isinstance(result, dict) and "folium_map" in result:
-            st.write("### Generated Map:")
-            fmap = result["folium_map"]
-            components.html(fmap.get_root().render(), height=600)
-
-        elif isinstance(result, str) and (result.endswith(".html") or ".html" in result):
-            st.write(result)
-            display_all_html_from_text(result)
-
-        elif isinstance(result, dict) and "message" in result:
-            st.write(result["message"])
-            map_file = result.get("map_file") or result.get("map")
-            if isinstance(map_file, str) and map_file.endswith(".html"):
-                display_all_html_from_text(map_file)
-
+        if result.get("error"):
+            st.error(result.get("message") or "An error occurred.")
         else:
-            st.write(result)
+            st.write(result.get("message") or "")
+
+        artifacts = result.get("artifacts") or {}
+        maps = artifacts.get("maps") or []
+        thumbnails = artifacts.get("thumbnails") or []
+
+        for name in maps:
+            if isinstance(name, str) and name.endswith(".html"):
+                display_html_file(name, maps_dir=MAPS_DIR, project_root=PROJECT_ROOT)
+
+        if thumbnails:
+            st.write("### Thumbnails")
+            for url in thumbnails:
+                if isinstance(url, str) and url:
+                    st.image(url, width=300)

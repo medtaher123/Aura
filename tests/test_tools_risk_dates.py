@@ -1,5 +1,5 @@
-# tests/test_tools_risk_dates.py
-from tools_risk import extract_dates_from_text
+# tests/test_tools_dates.py
+from tools import extract_dates_from_text
 
 def test_year_only():
     s,e = extract_dates_from_text("2025")

@@ -8,6 +8,8 @@ from .tools_geocode import get_city_bbox
 import json
 from ast import literal_eval
 
+from .contracts import make_tool_response
+
 
 STAC_API_URL = "https://earth-search.aws.element84.com/v1"
 REQUEST_TIMEOUT = 10
@@ -148,7 +150,6 @@ def extract_bbox_and_dates(user_input: str) -> dict:
             if key in user_collection.lower():
                 collection = val
                 break
-            
                 
         if not city_name:
             print("Debug: No location found in input")
@@ -156,15 +157,19 @@ def extract_bbox_and_dates(user_input: str) -> dict:
 
         # --- Use existing get_city_bbox for bounding box ---
         bbox_result = get_city_bbox(city_name)
-        if not bbox_result or len(bbox_result) != 5:
+        if not bbox_result:
             print(f"Debug: Invalid bbox_result: {bbox_result}")
             return {"error": f"❌ Location '{city_name}' not found or bbox unavailable."}
 
-        min_lon, min_lat, max_lon, max_lat, city_name_final = bbox_result
-        if None in (min_lon, min_lat, max_lon, max_lat):
-            print(f"Debug: Incomplete bbox data: {bbox_result}")
+        bbox, lat, lon, city_name_final = bbox_result
+        if not bbox:
+            print(f"Debug: No bbox returned for city: {city_name}")
             return {"error": f"❌ Location '{city_name}' not found or bbox unavailable."}
 
+        min_lat = float(bbox[0])
+        max_lat = float(bbox[1])
+        min_lon = float(bbox[2])
+        max_lon = float(bbox[3])
         bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
 
         return {
@@ -192,11 +197,27 @@ def query_stac_catalog(query_text: str) -> dict:
         data = extract_bbox_and_dates(query_text)
         print(f"Debug: extract_bbox_and_dates returned: {data}")
         if not data or data.get("error"):
-            return {"error": data.get("error", "❌ Failed to extract search parameters.")}
+            return make_tool_response(
+                tool_name="query_stac_catalog",
+                message=str(data.get("error", "Failed to extract search parameters.")),
+                city=data.get("city") if isinstance(data, dict) else None,
+                start_date=data.get("start_date") if isinstance(data, dict) else None,
+                end_date=data.get("end_date") if isinstance(data, dict) else None,
+                data={"raw": data} if isinstance(data, dict) else None,
+                error=True,
+            )
         bbox_str, start_date, end_date, collection, city_name= data.get("bbox"), data.get("start_date"), data.get("end_date"), data.get("collection"), data.get("city")
         print(f"Debug: extracted bbox={bbox_str}, start_date={start_date}, end_date={end_date}, collection={collection}, city_name={city_name}")
         if not bbox_str or not start_date or not end_date or not collection:
-            return {"error": "❌ Missing required search parameters (bbox/dates/collection)."}
+            return make_tool_response(
+                tool_name="query_stac_catalog",
+                message="Missing required search parameters (bbox/dates/collection).",
+                city=city_name,
+                start_date=start_date,
+                end_date=end_date,
+                data={"bbox": bbox_str, "collection": collection},
+                error=True,
+            )
         bbox = [float(x) for x in bbox_str.split(",")]
         date_format = "%Y-%m-%d"
         start = datetime.strptime(start_date, date_format)
@@ -223,14 +244,38 @@ def query_stac_catalog(query_text: str) -> dict:
                 )
                 response.raise_for_status()
             except Timeout:
-                return {"error": "Timeout while calling STAC API."}
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message="Timeout while calling STAC API.",
+                    city=city_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data={"collection": collection, "bbox": bbox_str},
+                    error=True,
+                )
             except RequestException as exc:
-                return {"error": f"STAC network error: {exc}"}
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message=f"STAC network error: {exc}",
+                    city=city_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data={"collection": collection, "bbox": bbox_str},
+                    error=True,
+                )
 
             try:
                 items = response.json().get("features", [])
             except ValueError as exc:
-                return {"error": f"Invalid STAC response: {exc}"}
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message=f"Invalid STAC response: {exc}",
+                    city=city_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data={"collection": collection, "bbox": bbox_str},
+                    error=True,
+                )
 
             if items:
                 item = items[0]
@@ -244,18 +289,22 @@ def query_stac_catalog(query_text: str) -> dict:
             current += timedelta(days=1)
 
         if not all_images:
-            result={
-                "message": (
+            return make_tool_response(
+                tool_name="query_stac_catalog",
+                message=(
                     f"No images found for {collection} between {start_date} and {end_date} "
                     f"for bbox {bbox_str}."
                 ),
-                "collection": collection,
-                "bbox": bbox_str,
-                "start_date": start_date,
-                "end_date": end_date,
-                "images": [],
-            }
-            return f'Final answer: {result["message"]}'  
+                start_date=start_date,
+                end_date=end_date,
+                city=city_name,
+                data={
+                    "collection": collection,
+                    "bbox": bbox_str,
+                    "images": [],
+                },
+                error=False,
+            )
 
         urls = [img["thumbnail"] for img in all_images if img.get("thumbnail")]
         details = "\n".join(
@@ -265,18 +314,27 @@ def query_stac_catalog(query_text: str) -> dict:
             ]
         )
 
-        return {
-            "message": (
+        return make_tool_response(
+            tool_name="query_stac_catalog",
+            message=(
                 f"Found {len(all_images)} images for {collection} between {start_date} and {end_date} "
-                f"for bbox {bbox_str}.\n{details}\nThumbnails: {', '.join(urls)}"
+                f"for bbox {bbox_str}.\n{details}"
             ),
-            "collection": collection,
-            "bbox": bbox_str,
-            "start_date": start_date,
-            "end_date": end_date,
-            "images": all_images,
-            "thumbnails": urls,
-        }
+            artifacts={"maps": [], "thumbnails": urls, "urls": urls},
+            start_date=start_date,
+            end_date=end_date,
+            city=city_name,
+            data={
+                "collection": collection,
+                "bbox": bbox_str,
+                "images": all_images,
+            },
+            error=False,
+        )
 
     except Exception as exc:
-        return {"error": f"Unexpected STAC error: {exc}"}
+        return make_tool_response(
+            tool_name="query_stac_catalog",
+            message=f"Unexpected STAC error: {exc}",
+            error=True,
+        )

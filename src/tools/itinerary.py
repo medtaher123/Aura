@@ -4,6 +4,8 @@ import folium
 from pathlib import Path
 from langchain.tools import tool
 
+from .contracts import make_tool_response
+
 # Geocoding via Nominatim (OpenStreetMap)
 def geocode_place(place_name):
     url = "https://nominatim.openstreetmap.org/search"
@@ -136,7 +138,7 @@ def create_map(lat1, lon1, lat2, lon2, route_data, start, end):
 
 
 @tool("get_route_info", return_direct=True)
-def get_route_info(query: str) -> str:
+def get_route_info(query: str) -> dict:
     """
     Compute a driving route between two places.
     Input format: "Start -> End"
@@ -144,22 +146,41 @@ def get_route_info(query: str) -> str:
     Output: a structured dict with route summary (distance, duration, steps) and a saved HTML map.
     """
     if "->" not in query:
-        return "Final Answer: Expected format: 'Start -> End'."
+        return make_tool_response(
+            tool_name="get_route_info",
+            message="Expected format: 'Start -> End'.",
+            error=True,
+        )
 
     start, end = [x.strip() for x in query.split("->")]
 
     lat1, lon1 = geocode_place(start)
     lat2, lon2 = geocode_place(end)
     if not lat1 or not lon1 or not lat2 or not lon2:
-        return f"Final Answer: Location not found: {start} or {end}"
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"Location not found: {start} or {end}.",
+            data={"start": start, "end": end},
+            error=True,
+        )
 
     try:
         data = get_route((lat1, lon1), (lat2, lon2))
     except requests.RequestException as e:
-        return f"Final Answer: Network error: {e}"
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"Network error: {e}",
+            data={"start": start, "end": end},
+            error=True,
+        )
 
     if not data or data.get("code") != "Ok" or not data.get("routes"):
-        return "Final Answer: Unable to compute route."
+        return make_tool_response(
+            tool_name="get_route_info",
+            message="Unable to compute route.",
+            data={"start": start, "end": end},
+            error=True,
+        )
 
     route = data["routes"][0]
     total_dist = human_distance(route["distance"])
@@ -175,8 +196,23 @@ def get_route_info(query: str) -> str:
     file_name = create_map(lat1, lon1, lat2, lon2, data, start, end)
 
     steps_block = "\n".join(steps_txt)
-    return (
-        "Final Answer: "
-        f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}. "
-        f"Map saved to {file_name}.\n{steps_block}"
+    message = (
+        f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}.\n"
+        f"Map: {file_name}.\n{steps_block}"
+    )
+
+    return make_tool_response(
+        tool_name="get_route_info",
+        message=message,
+        artifacts={"maps": [file_name], "thumbnails": [], "urls": []},
+        data={
+            "start": start,
+            "end": end,
+            "start_coordinates": {"lat": lat1, "lon": lon1},
+            "end_coordinates": {"lat": lat2, "lon": lon2},
+            "distance_human": total_dist,
+            "duration_human": total_dur,
+            "steps": steps_txt,
+        },
+        error=False,
     )

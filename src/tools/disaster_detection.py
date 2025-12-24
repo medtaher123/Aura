@@ -1,4 +1,4 @@
-# flood_detection.py
+# disaster_detection.py
 import requests
 import pycountry 
 from datetime import datetime
@@ -7,7 +7,9 @@ import re
 from geopy.geocoders import Nominatim
 import time
 from langchain.tools import tool
-from langchain_ollama import OllamaLLM
+from src.services.params_extraction import extract_params_from_text
+
+from .contracts import make_tool_response
 from pathlib import Path
 
 VALID_DISASTER_TYPES = [
@@ -112,108 +114,6 @@ def format_event_human_readable(event):
         "--------------------------------------------------"
     )
 
-def extract_params_from_text(text: str):
-    """
-    Extracts start_date, end_date, country, and disaster_type using a single LLM call.
-    Returns: (start_date, end_date, country, disaster_type)
-    """
-    if not text:
-        return None, None, None, None
-    # --- Build LLM extraction prompt ---
-    system_prompt = """
-    You are an expert system that extracts structured data from natural language.
-    Your job is to identify:
-    - start_date (YYYY-MM-DD or null)
-    - end_date (YYYY-MM-DD or null)
-    - country (from city or country names mentioned)
-    - disaster_type (flood, storm, earthquake, extreme temperature, drought, industrial accident, transport)
-    
-    RULES:
-    - If only one date is mentioned, set start_date = end_date.
-    - If a year is mentioned alone (e.g. "in 2022"), return full year range.
-    - If a month is mentioned ("in July 2023"), return first and last day.
-    - If a season is mentioned (winter, summer, etc.), use:
-        * winter: Dec 1 – Feb 28
-        * spring: Mar 1 – May 31
-        * summer: Jun 1 – Aug 31
-        * autumn/fall: Sep 1 – Nov 30
-    - ALWAYS answer with pure JSON. NO explanations.
-    """
-
-    few_shot = """
-    Example 1:
-    User input: "industrial accident in Marseille 2025-01"
-    Response:
-    {
-      "start_date": "2025-01-01",
-      "end_date": "2025-01-31",
-      "country": "France",
-    "disaster_type": "industrial accident"
-    }
-
-    Example 2:
-    User input: "Tunis summer extreme temperature"
-    Response:
-    {
-      "start_date": "2024-06-01",
-      "end_date": "2024-08-31",
-      "country": "Tunisia",
-      "disaster_type": "extreme temperature"
-    }
-
-    Example 3:
-    User input: "flood Rome December 1st to December 10th 2023"
-    Response:
-    {
-      "start_date": "2023-12-01",
-      "end_date": "2023-12-10",
-      "country": "Italy",
-      "disaster_type": "flood"
-    }
-
-    Example 4:
-    User input: "Morocco"
-    Response:
-    {
-      "start_date": null,
-      "end_date": null,
-      "location": "Morocco",
-      "disaster_type": null
-    }
-    """
-
-    # --- Invoke LLM ---
-    llm = OllamaLLM(model="mistral", temperature=0.1, system_prompt=system_prompt)
-    prompt = f"{few_shot}\nUser input: \"{text}\"\nReturn JSON:"
-    llm_response = llm.invoke(prompt)
-
-    import json
-    import re
-    
-    # Try to extract JSON from the response
-    try:
-        data = json.loads(llm_response)
-    except Exception as e:
-        # Try to find JSON in the response
-        json_match = re.search(r'\{[^{}]*\}', llm_response, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group())
-            except:
-                print(f"Error parsing LLM response: {e}")
-                return None, None, None, None
-        else:
-            print(f"Error parsing LLM response: {e}")
-            return None, None, None, None
-
-    # --- Extract fields ---
-    start_date = data.get("start_date")
-    end_date = data.get("end_date")
-    country = data.get("country")
-    disaster_type = data.get("disaster_type")
-
-    return start_date, end_date, country, disaster_type
-
 def generate_disaster_map(events, disaster_type="flood", country="Unknown", start_date=None, map_filename=None):
     # Always force the map filename to 'Map.html'
     map_filename = MAPS_DIR / "Map.html"
@@ -284,7 +184,7 @@ def query_disaster_events_tool(params: str) -> dict:
     params : user_query "flood events in France in 2020", "industrial accidents in Germany in septembre 2019".
     """
 
-    start_date, end_date, country_name,disaster_type = extract_params_from_text(params)
+    start_date, end_date, location, country_name, radius_km, disaster_type = extract_params_from_text(params)
     print(f"Extracted params - start_date: {start_date}, end_date: {end_date}, country: {country_name}, disaster_type: {disaster_type}")
     if not disaster_type:
         disaster_type = "flood"  # default
@@ -301,7 +201,15 @@ def query_disaster_events_tool(params: str) -> dict:
     # -----------------------
     iso3 = get_iso3_from_country_name(country_name)
     if not iso3:
-        return {"message": f"Country '{country_name}' not recognized.", "error": True}
+        return make_tool_response(
+            tool_name="query_disaster_events_tool",
+            message=f"Country '{country_name}' not recognized.",
+            country=country_name,
+            start_date=start_date,
+            end_date=end_date,
+            data={"disaster_type": disaster_type},
+            error=True,
+        )
 
     # -----------------------
     # Retrieve events
@@ -309,11 +217,27 @@ def query_disaster_events_tool(params: str) -> dict:
     events = get_emdat_by_iso3(iso3)
     if not events:
         human_text = f"No data found for country '{country_name}' (code {iso3})."
-        return f"Final Answer: {human_text}"
+        return make_tool_response(
+            tool_name="query_disaster_events_tool",
+            message=human_text,
+            country=country_name,
+            start_date=start_date,
+            end_date=end_date,
+            data={"disaster_type": disaster_type, "iso3": iso3, "events": []},
+            error=False,
+        )
     filtered = filter_disasters_between_dates(events, start_date, end_date, disaster_type)
     if not filtered:
         human_text = f"No '{disaster_type}' events found in {country_name} between {start_date} and {end_date}."
-        return f"Final Answer: {human_text}"
+        return make_tool_response(
+            tool_name="query_disaster_events_tool",
+            message=human_text,
+            country=country_name,
+            start_date=start_date,
+            end_date=end_date,
+            data={"disaster_type": disaster_type, "iso3": iso3, "events": []},
+            error=False,
+        )
 
     # Generating the map
 
@@ -342,4 +266,22 @@ def query_disaster_events_tool(params: str) -> dict:
     human_text = f"{len(events_list)} '{disaster_type}' event(s) found in {country_name} between {start_date} and {end_date}."
     if map_file:
         human_text += f" Map generated: {map_file}"
-    return f"Final Answer: {human_text}"
+
+    artifacts = {"maps": [], "thumbnails": [], "urls": []}
+    if isinstance(map_file, str) and map_file.endswith(".html"):
+        artifacts["maps"].append(map_file)
+
+    return make_tool_response(
+        tool_name="query_disaster_events_tool",
+        message=human_text,
+        artifacts=artifacts,
+        country=country_name,
+        start_date=start_date,
+        end_date=end_date,
+        data={
+            "disaster_type": disaster_type,
+            "iso3": iso3,
+            "events": events_list,
+        },
+        error=False,
+    )

@@ -1,5 +1,5 @@
 import pytest
-from weather import weather_tool
+from src.tools.weather import weather_tool
 
 def test_weather_tool_ok(mocker):
     # Mock Nominatim
@@ -23,7 +23,7 @@ def test_weather_tool_ok(mocker):
             return m_geo
         return m_w
 
-    mocker.patch("weather.requests.get", side_effect=fake_get)
+    mocker.patch("src.tools.weather.requests.get", side_effect=fake_get)
 
     # 🩵 Appel correct de la fonction Python
     if hasattr(weather_tool, "func"):
@@ -35,4 +35,4 @@ def test_weather_tool_ok(mocker):
     assert isinstance(out, dict)
     msg = out.get("message", "")
     assert "Paris" in msg
-    assert "Météo actuelle" in msg or "weather" in msg.lower()
+    assert "weather" in msg.lower() or "forecast" in msg.lower() or "current" in msg.lower()

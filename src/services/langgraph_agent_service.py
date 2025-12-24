@@ -9,7 +9,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
 from ..core.prompts import get_router_prompt
-from ..tools.tools_risk import get_all_tools
+from ..tools.tools import get_all_tools
+from ..tools.contracts import make_tool_response
 
 
 def _coerce_system_prompt(prompt_template: Any) -> str:
@@ -88,6 +89,16 @@ def _pick_tool_call(plan_text: str) -> Tuple[Optional[str], Any]:
 
 
 def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
+    # 0-arg tools (e.g. get_date/get_time)
+    args_schema = getattr(tool, "args_schema", None)
+    if args_schema is not None:
+        try:
+            fields = list(args_schema.model_fields.keys())
+            if len(fields) == 0:
+                return tool.invoke({})
+        except Exception:
+            pass
+
     # Try plain input first (works for many single-arg tools)
     try:
         return tool.invoke(tool_input)
@@ -95,7 +106,6 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
         pass
 
     # Try wrapping into the tool's single expected argument
-    args_schema = getattr(tool, "args_schema", None)
     if args_schema is not None:
         try:
             fields = list(args_schema.model_fields.keys())
@@ -157,10 +167,19 @@ def create_langgraph_agent_executor() -> LangGraphAgentExecutor:
 
         tool = tool_map.get(tool_name)
         if tool is None:
-            return {"output": f"ERROR: Tool '{tool_name}' not found. Plan was: {plan}"}
+            return {
+                "output": make_tool_response(
+                    tool_name="langgraph_agent",
+                    message=f"Tool '{tool_name}' not found.",
+                    data={"plan": plan, "requested_tool": tool_name},
+                    error=True,
+                )
+            }
 
-        # Force action_input to be a string for your current tools
-        if not isinstance(tool_input, str) or not tool_input.strip():
+        # If the planner didn't provide an input, fall back to the user text.
+        if tool_input is None:
+            tool_input = user_text
+        if isinstance(tool_input, str) and not tool_input.strip():
             tool_input = user_text
         tool_result = _invoke_tool_safely(tool, tool_input)
         return {"output": tool_result}
