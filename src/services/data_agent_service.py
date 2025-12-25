@@ -172,7 +172,8 @@ def _coerce_tool_response(obj: Any, *, tool_name: str) -> ToolResponse:
 
 
 def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_message: Optional[str]) -> ToolResponse:
-    merged_maps: list[str] = []
+    merged_maps_str: list[str] = []
+    merged_maps_other: list[Any] = []
     merged_thumbs: list[str] = []
     merged_urls: list[str] = []
 
@@ -181,7 +182,11 @@ def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_
 
     for r in steps:
         artifacts = r.get("artifacts") or {}
-        merged_maps.extend([x for x in (artifacts.get("maps") or []) if isinstance(x, str)])
+        for x in (artifacts.get("maps") or []):
+            if isinstance(x, str):
+                merged_maps_str.append(x)
+            elif isinstance(x, dict):
+                merged_maps_other.append(x)
         merged_thumbs.extend([x for x in (artifacts.get("thumbnails") or []) if isinstance(x, str)])
         merged_urls.extend([x for x in (artifacts.get("urls") or []) if isinstance(x, str)])
 
@@ -201,9 +206,12 @@ def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_
                 out.append(x)
         return out
 
-    merged_maps = dedup(merged_maps)
+    merged_maps_str = dedup(merged_maps_str)
     merged_thumbs = dedup(merged_thumbs)
     merged_urls = dedup(merged_urls)
+
+    # Keep legacy string maps first (stable ordering), then structured map specs.
+    merged_maps: list[Any] = [*merged_maps_str, *merged_maps_other]
 
     if isinstance(final_message, str) and final_message.strip():
         message = final_message.strip()
@@ -242,7 +250,8 @@ class MultiStepDataAgentExecutor:
 
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         user_text = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
-        result = self.graph.invoke({"input": user_text})
+        context = inputs.get("context") if isinstance(inputs, dict) else None
+        result = self.graph.invoke({"input": user_text, "context": context})
         return {"output": result.get("output", result)}
 
 
@@ -263,6 +272,7 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
         next_state = dict(state)
 
         user_text = next_state.get("input", "") or ""
+        context = next_state.get("context") or ""
         steps: list[ToolResponse] = next_state.get("steps", []) or []
         step_count = int(next_state.get("step_count", 0))
 
@@ -293,11 +303,17 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
 
         # If we can, constrain the planner to only pick remaining required tools.
         remaining_hint = ", ".join(remaining) if remaining else "(none)"
+
+        context_block = ""
+        if isinstance(context, str) and context.strip():
+            context_block = f"Conversation context:\n{context.strip()}\n\n"
+
         msg = llm.invoke(
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
                     content=(
+                        f"{context_block}"
                         f"User request: {user_text}\n"
                         f"Required tools (in order): {', '.join(required_tools) if required_tools else '(none)'}\n"
                         f"Remaining required tools: {remaining_hint}\n\n"

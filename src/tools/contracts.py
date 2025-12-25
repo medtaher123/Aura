@@ -35,7 +35,8 @@ class GeoServerRiskQuery(BaseModel):
 
 
 class ToolArtifacts(TypedDict):
-        maps: List[str]
+        # `maps` can contain either HTML filenames (legacy) or structured map specs (e.g. Pydeck).
+        maps: List[Any]
         thumbnails: List[str]
         urls: List[str]
 

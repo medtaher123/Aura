@@ -5,7 +5,6 @@ import requests
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
-import folium
 from langchain.tools import tool
 
 from .contracts import make_tool_response
@@ -174,6 +173,8 @@ def estimate_surface_water_ingress(location_input):
         location_info = reverse_geocode(lat, lon)
     elif isinstance(location_input, (tuple, list)) and len(location_input) == 2:
         lat, lon = location_input
+        bbox = None
+        polygon = None
         # call reverse geocode for coordinates
         location_info = reverse_geocode(lat, lon)
     else:
@@ -216,39 +217,45 @@ def estimate_surface_water_ingress(location_input):
         plt.imsave(MAPS_DIR / "map_flowacc.png", acc, cmap="Blues")
         plt.imsave(MAPS_DIR / "Map_risk.png", risk_mask.astype(float), cmap="Reds")
 
-        # Folium map
+        # Build risk points for Pydeck (sampled to keep payload reasonable)
         risk_coords = np.argwhere(risk_mask)
-        folium_map = folium.Map(location=[lat, lon], zoom_start=15)
-        
-        polygon_shape = shape(polygon)  # ton polygone GeoJSON
 
-        risk_coords_filtered = []
-        for y, x in risk_coords:
-            rlon, rlat = rasterio.transform.xy(transform, y, x)
-            if polygon_shape.contains(Point(rlon, rlat)):
-                risk_coords_filtered.append((y, x))
-                
-        for y, x in risk_coords_filtered:
+        polygon_shape = None
+        if polygon:
             try:
-                rlon, rlat = rasterio.transform.xy(transform, y, x)
-                folium.CircleMarker(location=[rlat, rlon], radius=0.5, color='red', fill=True, fill_opacity=0.5).add_to(folium_map)
+                polygon_shape = shape(polygon)
+            except Exception:
+                polygon_shape = None
+
+        risk_points = []
+        for y, x in risk_coords:
+            try:
+                rlon, rlat = rasterio.transform.xy(transform, int(y), int(x))
+                if polygon_shape is not None and not polygon_shape.contains(Point(rlon, rlat)):
+                    continue
+                risk_points.append({"lat": float(rlat), "lon": float(rlon)})
             except Exception:
                 continue
-        map_html_path = MAPS_DIR / "Map_risk_folium.html"
-        folium_map.save(map_html_path)
+
+        max_points = 2500
+        if len(risk_points) > max_points:
+            rng = np.random.default_rng(0)
+            idx = rng.choice(len(risk_points), size=max_points, replace=False)
+            risk_points = [risk_points[i] for i in idx]
 
         return {
             "Ingress_paths_estimate": "Water follows the D8 flow paths towards low points.",
             "Mitigation_actions": actions,
             **stats,
             "Maps": {
-                "Risk_Folium": map_html_path.name
+                "Risk_points": risk_points
             },
             "Explanation": (
                 "How to read the maps:\n"
                 "Risk map: red areas indicate likely accumulation."
             ),
-            "Location": location_info
+            "Location": location_info,
+            "Coordinates": {"lat": float(lat), "lon": float(lon)},
         }
     finally:
         if os.path.exists(dem_file):
@@ -271,7 +278,7 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
      - Download DEM from OpenTopography.
      - Compute slope and D8 flow accumulation.
      - Identify risk areas (low elevation, low slope, high accumulation).
-     - Generate Matplotlib & Folium maps.
+        - Generate Matplotlib maps and a Pydeck-ready set of risk points.
      - Apply mitigation rules to propose actions.
     """
     try:
@@ -307,7 +314,10 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         if maps:
             message_parts.append("\n### 🗺 Generated Maps")
             for key, path in maps.items():
-                message_parts.append(f"- **{key}**: {path}")
+                if key == "Risk_points" and isinstance(path, list):
+                    message_parts.append(f"- **{key}**: {len(path)} point(s)")
+                else:
+                    message_parts.append(f"- **{key}**: {path}")
 
         if explanation:
             message_parts.append("\n### ℹ️ How to Interpret the Maps")
@@ -318,20 +328,36 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
 
         artifacts = {"maps": [], "thumbnails": [], "urls": []}
         if isinstance(maps, dict):
-            for _, path in maps.items():
-                if isinstance(path, str) and path.endswith(".html"):
-                    artifacts["maps"].append(path)
+            risk_points = maps.get("Risk_points")
+            coords = result.get("Coordinates")
+            if isinstance(risk_points, list) and isinstance(coords, dict):
+                artifacts["maps"].append(
+                    {
+                        "title": "Surface water ingress risk",
+                        "points": risk_points,
+                        "view_state": {
+                            "latitude": float(coords.get("lat", 0.0) or 0.0),
+                            "longitude": float(coords.get("lon", 0.0) or 0.0),
+                            "zoom": 14,
+                        },
+                        "tooltip": {"text": ""},
+                        "fill_color": [255, 0, 0, 120],
+                        "radius": 5,
+                        "radius_units": "pixels",
+                        "radius_min_pixels": 2,
+                        "radius_max_pixels": 7,
+                    }
+                )
 
-        location_info = result.get("Location") or {}
         coords = None
         try:
-            if isinstance(location_info, dict):
-                lat = location_info.get("latitude")
-                lon = location_info.get("longitude")
-                if lat is not None and lon is not None:
-                    coords = {"lat": float(lat), "lon": float(lon)}
+            c = result.get("Coordinates")
+            if isinstance(c, dict) and c.get("lat") is not None and c.get("lon") is not None:
+                coords = {"lat": float(c["lat"]), "lon": float(c["lon"])}
         except Exception:
             coords = None
+
+        location_info = result.get("Location") or {}
 
         country = None
         city = None

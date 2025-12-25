@@ -4,7 +4,7 @@ import requests
 from langchain_core.tools import tool
 from requests.exceptions import RequestException, Timeout
 from langchain_ollama import OllamaLLM
-from .tools_geocode import get_city_bbox
+from src.services.bbox_service import get_city_bbox
 import json
 from ast import literal_eval
 

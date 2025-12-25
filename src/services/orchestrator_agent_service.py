@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 
 from src.core.prompts import get_orchestrator_prompt
+from src.core.memory import format_chat_history
 from src.tools.contracts import ToolResponse, make_tool_response
 from src.services.data_agent_service import create_data_agent_executor
 from src.services.analysis_agent_service import create_analysis_agent_executor
@@ -34,13 +35,23 @@ class OrchestratorExecutor:
 
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         user_text = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
+        chat_history = inputs.get("chat_history") if isinstance(inputs, dict) else None
+        history_text = format_chat_history(chat_history, max_messages=12, max_chars=6000)
+
+        augmented_user_text = user_text
+        if history_text:
+            augmented_user_text = (
+                "Conversation so far (most recent last):\n"
+                f"{history_text}\n\n"
+                f"User request: {user_text}"
+            )
 
         # 1) Plan
         plan_prompt = get_orchestrator_prompt()
         plan_msg = self.planner_llm.invoke(
             [
                 SystemMessage(content=plan_prompt),
-                HumanMessage(content=user_text),
+                HumanMessage(content=augmented_user_text),
             ]
         )
         plan = _extract_json(str(plan_msg.content)) or {}      
@@ -56,7 +67,7 @@ class OrchestratorExecutor:
         # 2) DataAgent
         data_response: ToolResponse
         if needs_data:
-            raw = self.data_agent.invoke({"input": data_query})
+            raw = self.data_agent.invoke({"input": data_query, "context": history_text})
             data_response = raw.get("output", raw) if isinstance(raw, dict) else make_tool_response(
                 tool_name="data_agent",
                 message=str(raw),
@@ -74,10 +85,11 @@ class OrchestratorExecutor:
         if not needs_data and not needs_analysis:
             # You can keep this as a direct LLM answer (or route to general_question_tool).
             answer_llm = ChatOllama(model="mistral", temperature=0.1)
+            direct_user_text = augmented_user_text if history_text else user_text
             msg = answer_llm.invoke(
                 [
                     SystemMessage(content="Answer the user concisely and directly. Do not invent data."),
-                    HumanMessage(content=user_text),
+                    HumanMessage(content=direct_user_text),
                 ]
             )
             return {"output": make_tool_response(tool_name="orchestrator", message=str(msg.content), error=False)}
@@ -85,7 +97,11 @@ class OrchestratorExecutor:
         # 4) AnalysisAgent (optional)
         if needs_analysis:
             analysis_raw = self.analysis_agent.invoke(
-                {"user_question": f"{user_text}\n\nAnalysis goal: {analysis_goal}".strip(), "data_response": data_response}
+                {
+                    "user_question": f"{user_text}\n\nAnalysis goal: {analysis_goal}".strip(),
+                    "data_response": data_response,
+                    "context": history_text,
+                }
             )
             analysis_resp = analysis_raw.get("output", analysis_raw) if isinstance(analysis_raw, dict) else make_tool_response(
                 tool_name="analysis_agent",

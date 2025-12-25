@@ -2,7 +2,8 @@
 import requests
 import pycountry 
 from datetime import datetime
-import folium
+import hashlib
+import colorsys
 import re
 from geopy.geocoders import Nominatim
 import time
@@ -10,7 +11,7 @@ from langchain.tools import tool
 from src.services.params_extraction import extract_params_from_text
 
 from .contracts import make_tool_response
-from pathlib import Path
+from typing import Optional
 
 VALID_DISASTER_TYPES = [
     "flood", "storm", "earthquake",
@@ -18,8 +19,7 @@ VALID_DISASTER_TYPES = [
     "industrial accident", "transport"
 ]
 
-MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
-MAPS_DIR.mkdir(parents=True, exist_ok=True)
+_MAX_GEOCODE_ATTEMPTS = 10
 
 def get_iso3_from_country_name(name):
     try:
@@ -90,101 +90,83 @@ def filter_disasters_between_dates(events, start_date, end_date, disaster_type="
             filtered.append(event)
     return filtered
 
-def format_event_human_readable(event):
-    start_date = f"{event.get('startday', '?')}/{event.get('startmonth', '?')}/{event.get('startyear', '?')}"
-    end_date = f"{event.get('endday', '?')}/{event.get('endmonth', '?')}/{event.get('endyear', '?')}"
 
-    disaster_emoji = {
-        "flood": "🌊",
-        "storm": "🌪️",
-        "earthquake": "🏔️",
-        "extreme temperature": "🥵",
-        "drought": "🌵",
-        "industrial accident": "🏭",
-        "transport": "✈️"
-    }.get(event.get("disastertype", "").lower(), "❗")
+def _safe_float(x) -> Optional[float]:
+    try:
+        if x is None:
+            return None
+        return float(x)
+    except Exception:
+        return None
 
-    return (
-        f"{disaster_emoji} **{event.get('disastertype', event.get('subgroupname', '')).capitalize()} in {event.get('country', '?')} ({event.get('location', 'Unknown location')})**\n"
-        f"📍 Location: {event.get('location', 'Unknown')}\n"
-        f"📅 From {start_date} to {end_date}\n"
-        f"☠️ Deaths: {event.get('totaldeaths', 'Not specified')}\n"
-        f"👥 People affected: {event.get('totalaffected', 'Not specified')}\n"
-        f"🧭 Origin: {event.get('origin', 'Not specified')}\n"
-        "--------------------------------------------------"
-    )
 
-def generate_disaster_map(events, disaster_type="flood", country="Unknown", start_date=None, map_filename=None):
-    # Always force the map filename to 'Map.html'
-    map_filename = MAPS_DIR / "Map.html"
+def _infer_view_state(points: list[dict]) -> dict:
+    if not points:
+        return {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
+    lats = [p.get("lat") for p in points if isinstance(p.get("lat"), (int, float))]
+    lons = [p.get("lon") for p in points if isinstance(p.get("lon"), (int, float))]
+    if not lats or not lons:
+        return {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
+    return {
+        "latitude": float(sum(lats) / len(lats)),
+        "longitude": float(sum(lons) / len(lons)),
+        "zoom": 3,
+    }
 
-    map_ = folium.Map(location=[45, 10], zoom_start=4)
-    geolocator = Nominatim(user_agent="disaster_mapper")
 
-    for event in events:
-        location_name = event.get("location")
-        country_name = event.get("country", "")
-        lat = event.get("latitude")
-        lon = event.get("longitude")
+def _emoji_for_disaster_type(disaster_type: str) -> str:
+    t = (disaster_type or "").strip().lower()
+    if "flood" in t:
+        return "🌊"
+    if "storm" in t:
+        return "🌪️"
+    if "earthquake" in t:
+        return "🏔️"
+    if "extreme temperature" in t or "temperature" in t:
+        return "🥵"
+    if "drought" in t:
+        return "🌵"
+    if "industrial accident" in t or "accident" in t:
+        return "🏭"
+    if "transport" in t:
+        return "✈️"
+    return "❗"
 
-        start = f"{event.get('startday', '?')}/{event.get('startmonth', '?')}/{event.get('startyear', '?')}"
-        end = f"{event.get('endday', '?')}/{event.get('endmonth', '?')}/{event.get('endyear', '?')}"
-        popup_text = f"{location_name or 'Unknown location'}, {country_name}<br>From {start} to {end}"
 
-        icon_color = {
-            "flood": "blue",
-            "storm": "darkred",
-            "earthquake": "green",
-            "extreme temperature": "orange",
-            "drought": "beige",
-            "industrial accident": "black",
-            "transport": "purple"
-        }.get(disaster_type, "gray")
-
-        if lat and lon:
-            try:
-                folium.Marker(
-                    location=[float(lat), float(lon)],
-                    popup=popup_text,
-                    icon=folium.Icon(color=icon_color, icon='info-sign')
-                ).add_to(map_)
-                continue
-            except:
-                pass
-
-        if location_name:
-            places = [p.strip() for p in re.split(',|;', location_name) if p.strip()]
-            for place in places:
-                try:
-                    loc = geolocator.geocode(f"{place}, {country_name}", timeout=10)
-                    if loc:
-                        folium.Marker(
-                            location=[loc.latitude, loc.longitude],
-                            popup=popup_text,
-                            icon=folium.Icon(color=icon_color, icon='info-sign')
-                        ).add_to(map_)
-                        time.sleep(1)
-                        break
-                except Exception as e:
-                    print(f"Geocoding error for {place}: {e}")
-                    continue
-
-    map_.save(map_filename)
-    print(f"Map generated: {map_filename} (open it in a browser)")
-    return map_filename.name
+def _color_for_disaster_type(disaster_type: str) -> list[int]:
+    """Deterministic per-type color.
+    """
+    t = (disaster_type or "").strip().lower()
+    if t=="flood":
+        return [0, 0, 255, 200]
+    if t=="storm":
+        return [128, 0, 128, 200]
+    if t=="earthquake":
+        return [139, 69, 19, 200]
+    if t=="extreme temperature" or t=="temperature":
+        return [255, 69, 0, 200]
+    if t=="drought":
+        return [210, 180, 140, 200]
+    if t=="industrial accident" or t=="accident":
+        return [105, 105, 105, 200]
+    if t=="transport":
+        return [0, 128, 0, 200]
+    # Default: hash to color
+    return [100,100,100,200]  
+    
 
 
 @tool(return_direct=True)
-def query_disaster_events_tool(params: str) -> dict:
+def query_disaster_events_tool(input: str) -> dict:
     """
     Search for natural & technological disasters
     (flood, storm, earthquake, extreme temperature, drought,
     industrial accident, transport) in a country and for a given date or date range.
     
-    params : user_query "flood events in France in 2020", "industrial accidents in Germany in septembre 2019".
+    input : user_query "flood events in France in 2020", "industrial accidents in Germany in septembre 2019".
     """
 
-    start_date, end_date, location, country_name, radius_km, disaster_type = extract_params_from_text(params)
+    start_date, end_date, location, country_name, radius_km, disaster_type = extract_params_from_text(input)
     print(f"Extracted params - start_date: {start_date}, end_date: {end_date}, country: {country_name}, disaster_type: {disaster_type}")
     if not disaster_type:
         disaster_type = "flood"  # default
@@ -239,17 +221,56 @@ def query_disaster_events_tool(params: str) -> dict:
             error=False,
         )
 
-    # Generating the map
-
-    map_file = None
-    if disaster_type != "transport":  # no map for transport
-        map_file = generate_disaster_map(filtered, disaster_type, country_name, start_date)
-
     # Construction de la réponse
     # 
     # Build event summaries and raw events list
     events_list = []
+    map_points: list[dict] = []
+    geolocator = Nominatim(user_agent="disaster_mapper")
+    geocode_attempts = 0
+    geocode_success = 0
     for e in filtered:
+        lat = _safe_float(e.get("latitude"))
+        lon = _safe_float(e.get("longitude"))
+
+        if (lat is None or lon is None) and geocode_attempts < _MAX_GEOCODE_ATTEMPTS:
+            location_name = e.get("location")
+            country_e = e.get("country", "")
+            if isinstance(location_name, str) and location_name.strip():
+                places = [p.strip() for p in re.split(',|;', location_name) if p.strip()]
+                for place in places:
+                    geocode_attempts += 1
+                    try:
+                        loc = geolocator.geocode(f"{place}, {country_e}", timeout=10)
+                        if loc:
+                            lat = float(loc.latitude)
+                            lon = float(loc.longitude)
+                            geocode_success += 1
+                            time.sleep(1)
+                            break
+                    except Exception as ex:
+                        print(f"Geocoding error for {place}: {ex}")
+                        continue
+
+        if isinstance(lat, float) and isinstance(lon, float):
+            dtype = e.get('disastertype', e.get('subgroupname', ''))
+            map_points.append(
+                {
+                    "lat": lat,
+                    "lon": lon,
+                    "type": dtype,
+                    "country": e.get('country'),
+                    "location": e.get('location'),
+                    "start_date": f"{e.get('startyear', '?')}-{e.get('startmonth', '?')}-{e.get('startday', '?')}",
+                    "end_date": f"{e.get('endyear', e.get('startyear', '?'))}-{e.get('endmonth', e.get('startmonth', '?'))}-{e.get('endday', e.get('startday', '?'))}",
+                    "total_deaths": e.get('totaldeaths'),
+                    "total_affected": e.get('totalaffected'),
+                    "origin": e.get('origin'),
+                    "emoji": _emoji_for_disaster_type(str(dtype)),
+                    "color": _color_for_disaster_type(str(dtype)),
+                }
+            )
+
         events_list.append({
             "type": e.get('disastertype', e.get('subgroupname', '')),
             "country": e.get('country'),
@@ -264,12 +285,46 @@ def query_disaster_events_tool(params: str) -> dict:
         })
 
     human_text = f"{len(events_list)} '{disaster_type}' event(s) found in {country_name} between {start_date} and {end_date}."
-    if map_file:
-        human_text += f" Map generated: {map_file}"
+    if geocode_attempts:
+        human_text += f" Geocoded {geocode_success}/{geocode_attempts} missing locations."
 
     artifacts = {"maps": [], "thumbnails": [], "urls": []}
-    if isinstance(map_file, str) and map_file.endswith(".html"):
-        artifacts["maps"].append(map_file)
+    if disaster_type != "transport" and map_points:
+        artifacts["maps"].append(
+            {
+                "title": f"{disaster_type.capitalize()} events in {country_name}",
+                "view_state": _infer_view_state(map_points),
+                "tooltip": {
+                    "text": "{emoji} {type}\n{location}, {country}\n{start_date} → {end_date}\nDeaths: {total_deaths}\nAffected: {total_affected}",
+                },
+                "layers": [
+                    {
+                        "type": "TextLayer",
+                        "data": map_points,
+                        "get_position": "[lon, lat]",
+                        "get_text": "emoji",
+                        "get_size": 18,
+                        "get_color": "color",
+                        "get_text_anchor": "middle",
+                        "get_alignment_baseline": "center",
+                        "opacity": 0.95,
+                        "pickable": False,
+                    },
+                    {
+                        "type": "ScatterplotLayer",
+                        "data": map_points,
+                        "get_position": "[lon, lat]",
+                        "get_radius": 5,
+                        "radius_units": "pixels",
+                        "radius_min_pixels": 2,
+                        "radius_max_pixels": 7,
+                        "get_fill_color": "color",
+                        "opacity": 0.6,
+                        "pickable": True,
+                    },
+                ],
+            }
+        )
 
     return make_tool_response(
         tool_name="query_disaster_events_tool",

@@ -32,7 +32,7 @@ src/
 │   ├── general_chat.py              ✅ Moved
 │   ├── water_ingress.py             ✅ Moved
 │   ├── itinerary.py                 ✅ Moved
-│   ├── tools_geocode.py             ✅ Moved
+│   ├── bbox_service.py             ✅ Moved
 │   ├── tools_risk.py                ✅ Moved & refactored
 │   ├── tools_stac.py                ✅ Moved
 │   └── tools_weather.py             ✅ Moved
@@ -69,7 +69,7 @@ src/
 - ✅ `general_chat.py` - General Q&A tool
 - ✅ `water_ingress.py` - Water ingress analysis
 - ✅ `itinerary.py` - Route planning tool
-- ✅ `tools_geocode.py` - Geocoding utilities
+- ✅ `bbox_service.py` - Geocoding utilities
 - ✅ `tools_risk.py` - Risk analysis with agent tools
 - ✅ `tools_stac.py` - STAC catalog queries
 - ✅ `tools_weather.py` - Weather data utilities

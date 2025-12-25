@@ -10,7 +10,7 @@ from .itinerary import get_route_info
 from .weather import weather_tool
 from .general_chat import general_question_tool
 from .risk_geoserver import geoserver_risk_mask_tool
-
+from .hazard_detection import query_hazards_tool
 from .contracts import make_tool_response
 
 
@@ -88,6 +88,7 @@ def get_all_tools():
         detect_fire_tool,
         query_disaster_events_tool,
         estimate_surface_water_ingress_tool,
+        query_hazards_tool,
         geo_info_tool,
         get_route_info,
         weather_tool,

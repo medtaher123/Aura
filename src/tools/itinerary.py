@@ -1,7 +1,5 @@
 #itinerary.py
 import requests
-import folium
-from pathlib import Path
 from langchain.tools import tool
 
 from .contracts import make_tool_response
@@ -112,29 +110,25 @@ def format_step(step):
     return f"{stype.capitalize()} ({dist})."
 
 
-# Map generation
-# Map generation
-MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
-MAPS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def create_map(lat1, lon1, lat2, lon2, route_data, start, end):
-    m = folium.Map(location=[lat1, lon1], zoom_start=12)
-    for leg in route_data.get("routes", []):
-        for l in leg.get("legs", []):
-            coords = []
-            for step in l.get("steps", []):
-                geom = step.get("geometry", {}).get("coordinates", [])
-                coords.extend([(lat, lon) for lon, lat in geom])
-            if coords:
-                folium.PolyLine(coords, color="blue", weight=5, opacity=0.8).add_to(m)
-
-    folium.Marker([lat1, lon1], tooltip=f"Departure: {start}", icon=folium.Icon(color="green")).add_to(m)
-    folium.Marker([lat2, lon2], tooltip=f"Arrival: {end}", icon=folium.Icon(color="red")).add_to(m)
-
-    file_path = MAPS_DIR / "itinerary.html"
-    m.save(file_path)
-    return file_path.name
+def _build_route_path(route_data: dict) -> list[list[float]]:
+    # PathLayer expects a list of [lon, lat] pairs
+    coords: list[list[float]] = []
+    for route in route_data.get("routes", []) or []:
+        for leg in route.get("legs", []) or []:
+            for step in leg.get("steps", []) or []:
+                geom = (step.get("geometry") or {}).get("coordinates") or []
+                for pair in geom:
+                    try:
+                        lon, lat = pair
+                        coords.append([float(lon), float(lat)])
+                    except Exception:
+                        continue
+    # Deduplicate adjacent duplicates
+    cleaned: list[list[float]] = []
+    for p in coords:
+        if not cleaned or cleaned[-1] != p:
+            cleaned.append(p)
+    return cleaned
 
 
 @tool("get_route_info", return_direct=True)
@@ -193,18 +187,62 @@ def get_route_info(query: str) -> dict:
             steps_txt.append(f"{step_index}. {format_step(step)}")
             step_index += 1
 
-    file_name = create_map(lat1, lon1, lat2, lon2, data, start, end)
+    path = _build_route_path(data)
 
     steps_block = "\n".join(steps_txt)
     message = (
         f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}.\n"
-        f"Map: {file_name}.\n{steps_block}"
+        f"{steps_block}"
     )
+
+    view_state = {
+        "latitude": float((lat1 + lat2) / 2.0),
+        "longitude": float((lon1 + lon2) / 2.0),
+        "zoom": 9,
+    }
+
+    map_spec = {
+        "title": f"Route: {start} → {end}",
+        "view_state": view_state,
+        "tooltip": {"text": ""},
+        "layers": [
+            {
+                "type": "PathLayer",
+                "data": [{"name": "route", "path": path}],
+                "get_path": "path",
+                "get_color": [0, 120, 255, 200],
+                "width_min_pixels": 3,
+                "pickable": False,
+            },
+            {
+                "type": "ScatterplotLayer",
+                "data": [{"lat": float(lat1), "lon": float(lon1), "label": f"Departure: {start}"}],
+                "get_position": "[lon, lat]",
+                "get_radius": 5,
+                "radius_units": "pixels",
+                "radius_min_pixels": 6,
+                "radius_max_pixels": 7,
+                "get_fill_color": [0, 200, 0, 200],
+                "pickable": True,
+            },
+            {
+                "type": "ScatterplotLayer",
+                "data": [{"lat": float(lat2), "lon": float(lon2), "label": f"Arrival: {end}"}],
+                "get_position": "[lon, lat]",
+                "get_radius": 5,
+                "radius_units": "pixels",
+                "radius_min_pixels": 6,
+                "radius_max_pixels": 7,
+                "get_fill_color": [220, 0, 0, 200],
+                "pickable": True,
+            },
+        ],
+    }
 
     return make_tool_response(
         tool_name="get_route_info",
         message=message,
-        artifacts={"maps": [file_name], "thumbnails": [], "urls": []},
+        artifacts={"maps": [map_spec], "thumbnails": [], "urls": []},
         data={
             "start": start,
             "end": end,

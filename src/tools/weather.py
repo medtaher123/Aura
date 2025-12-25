@@ -1,7 +1,7 @@
 import requests
 from typing import Optional
 from langchain.tools import tool
-from .tools_geocode import get_city_bbox
+from src.services.bbox_service import get_city_bbox
 from .contracts import make_tool_response
 
 @tool("weather_tool", return_direct=True)

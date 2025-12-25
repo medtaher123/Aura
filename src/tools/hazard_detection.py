@@ -1,21 +1,21 @@
-# think_hazard.py
+"""Hazard tool.
+
+This tool mirrors the structure of other tools in this repo:
+- Parse user intent using `extract_params_from_text`.
+- Query hazard data (Data360 hazards via `data360_hazards`).
+- Return a standardized `make_tool_response` dict.
+"""
+
 import re
-from geopy.geocoders import Nominatim
+
 from langchain.tools import tool
-from data360_hazards import (
-    get_hazards,
-    normalize_location_to_iso3
-)
 
+from src.services.bbox_service import get_city_bbox
+from src.services.params_extraction import extract_params_from_text
 
-# ----------------------------------------------------------
-# 1. RNG déterministe (pour tests PyTest)
-# ----------------------------------------------------------
+from .contracts import make_tool_response
+from .data360_hazards import get_hazards, normalize_location_to_iso3
 
-def _get_deterministic_rng(seed_str: str):
-    import random
-    seed = sum(ord(c) for c in seed_str)
-    return random.Random(seed)
 
 
 # ----------------------------------------------------------
@@ -52,40 +52,13 @@ def extract_n(query: str) -> int:
 
 
 # ----------------------------------------------------------
-# 2. Résolution d’adresse (ville, pays ou coordonnées)
-# ----------------------------------------------------------
-
-def resolve_location(query: str):
-    geo = Nominatim(user_agent="hazard_app")
-
-    # Coordonnées ?
-    if re.match(r"^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$", query):
-        lat, lon = map(float, query.split(","))
-        try:
-            loc = geo.reverse((lat, lon), language="en")
-            return loc.address if loc else "Unknown location"
-        except:
-            return "Unknown location"
-
-    # Ville ou pays
-    try:
-        loc = geo.geocode(query, language="en")
-        return loc.address if loc else "Unknown location"
-    except:
-        return "Unknown location"
-
-def get_iso3_from_country_name(name):
-    try:
-        country = pycountry.countries.lookup(name)
-        return country.alpha_3
-    except LookupError:
-        return None
-
-# ----------------------------------------------------------
 # 3. Extraction des hazards Data360
 # ----------------------------------------------------------
 
 def get_top_hazards_for_country(country: str, n: int = 5):
+    if normalize_location_to_iso3 is None or get_hazards is None:
+        return []
+
     iso3 = normalize_location_to_iso3(country)
     if not iso3:
         return []
@@ -100,46 +73,82 @@ def get_top_hazards_for_country(country: str, n: int = 5):
 
 
 # ----------------------------------------------------------
-# 4. TOOL LangChain : think_hazard
+# 4. TOOL LangChain : query_hazards_tool
 # ----------------------------------------------------------
 
-@tool("think_hazard")
-def think_hazard(query: str):
+@tool("query_hazards_tool", return_direct=True)
+def query_hazards_tool(query: str) -> dict:
     """
     Exemples :
     - "Paris"
     - "Paris | 5"
-    - "Paris, 3"
+    - "show me 3 hazards in Tunis"
     - "What are the top 4 risks in Canada?"
     - "Tokyo | 7"
     """
 
+    if normalize_location_to_iso3 is None or get_hazards is None:
+        return make_tool_response(
+            tool_name="query_hazards_tool",
+            message=(
+                "Hazards feature is not available because the optional dependency "
+                "'data360_hazards' is not installed.\n\n"
+                "To enable it, install the package in the same environment you run Streamlit from, e.g.:\n"
+                "- `pip install data360_hazards` (if published), or\n"
+                "- `pip install -e /path/to/data360_hazards` (if it\'s a local module).\n\n"
+                "You can still use the rest of the chatbot without this tool."
+            ),
+            data={"missing_dependency": "data360_hazards"},
+            error=True,
+        )
+
     # --------------------------
-    # 1) Extraire N proprement
+    # 1) Extract params via shared service
     # --------------------------
+    start_date, end_date, location, country_name, radius_km, disaster_type = extract_params_from_text(query)
     n = extract_n(query)
 
-    # Nettoyer le query pour isoler le nom du lieu
-    query_clean = re.sub(r"\b\d+\b", "", query)
-    query_clean = query_clean.replace("|", "").replace(",", "").strip()
+    # Prefer explicit country; else treat location as country-like input.
+    country = country_name or location
+    if not isinstance(country, str) or not country.strip():
+        return make_tool_response(
+            tool_name="query_hazards_tool",
+            message="Please specify a country (or a location that implies a country) in your query.",
+            start_date=start_date,
+            end_date=end_date,
+            city=location,
+            country=country_name,
+            error=True,
+        )
+    country = country.strip()
 
-    # --------------------------
-    # 2) Résoudre l'adresse
-    # --------------------------
-    resolved = resolve_location(query_clean)
-    if resolved == "Unknown location":
-        return "Unknown location"
+    # Best-effort coordinates for UI context
+    coords = None
+    bbox, lat, lon, city_name_final = get_city_bbox(location or country)
+    try:
+        if lat is not None and lon is not None:
+            coords = {"lat": float(lat), "lon": float(lon)}
+    except Exception:
+        coords = None
 
-    parts = resolved.split(",")
-    clean_address = ", ".join([p.strip() for p in parts[:3]])
-    country = parts[-1].strip()
+    clean_address = city_name_final or (location or country)
 
     # --------------------------
     # 3) Obtenir les hazards
     # --------------------------
     hazards = get_top_hazards_for_country(country, n=n)
     if not hazards:
-        return f"No hazards found for this location ({clean_address})."
+        return make_tool_response(
+            tool_name="query_hazards_tool",
+            message=f"No hazards found for this location ({clean_address}).",
+            start_date=start_date,
+            end_date=end_date,
+            city=location or clean_address,
+            country=country_name or country,
+            coordinates=coords,
+            data={"top_n": n, "hazards": []},
+            error=False,
+        )
 
     # --------------------------
     # 4) Nouveau format d’affichage
@@ -152,20 +161,14 @@ def think_hazard(query: str):
     for i, h in enumerate(hazards, start=1):
         output.append(f"{i}. **{h['hazard']}** — {h['level']}")
 
-    return "\n".join(output)
-
-
-# ----------------------------------------------------------
-# Tests manuels
-# ----------------------------------------------------------
-
-if __name__ == "__main__":
-    print(think_hazard.run("Paris"))
-    print()
-    print(think_hazard.run("Paris | 3"))
-    print()
-    print(think_hazard.run("48.8566, 2.3522"))
-    print()
-    print(think_hazard.run("What are the top 4 risks in Canada?"))
-    print()
-    print(think_hazard.run("Tokyo | 7"))
+    return make_tool_response(
+        tool_name="query_hazards_tool",
+        message="\n".join(output),
+        start_date=start_date,
+        end_date=end_date,
+        city=location or clean_address,
+        country=country_name or country,
+        coordinates=coords,
+        data={"top_n": n, "hazards": hazards},
+        error=False,
+    )

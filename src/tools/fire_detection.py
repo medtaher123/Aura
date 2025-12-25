@@ -1,11 +1,10 @@
 # fire_detection.py
 from datetime import datetime, timedelta, date
 import pandas as pd
-import folium
 import numpy as np
 import os
 from pathlib import Path
-from .tools_geocode import get_city_bbox
+from src.services.bbox_service import get_city_bbox
 from src.services.params_extraction import extract_params_from_text
 from langchain.tools import tool
 from .contracts import make_tool_response
@@ -178,22 +177,17 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     if df_filtered.empty:
         return None
 
-    m = folium.Map(location=[lat_city_f, lon_city_f], zoom_start=7)
-    for _, row in df_filtered.iterrows():
-        popup = f"Brightness: {row.get('brightness', row.get('bright_ti4', 'N/A'))}, Date: {row['acq_date']}, Time: {row['acq_time']}"
-        folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=5,
-            color="red",
-            fill=True,
-            fill_color="red",
-            fill_opacity=0.7,
-            popup=popup,
-        ).add_to(m)
-
-    filename = MAPS_DIR / "Fires.html"
-    m.save(filename)
-    return filename.name, len(df_filtered)
+    points = [
+        {
+            "lat": float(row["latitude"]),
+            "lon": float(row["longitude"]),
+            "brightness": float(row.get("brightness", row.get("bright_ti4", 0)) or 0),
+            "acq_date": str(row["acq_date"]),
+            "acq_time": str(row.get("acq_time", "")),
+        }
+        for _, row in df_filtered.iterrows()
+    ]
+    return points, len(df_filtered)
 
 
 
@@ -254,17 +248,17 @@ def detect_fire_tool(query_text: str) -> dict:
             )
 
         # FIRES FOUND
-        file_html, nb_fires = result
+        points, nb_fires = result
 
         if start_date == end_date:
             message = (
                 f"{nb_fires} fire(s) detected near {city} on {start_date} "
-                f"within a radius of {radius_km} km.\nMap: {file_html}"
+                f"within a radius of {radius_km} km."
             )
         else:
             message = (
                 f"{nb_fires} fire(s) detected near {city} from {start_date} to {end_date} "
-                f"within a radius of {radius_km} km.\nMap: {file_html}"
+                f"within a radius of {radius_km} km."
             )
 
         coords = None
@@ -275,10 +269,38 @@ def detect_fire_tool(query_text: str) -> dict:
         except Exception:
             coords = None
 
+        # Build a structured map spec that the UI can render with Pydeck.
+        view_state = None
+        if isinstance(coords, dict) and "lat" in coords and "lon" in coords:
+            view_state = {"latitude": coords["lat"], "longitude": coords["lon"], "zoom": 7}
+        elif points:
+            try:
+                view_state = {"latitude": float(points[0]["lat"]), "longitude": float(points[0]["lon"]), "zoom": 7}
+            except Exception:
+                view_state = {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
+        else:
+            view_state = {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
+
         return make_tool_response(
             tool_name="detect_fire_tool",
             message=message,
-            artifacts={"maps": [file_html], "thumbnails": [], "urls": []},
+            artifacts={
+                "maps": [
+                    {
+                        "title": "Fires near city",
+                        "points": points,
+                        "view_state": view_state,
+                        "tooltip": {"text": "{acq_date} {acq_time}\nBrightness: {brightness}"},
+                        "fill_color": [255, 0, 0, 160],
+                        "radius": 5,
+                        "radius_units": "pixels",
+                        "radius_min_pixels": 2,
+                        "radius_max_pixels": 7,
+                    }
+                ],
+                "thumbnails": [],
+                "urls": [],
+            },
             start_date=start_date,
             end_date=end_date,
             city=city,

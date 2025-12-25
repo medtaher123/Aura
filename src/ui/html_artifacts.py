@@ -16,8 +16,8 @@ def display_html_file(
     *,
     maps_dir: Path,
     project_root: Path,
-    height: int = 600,
-    width: int = 800,
+    height: int = 450,
+    width: int | None = None,
 ) -> None:
     path = Path(filename)
     candidates: list[Path] = []

@@ -17,12 +17,24 @@ class AnalysisAgentExecutor:
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         user_question = inputs.get("user_question", "")
         data_response = inputs.get("data_response", {})
+        context = inputs.get("context", "")
 
         prompt = get_analysis_prompt()
+
+        context_block = ""
+        if isinstance(context, str) and context.strip():
+            context_block = f"conversation_context:\n{context.strip()}\n\n"
+
         msg = self.llm.invoke(
             [
                 SystemMessage(content=prompt),
-                HumanMessage(content=f"user_question:\n{user_question}\n\ndata_response:\n{data_response}"),
+                HumanMessage(
+                    content=(
+                        f"{context_block}"
+                        f"user_question:\n{user_question}\n\n"
+                        f"data_response:\n{data_response}"
+                    )
+                ),
             ]
         )
 

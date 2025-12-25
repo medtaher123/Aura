@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .vscode/
 Data/
+.env/
 
 # Generated Folium maps (do not commit)
 src/maps/RiskMask_*.html

@@ -26,6 +26,8 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "CRITICAL RULES:\n"
     "- If the user query is about GeoServer masks, use the geoserver_risk_mask_tool and do not call other tools.\n"
     "- You may call multiple tools over multiple steps.\n"
+    "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
+    "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- Use ONLY the listed tools.\n"
     "- If you have enough information to answer, stop.\n"
     "- NEVER invent tool outputs, observations, results, URLs, or data.\n"
@@ -109,7 +111,28 @@ Step 1 JSON:
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved the flood risk mask from GeoServer for Casablanca. See the returned map/artifacts if available."}
 
-Example 9 (ambiguous / missing info)
+Example 9
+User: Compute an itinerary from Paris to Lyon
+Step 1 JSON:
+{"action":"get_route_info","action_input":"Paris -> Lyon"}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I computed a driving route from Paris to Lyon. See the returned route map/artifacts and step-by-step instructions."}
+
+Example 10
+User: Estimate surface water ingress risk in Paris
+Step 1 JSON:
+{"action":"estimate_surface_water_ingress_tool","action_input":"Paris"}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I estimated surface water ingress risk for Paris and returned risk points and mitigation recommendations. See the returned map/artifacts if available."}
+
+Example 11
+User: What are the top 3 risks in Japan?
+Step 1 JSON:
+{"action":"query_hazards_tool","action_input":"Japan | 3"}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I identified the top 3 hazards in Japan based on Data360 data. See the returned hazard list/artifacts if available."}
+
+Example 12 (ambiguous / missing info)
 User: Can you check the area for me?
 Step 1 JSON:
 {"action":"general_question_tool","action_input":"Can you check the area for me?"}
@@ -158,14 +181,29 @@ JSON:
 {"needs_data": true, "needs_analysis": false, "data_query": "Show Sentinel-2 images of Casablanca in September 2025", "analysis_goal": ""}
 
 Example 2
-User: Show fire risk mask in Tunis with confidence > 0.7 and analyze the result
-JSON:
-{"needs_data": true, "needs_analysis": true, "data_query": "Show fire risk mask in Tunis with confidence > 0.7", "analysis_goal": "Analyze the returned risk results and summarize key insights and caveats."}
-
-Example 3
 User: Explain what a multi-step ReAct agent is
 JSON:
 {"needs_data": false, "needs_analysis": false, "data_query": "Explain what a multi-step ReAct agent is", "analysis_goal": ""}
+
+Example 3
+User: Compute an itinerary from Paris to Lyon
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "Compute an itinerary from Paris to Lyon", "analysis_goal": ""}
+
+Example 4
+User: What is the weather forecast for New York now?
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "What is the weather forecast for New York now?", "analysis_goal": ""}
+
+Example 5
+User: Estimate surface water ingress risk in Paris
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "Estimate surface water ingress risk in Paris", "analysis_goal": ""}
+
+Example 6
+User: Show me the top 5 hazards in Japan
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "Show me the top 5 hazards in Japan", "analysis_goal": ""}
 """.strip()
 
 def get_orchestrator_prompt() -> str:

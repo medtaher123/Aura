@@ -5,14 +5,18 @@ from typing import Any, Dict
 from src.tools.contracts import ToolResponse, make_tool_response
 
 
-def invoke_agent(executor: Any, english_query: str) -> Any:
+def invoke_agent(executor: Any, english_query: str, *, chat_history: Any = None) -> Any:
     """
     Single place that defines the agent contract used by the UI:
-    - Call: executor.invoke({"input": english_query})
+    - Call: executor.invoke({"input": english_query, "chat_history": [...]})
     - Prefer returning response["output"] when available
     - Otherwise return the raw response (for future flexibility)
     """
-    response = executor.invoke({"input": english_query})
+    payload: Dict[str, Any] = {"input": english_query}
+    if chat_history is not None:
+        payload["chat_history"] = chat_history
+
+    response = executor.invoke(payload)
 
     if isinstance(response, dict):
         return response.get("output", response)

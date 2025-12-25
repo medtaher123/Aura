@@ -4,17 +4,15 @@ import json
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Optional
 
-import folium
 import requests
 from langchain.tools import tool
 from langchain_ollama import OllamaLLM
 from .contracts import make_tool_response
 from shapely.geometry import shape
 
-from .tools_geocode import get_city_bbox
+from src.services.bbox_service import get_city_bbox
 
 
 GEOSERVER_BASE_URL = os.getenv(
@@ -23,9 +21,6 @@ GEOSERVER_BASE_URL = os.getenv(
 ).rstrip("/")
 
 DEFAULT_LAYER_NAME = os.getenv("GEOSERVER_RISK_LAYER", "georisk:predictions")
-
-MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
-MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _parse_llm_json(text: str) -> dict[str, Any] | None:
@@ -174,68 +169,13 @@ def _summarize_features(feature_collection: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _make_map(
-    *,
-    base_url: str,
-    layer_name: str,
-    cql_filter: str | None,
-    bounds: Optional[list[float]],
-    feature_collection: dict[str, Any],
-    render_mode: str = "auto",
-) -> str:
+def _view_state_from_bounds(bounds: Optional[list[float]]) -> dict[str, float]:
     if bounds and len(bounds) == 4:
         minx, miny, maxx, maxy = bounds
-        center_lat = (miny + maxy) / 2
-        center_lon = (minx + maxx) / 2
-        zoom_start = 10
-    else:
-        center_lat, center_lon, zoom_start = 36.8, 10.2, 8
-
-    fmap = folium.Map(location=[center_lat, center_lon], zoom_start=zoom_start)
-
-    features = feature_collection.get("features") or []
-    use_geojson = render_mode == "geojson" or (render_mode == "auto" and isinstance(features, list) and len(features) <= 200)
-
-    if use_geojson and isinstance(features, list) and features:
-        def _style(feature: dict[str, Any]):
-            props = feature.get("properties") or {}
-            conf = props.get("confidence")
-            opacity = 0.6
-            if isinstance(conf, (int, float)):
-                opacity = max(0.2, min(0.9, float(conf)))
-            return {"color": "#ff0000", "weight": 2, "fillColor": "#ff0000", "fillOpacity": opacity}
-
-        folium.GeoJson(
-            feature_collection,
-            name="Risk polygons (WFS)",
-            style_function=_style,
-            tooltip=folium.GeoJsonTooltip(fields=["risk_type", "region", "confidence", "area_m2"], aliases=["risk_type", "region", "confidence", "area_m2"], sticky=False),
-        ).add_to(fmap)
-    else:
-        extra = {"transparent": True}
-        if cql_filter:
-            extra["CQL_FILTER"] = cql_filter
-
-        folium.raster_layers.WmsTileLayer(
-            url=f"{base_url}/wms",
-            layers=layer_name,
-            fmt="image/png",
-            transparent=True,
-            name="Risk mask (WMS)",
-            attr="GeoServer",
-            **extra,
-        ).add_to(fmap)
-
-    if bounds and len(bounds) == 4:
-        # Fit to bounds: folium expects [[south, west], [north, east]]
-        fmap.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-
-    folium.LayerControl().add_to(fmap)
-
-    filename = f"RiskMask_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-    out_path = MAPS_DIR / filename
-    fmap.save(out_path)
-    return out_path.name
+        center_lat = float((miny + maxy) / 2)
+        center_lon = float((minx + maxx) / 2)
+        return {"latitude": center_lat, "longitude": center_lon, "zoom": 10}
+    return {"latitude": 36.8, "longitude": 10.2, "zoom": 8}
 
 
 @tool("geoserver_risk_mask_tool")
@@ -316,19 +256,31 @@ Rules:
             b = filters["bbox"]
             bounds = [float(b[0]), float(b[1]), float(b[2]), float(b[3])]
 
-        map_file = _make_map(
-            base_url=GEOSERVER_BASE_URL,
-            layer_name=layer_name,
-            cql_filter=cql or None,
-            bounds=bounds,
-            feature_collection=feature_collection,
-            render_mode=str(filters.get("render_mode") or "auto").lower(),
-        )
+        map_spec = {
+            "title": "GeoServer risk polygons",
+            "view_state": _view_state_from_bounds(bounds),
+            "tooltip": {
+                "text": "Risk: {risk_type}\nRegion: {region}\nConfidence: {confidence}\nArea (m²): {area_m2}",
+            },
+            "layers": [
+                {
+                    "type": "GeoJsonLayer",
+                    "data": feature_collection,
+                    "stroked": True,
+                    "filled": True,
+                    "get_fill_color": [255, 0, 0, 110],
+                    "get_line_color": [255, 0, 0, 200],
+                    "line_width_min_pixels": 1,
+                    "pickable": True,
+                    "auto_highlight": True,
+                }
+            ],
+        }
 
         return make_tool_response(
             tool_name="geoserver_risk_mask_tool",
             message="GeoServer risk mask generated.",
-            artifacts={"maps": [map_file], "thumbnails": [], "urls": []},
+            artifacts={"maps": [map_spec], "thumbnails": [], "urls": []},
             start_date=filters.get("start_date"),
             end_date=filters.get("end_date"),
             city=filters.get("location"),
@@ -339,7 +291,6 @@ Rules:
                 "feature_count": summary.get("feature_count"),
                 "total_area_m2": summary.get("total_area_m2"),
                 "avg_confidence": summary.get("avg_confidence"),
-                "map_file": map_file,
                 "geoserver": {
                     "base_url": GEOSERVER_BASE_URL,
                     "wms_url": f"{GEOSERVER_BASE_URL}/wms",
