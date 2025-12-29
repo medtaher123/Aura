@@ -18,7 +18,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "At each step, choose ONE action.\n"
     "\n"
     "GOAL:\n"
-    "- Provide the tool input as a SINGLE STRING.\n"
+    "- Provide the tool input as JSON matching the tool's arguments.\n"
     "\n"
     "AVAILABLE TOOLS:\n"
     "{tool_names}\n"
@@ -26,6 +26,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "CRITICAL RULES:\n"
     "- If the user query is about GeoServer masks, use the geoserver_risk_mask_tool and do not call other tools.\n"
     "- You may call multiple tools over multiple steps.\n"
+    "- For fires, use only the detect_fire_tool.\n"
     "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- Use ONLY the listed tools.\n"
@@ -37,7 +38,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- No markdown, no backticks, no explanations, no extra keys.\n"
     "- Must match exactly:\n"
     "OUTPUT FORMAT (STRICT): return ONLY valid JSON with exactly:\n"
-    '{{\"action\": \"<tool_name or FINAL>\", \"action_input\": \"<string>\"}}\n'
+    '{{\"action\": \"<tool_name or FINAL>\", \"action_input\": <object|string>}}\n'
     "\n"
     "When action is FINAL, action_input must be a concise summary of what you found.\n")
 
@@ -54,51 +55,51 @@ Each example uses: one or more tool-call steps, then FINAL.
 Example 1
 User: show me storm events in Germany between 2010 and 2025
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":"storm events in Germany between 2010 and 2025"}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31","country_name":"Germany","disaster_type":"storm"}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved disaster event data for Germany (2010–2025). See the returned map/artifacts if available."}
 
 Example 2
 User: are there fires in Potsdam in summer 2025 within a 100 km radius
 Step 1 JSON:
-{"action":"detect_fire_tool","action_input":"fires in Potsdam in summer 2025 within a 100 km radius"}
+{"action":"detect_fire_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","location":"Potsdam","radius_km":100}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I checked fire detections near Potsdam for summer 2025 within 100 km. See the returned fire map/artifacts if available."}
 
 Example 3
 User: Show me Sentinel-2 images of Casablanca in September 2025
 Step 1 JSON:
-{"action":"query_stac_catalog","action_input":"Sentinel-2 images of Casablanca in September 2025"}
+{"action":"query_stac_catalog","action_input":{"city":"Casablanca","start_date":"2025-09-01","end_date":"2025-09-30","collection":"sentinel-2-l2a"}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I fetched Sentinel-2 thumbnails for Casablanca in September 2025. See returned thumbnails/artifacts."}
 
 Example 4
 User: What is the weather forecast for New York now?
 Step 1 JSON:
-{"action":"weather_tool","action_input":"New York, 1"}
+{"action":"weather_tool","action_input":{"city_name":"New York","forecast_days":1}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I fetched the current weather and forecast for New York. See the returned weather data."}
 
 Example 5
 User: meteo dresden hier?
 Step 1 JSON:
-{"action":"weather_tool","action_input":"Dresden, 2"}
+{"action":"weather_tool","action_input":{"city_name":"Dresden","forecast_days":2}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I fetched the weather forecast for Dresden. See the returned weather data."}
 
 Example 6
 User: Are there any extreme temperatures or storms in Tunis last summer?
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":"extreme temperature events in Tunisia last summer"}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"extreme temperature"}}
 Step 2 JSON:
-{"action":"query_disaster_events_tool","action_input":"storm events in Tunisia last summer"}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"storm"}}
 Step 3 JSON:
 {"action":"FINAL","action_input":"I retrieved extreme temperature and storm disaster events for Tunisia for the requested period. See the returned map/artifacts if available."}
 
 Example 7
 User: Show me fires and satellite images near Berlin in 2024 within 200km
 Step 1 JSON:
-{"action":"detect_fire_tool","action_input":"fires near Berlin in 2024 within a 200 km radius"}
+{"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Berlin","radius_km":200}}
 Step 2 JSON:
 {"action":"query_stac_catalog","action_input":"Sentinel-2 images of Berlin in 2024"}
 Step 3 JSON:
@@ -107,28 +108,28 @@ Step 3 JSON:
 Example 8 
 User: show me the flood mask in geoserver for Casablanca. 
 Step 1 JSON:
-{"action":"geoserver_risk_mask_tool","action_input":"flood mask in geoserver for Casablanca"}
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"flood","location":"Casablanca","render_mode":"auto"}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved the flood risk mask from GeoServer for Casablanca. See the returned map/artifacts if available."}
 
 Example 9
 User: Compute an itinerary from Paris to Lyon
 Step 1 JSON:
-{"action":"get_route_info","action_input":"Paris -> Lyon"}
+{"action":"get_route_info","action_input":{"source":"Paris","destination":"Lyon"}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I computed a driving route from Paris to Lyon. See the returned route map/artifacts and step-by-step instructions."}
 
 Example 10
 User: Estimate surface water ingress risk in Paris
 Step 1 JSON:
-{"action":"estimate_surface_water_ingress_tool","action_input":"Paris"}
+{"action":"estimate_surface_water_ingress_tool","action_input":{"location_input":"Paris"}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I estimated surface water ingress risk for Paris and returned risk points and mitigation recommendations. See the returned map/artifacts if available."}
 
 Example 11
 User: What are the top 3 risks in Japan?
 Step 1 JSON:
-{"action":"query_hazards_tool","action_input":"Japan | 3"}
+{"action":"query_hazards_tool","action_input":{"country":"Japan","top_n":3}}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I identified the top 3 hazards in Japan based on Data360 data. See the returned hazard list/artifacts if available."}
 

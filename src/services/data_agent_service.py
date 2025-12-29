@@ -14,70 +14,29 @@ from src.tools.tools import get_all_tools
 from src.tools.contracts import ToolResponse, make_tool_response
 
 
-def _infer_required_tools(user_text: str) -> list[str]:
-    """Best-effort mapping from user intent to the tools DataAgent should run.
-
-    This prevents planner drift by keeping the loop goal-driven.
-    """
-    t = (user_text or "").lower()
-    required: list[str] = []
-
-    # GeoServer risk masks: if user explicitly asks for GeoServer mask/polygons/WMS/WFS,
-    # do NOT call other tools (per DataAgent prompt rules).
-    if any(k in t for k in ["geoserver", "risk mask", "mask", "polygon", "polygons", "wms", "wfs"]):
-        return ["geoserver_risk_mask_tool"]
-
-    # EO imagery / STAC
-    if any(k in t for k in ["satellite", "sentinel", "stac", "imagery", "image", "images", "thumbnail", "thumbnails"]):
-        required.append("query_stac_catalog")
-
-    # Fire detection
-    if any(k in t for k in ["fire", "fires", "incend", "incendie", "wildfire"]):
-        required.append("detect_fire_tool")
-
-    # Disaster events (flood/storm/etc.)
-    if any(k in t for k in ["flood", "storm", "earthquake", "drought", "extreme temperature", "disaster", "emdat"]):
-        required.append("query_disaster_events_tool")
-
-    # Weather
-    if any(k in t for k in ["weather", "meteo", "météo", "forecast"]):
-        required.append("weather_tool")
-
-    # Route / itinerary
-    if "->" in (user_text or "") or any(k in t for k in ["route", "itinerary", "directions"]):
-        required.append("get_route_info")
-
-    # Water ingress
-    if any(k in t for k in ["water ingress", "ingress", "surface water", "runoff", "flow accumulation"]):
-        required.append("estimate_surface_water_ingress_tool")
-
-    # De-dup preserving order
-    seen = set()
-    out: list[str] = []
-    for x in required:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
 def _extract_json_obj(text: str) -> Optional[dict]:
     if not text:
         return None
-    candidates: List[str] = []
 
-    # Prefer ```json ... ``` blocks
-    for m in re.finditer(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE):
-        candidates.append(m.group(1))
-
-    # Fallback: try all minimal {...} candidates (non-greedy)
-    for m2 in re.finditer(r"(\{.*?\})", text, flags=re.DOTALL):
-        candidates.append(m2.group(1))
-
-    # Try parsing candidates in order
-    for blob in candidates:
+    # 1) Prefer fenced ```json ... ``` blocks. These may contain nested braces.
+    for m in re.finditer(r"```json\s*(\{.*\})\s*```", str(text), flags=re.DOTALL | re.IGNORECASE):
+        blob = m.group(1).strip()
         try:
             obj = json.loads(blob)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+
+    # 2) Robust fallback: scan for JSON objects using JSONDecoder.raw_decode.
+    # This handles nested objects unlike the naive non-greedy regex.
+    dec = json.JSONDecoder()
+    s = str(text)
+    for i, ch in enumerate(s):
+        if ch != "{":
+            continue
+        try:
+            obj, _end = dec.raw_decode(s[i:])
             if isinstance(obj, dict):
                 return obj
         except Exception:
@@ -86,7 +45,7 @@ def _extract_json_obj(text: str) -> Optional[dict]:
     return None
 
 
-def _pick_action(plan_text: str) -> Tuple[Optional[str], Optional[str]]:
+def _pick_action(plan_text: str) -> Tuple[Optional[str], Any]:
     obj = _extract_json_obj(plan_text)
     if not isinstance(obj, dict):
         return None, None
@@ -95,12 +54,11 @@ def _pick_action(plan_text: str) -> Tuple[Optional[str], Optional[str]]:
     if not isinstance(action, str) or not action.strip():
         return None, None
 
-    # Some models may return null/number/object for action_input; coerce to string.
+    # Preserve dict/list inputs so tools with structured args can be called directly.
+    # If it's null, keep it as empty string for backward compatibility.
     if action_input is None:
         return action.strip(), ""
-    if isinstance(action_input, str):
-        return action.strip(), action_input
-    return action.strip(), json.dumps(action_input, ensure_ascii=False)
+    return action.strip(), action_input
 
 
 def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
@@ -114,10 +72,20 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
         except Exception:
             pass
 
+    # If upstream passes a tuple/list, map it positionally to the schema fields.
+    if args_schema is not None and isinstance(tool_input, (tuple, list)):
+        try:
+            fields = list(args_schema.model_fields.keys())
+            if len(fields) == len(tool_input):
+                return tool.invoke({fields[i]: tool_input[i] for i in range(len(fields))})
+        except Exception:
+            pass
+
+    first_error: Exception | None = None
     try:
         return tool.invoke(tool_input)
-    except Exception:
-        pass
+    except Exception as e:
+        first_error = e
 
     if args_schema is not None:
         try:
@@ -140,11 +108,32 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
             pass
 
     # Last resort: if the tool validates input with a schema, avoid hard-crashing on validation errors.
+    tool_name = getattr(tool, "name", "tool")
+
+    if args_schema is not None:
+        try:
+            fields = list(args_schema.model_fields.keys())
+        except Exception:
+            fields = []
+
+        # For structured tools (2+ fields), wrapping under {'input': ...} makes validation worse.
+        # Instead, surface a clear error and show expected keys.
+        if len(fields) > 1:
+            return make_tool_response(
+                tool_name=tool_name,
+                message=(
+                    f"❌ Tool invocation failed: {first_error or 'invalid input'}\n"
+                    f"Expected a JSON object with keys: {fields}"
+                ),
+                data={"exception": repr(first_error) if first_error else None, "tool_input": tool_input},
+                error=True,
+            )
+
     try:
         return tool.invoke({"input": tool_input})
     except Exception as e:
         return make_tool_response(
-            tool_name=getattr(tool, "name", "tool"),
+            tool_name=tool_name,
             message=f"❌ Tool invocation failed: {e}",
             data={"exception": repr(e), "tool_input": str(tool_input)},
             error=True,
@@ -277,8 +266,6 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
         step_count = int(next_state.get("step_count", 0))
 
         required_tools: list[str] = next_state.get("required_tools") or []
-        if not required_tools:
-            required_tools = _infer_required_tools(user_text)
         completed_tools: list[str] = next_state.get("completed_tools") or []
 
         remaining = [t for t in required_tools if t not in completed_tools]
@@ -367,20 +354,6 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
             # Use the original user text as tool input unless the planner gave something explicit.
             action_input = action_input or user_text
 
-        # If we're about to call fire detection, feed it a clean, parseable query
-        # derived from already-known city + dates (instead of vague 'provided bbox').
-        if action == "detect_fire_tool":
-            known_city = None
-            known_start = None
-            known_end = None
-            for r in reversed(steps):
-                known_city = known_city or r.get("city")
-                known_start = known_start or r.get("start_date")
-                known_end = known_end or r.get("end_date")
-                if known_city and known_start and known_end:
-                    break
-            if known_city and known_start and known_end:
-                action_input = f"fires near {known_city} from {known_start} to {known_end} within 100 km"
 
         next_state.update({
             "next_tool": action,

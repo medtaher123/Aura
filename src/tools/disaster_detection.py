@@ -8,7 +8,6 @@ import re
 from geopy.geocoders import Nominatim
 import time
 from langchain.tools import tool
-from src.services.params_extraction import extract_params_from_text
 
 from .contracts import make_tool_response
 from typing import Optional
@@ -157,16 +156,33 @@ def _color_for_disaster_type(disaster_type: str) -> list[int]:
 
 
 @tool(return_direct=True)
-def query_disaster_events_tool(input: str) -> dict:
+def query_disaster_events_tool(
+    start_date: str,
+    end_date: str | None,
+    country_name: str,
+    disaster_type: str = "flood",
+) -> dict:
     """
     Search for natural & technological disasters
     (flood, storm, earthquake, extreme temperature, drought,
     industrial accident, transport) in a country and for a given date or date range.
-    
-    input : user_query "flood events in France in 2020", "industrial accidents in Germany in septembre 2019".
+    start_date: YYYY-MM-DD
+    end_date: YYYY-MM-DD (optional, if not provided, only start_date is used)
+    country_name: Name of the country (e.g., "France", "Japan")
+    disaster_type: Type of disaster to search for (default "flood"). Valid types:
+      - flood
+      - storm
+      - earthquake
+      - extreme temperature
+      - drought
+      - industrial accident
+      - transport
+    example: query_disaster_events_tool("2023-06-01", "2023-06-30", "France", "flood")
     """
 
-    start_date, end_date, location, country_name, radius_km, disaster_type = extract_params_from_text(input)
+    if end_date is None or (isinstance(end_date, str) and not end_date.strip()):
+        end_date = start_date
+
     print(f"Extracted params - start_date: {start_date}, end_date: {end_date}, country: {country_name}, disaster_type: {disaster_type}")
     if not disaster_type:
         disaster_type = "flood"  # default

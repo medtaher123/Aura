@@ -132,21 +132,38 @@ def _build_route_path(route_data: dict) -> list[list[float]]:
 
 
 @tool("get_route_info", return_direct=True)
-def get_route_info(query: str) -> dict:
+def get_route_info(source: str | None = None, destination: str | None = None, query: str | None = None) -> dict:
     """
     Compute a driving route between two places.
-    Input format: "Start -> End"
-    Example: "Paris -> Lyon"
+    Preferred inputs:
+    - source: "Paris"
+    - destination: "Lyon"
+
+    Backward-compatible input:
+    - query: "Paris -> Lyon"
+
     Output: a structured dict with route summary (distance, duration, steps) and a saved HTML map.
     """
-    if "->" not in query:
+    start = (source or "").strip()
+    end = (destination or "").strip()
+
+    if (not start or not end) and isinstance(query, str) and query.strip():
+        if "->" not in query:
+            return make_tool_response(
+                tool_name="get_route_info",
+                message="Expected either (source, destination) or query formatted as 'Start -> End'.",
+                data={"source": source, "destination": destination, "query": query},
+                error=True,
+            )
+        start, end = [x.strip() for x in query.split("->", 1)]
+
+    if not start or not end:
         return make_tool_response(
             tool_name="get_route_info",
-            message="Expected format: 'Start -> End'.",
+            message="Please provide both 'source' and 'destination'.",
+            data={"source": source, "destination": destination, "query": query},
             error=True,
         )
-
-    start, end = [x.strip() for x in query.split("->")]
 
     lat1, lon1 = geocode_place(start)
     lat2, lon2 = geocode_place(end)

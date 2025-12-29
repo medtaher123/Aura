@@ -8,7 +8,6 @@ from typing import Any, Optional
 
 import requests
 from langchain.tools import tool
-from langchain_ollama import OllamaLLM
 from .contracts import make_tool_response
 from shapely.geometry import shape
 
@@ -21,18 +20,6 @@ GEOSERVER_BASE_URL = os.getenv(
 ).rstrip("/")
 
 DEFAULT_LAYER_NAME = os.getenv("GEOSERVER_RISK_LAYER", "georisk:predictions")
-
-
-def _parse_llm_json(text: str) -> dict[str, Any] | None:
-    if isinstance(text, dict):
-        return text
-    cleaned = re.sub(r"^```[a-zA-Z0-9]*|```$", "", str(text).strip())
-    cleaned = cleaned.replace("Null", "null").replace("NULL", "null")
-    cleaned = cleaned.replace("True", "true").replace("False", "false")
-    try:
-        return json.loads(cleaned)
-    except Exception:
-        return None
 
 
 def _cql_quote(value: str) -> str:
@@ -179,63 +166,54 @@ def _view_state_from_bounds(bounds: Optional[list[float]]) -> dict[str, float]:
 
 
 @tool("geoserver_risk_mask_tool")
-def geoserver_risk_mask_tool(query_text: str) -> dict[str, Any]:
+def geoserver_risk_mask_tool(
+    layer_name: str | None = None,
+    risk_type: str | None = None,
+    region: str | None = None,
+    location: str | None = None,
+    bbox: list[float] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    min_confidence: float | None = None,
+    min_area_m2: float | None = None,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    limit: int = 500,
+    render_mode: str = "auto",
+) -> dict[str, Any]:
     """Query GeoServer risk polygons with filters (WFS) and display them as a mask on a map (WMS or GeoJSON).
 
     Use this tool when the user asks to show/visualize risk masks or polygons from GeoServer, especially when they mention
     filtering by risk type, region, confidence, inference date range, or area.
 
-    Example user inputs:
-    - "Show flood risk mask in Tunis"
+    Example tool call:
+    - geoserver_risk_mask_tool(risk_type="flood", location="Tunis")
     """
     try:
-        system_prompt = """
-You extract GeoServer filtering parameters from a user request.
-
-Return ONLY valid JSON with these keys:
-{
-  "layer_name": "string or null",
-  "risk_type": "string or null",
-  "region": "string or null",
-  "location": "string or null",
-  "bbox": [min_lon, min_lat, max_lon, max_lat] or null,
-  "start_date": "YYYY-MM-DD or ISO timestamp or null",
-  "end_date": "YYYY-MM-DD or ISO timestamp or null",
-  "min_confidence": number or null,
-  "min_area_m2": number or null,
-  "model_name": "string or null",
-  "model_version": "string or null",
-  "limit": number or null,
-  "render_mode": "auto" or "wms" or "geojson" or null
-}
-
-Rules:
-- If bbox is provided in the text, parse it.
-- If a city/location is mentioned but no bbox, set "location" and leave bbox null.
-- If only one date is mentioned, set both start_date and end_date to it.
-- If risk type is mentioned (flood/fire/etc), put it in risk_type.
-- Do not add extra keys.
-"""
-
-        llm = OllamaLLM(model="mistral", temperature=0.1, system_prompt=system_prompt)
-        extracted_raw = llm.invoke(f'User input: "{query_text}"\nJSON:')
-        extracted = _parse_llm_json(extracted_raw) or {}
+        if end_date is None and isinstance(start_date, str) and start_date.strip():
+            end_date = start_date
 
         filters: dict[str, Any] = {
-            "layer_name": extracted.get("layer_name") or DEFAULT_LAYER_NAME,
-            "risk_type": extracted.get("risk_type"),
-            "region": extracted.get("region"),
-            "location": extracted.get("location"),
-            "bbox": extracted.get("bbox"),
-            "start_date": extracted.get("start_date"),
-            "end_date": extracted.get("end_date"),
-            "min_confidence": extracted.get("min_confidence"),
-            "min_area_m2": extracted.get("min_area_m2"),
-            "model_name": extracted.get("model_name"),
-            "model_version": extracted.get("model_version"),
-            "limit": extracted.get("limit") or 500,
-            "render_mode": extracted.get("render_mode") or "auto",
+            "layer_name": layer_name or DEFAULT_LAYER_NAME,
+            "risk_type": risk_type,
+            "region": region,
+            "location": location,
+            "bbox": bbox,
+            "start_date": start_date,
+            "end_date": end_date,
+            "min_confidence": min_confidence,
+            "min_area_m2": min_area_m2,
+            "model_name": model_name,
+            "model_version": model_version,
+            "limit": limit or 500,
+            "render_mode": render_mode or "auto",
         }
+
+        if isinstance(filters.get("bbox"), list) and len(filters["bbox"]) == 4:
+            try:
+                filters["bbox"] = [float(x) for x in filters["bbox"]]
+            except Exception:
+                filters["bbox"] = None
 
         _ensure_bbox(filters)
         cql = _build_cql_filter(filters)

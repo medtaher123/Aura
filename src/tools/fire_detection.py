@@ -5,7 +5,6 @@ import numpy as np
 import os
 from pathlib import Path
 from src.services.bbox_service import get_city_bbox
-from src.services.params_extraction import extract_params_from_text
 from langchain.tools import tool
 from .contracts import make_tool_response
 
@@ -194,44 +193,55 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
 
 
 @tool(return_direct=True)
-def detect_fire_tool(query_text: str) -> dict:
+def detect_fire_tool(
+    start_date: str,
+    end_date: str | None,
+    location: str,
+    radius_km: float = 100,
+) -> dict:
     """
-    Tool to detect fires from a natural language query.
+    Tool to detect fires near a city/country for a given date range and radius.
     """
     try:
-        print("Detecting fire with query:", query_text)
-        start_date, end_date, city, country, radius_km, disaster_type = extract_params_from_text(query_text)
-        print("Extracted parameters:", start_date, end_date, city, radius_km)
+        if end_date is None or (isinstance(end_date, str) and not end_date.strip()):
+            end_date = start_date
 
-        if not start_date or not city:
+        print("Detecting fire with params:", start_date, end_date, location, radius_km)
+
+        if not start_date or not location:
             return make_tool_response(
                 tool_name="detect_fire_tool",
                 message=(
-                    "Please specify a city and a date (YYYY-MM-DD, month, or year) in your query."
+                    "Please specify a city and a start_date (YYYY-MM-DD)."
                 ),
-                city=city,
+                location=location,
                 start_date=start_date,
                 end_date=end_date,
                 error=True,
             )
 
-        result = detect_fire_near_city(start_date, end_date, city, radius_km)
+        try:
+            radius_km_f = float(radius_km)
+        except Exception:
+            radius_km_f = 100.0
+
+        result = detect_fire_near_city(start_date, end_date, location, radius_km_f)
         print("Detection result:", result)
         # NO FIRES FOUND
         if not result:
             if start_date == end_date:
                 message = (
-                    f"There were no fires detected near {city} on {start_date} "
-                    f"within a radius of {radius_km} km."
+                    f"There were no fires detected near {location} on {start_date} "
+                    f"within a radius of {radius_km_f} km."
                 )
             else:
                 message = (
-                    f"There were no fires detected near {city} from {start_date} to {end_date} "
-                    f"within a radius of {radius_km} km."
+                    f"There were no fires detected near {location} from {start_date} to {end_date} "
+                    f"within a radius of {radius_km_f} km."
                 )
             coords = None
             try:
-                bbox, lat, lon, city_name_final = get_city_bbox(city)
+                bbox, lat, lon, city_name_final = get_city_bbox(location)
                 if lat is not None and lon is not None:
                     coords = {"lat": float(lat), "lon": float(lon)}
             except Exception:
@@ -241,9 +251,9 @@ def detect_fire_tool(query_text: str) -> dict:
                 message=message,
                 start_date=start_date,
                 end_date=end_date,
-                city=city,
+                city=location,
                 coordinates=coords,
-                data={"radius_km": radius_km, "nb_fires": 0},
+                data={"radius_km": radius_km_f, "nb_fires": 0},
                 error=False,
             )
 
@@ -252,18 +262,18 @@ def detect_fire_tool(query_text: str) -> dict:
 
         if start_date == end_date:
             message = (
-                f"{nb_fires} fire(s) detected near {city} on {start_date} "
-                f"within a radius of {radius_km} km."
+                f"{nb_fires} fire(s) detected near {location} on {start_date} "
+                f"within a radius of {radius_km_f} km."
             )
         else:
             message = (
-                f"{nb_fires} fire(s) detected near {city} from {start_date} to {end_date} "
-                f"within a radius of {radius_km} km."
+                f"{nb_fires} fire(s) detected near {location} from {start_date} to {end_date} "
+                f"within a radius of {radius_km_f} km."
             )
 
         coords = None
         try:
-            bbox, lat, lon, city_name_final = get_city_bbox(city)
+            bbox, lat, lon, city_name_final = get_city_bbox(location)
             if lat is not None and lon is not None:
                 coords = {"lat": float(lat), "lon": float(lon)}
         except Exception:
@@ -303,9 +313,9 @@ def detect_fire_tool(query_text: str) -> dict:
             },
             start_date=start_date,
             end_date=end_date,
-            city=city,
+            city=location,
             coordinates=coords,
-            data={"radius_km": radius_km, "nb_fires": nb_fires},
+            data={"radius_km": radius_km_f, "nb_fires": nb_fires},
             error=False,
         )
 

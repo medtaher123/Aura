@@ -28,11 +28,8 @@ from src.tools.contracts import make_tool_response
 MAPS_DIR = PROJECT_ROOT / "src" / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
-from src.services import (
-    create_agent_executor,
-    detect_and_translate_to_english,
-    translate_from_english,
-)
+from src.services.orchestrator_agent_service import create_orchestrator_executor
+from src.services import detect_and_translate_to_english, translate_from_english
 
 
 def _default_pydeck_map_style() -> str:
@@ -146,7 +143,7 @@ if "messages_en" not in st.session_state:
     st.session_state.messages_en = []
 
 if "agent_executor" not in st.session_state:
-    st.session_state.agent_executor = create_agent_executor()
+    st.session_state.agent_executor = create_orchestrator_executor()
 
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"

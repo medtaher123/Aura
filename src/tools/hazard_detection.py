@@ -1,54 +1,17 @@
 """Hazard tool.
 
 This tool mirrors the structure of other tools in this repo:
-- Parse user intent using `extract_params_from_text`.
 - Query hazard data (Data360 hazards via `data360_hazards`).
 - Return a standardized `make_tool_response` dict.
 """
 
-import re
-
 from langchain.tools import tool
 
 from src.services.bbox_service import get_city_bbox
-from src.services.params_extraction import extract_params_from_text
 
 from .contracts import make_tool_response
 from .data360_hazards import get_hazards, normalize_location_to_iso3
 
-
-
-# ----------------------------------------------------------
-# EXTRA : extraction propre du nombre
-# ----------------------------------------------------------
-
-def extract_n(query: str) -> int:
-    """
-    Détecte :
-    - top 4
-    - top     7
-    - 4 hazards
-    - 3 risks
-    - Tunisia | 5
-    - Paris, 3
-    Sinon : 5 par défaut
-    """
-    # top 4
-    m = re.search(r"top\s+(\d+)", query, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-
-    # 4 hazards
-    m = re.search(r"(\d+)\s+(hazards|risks)", query, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-
-    # fallback nombre simple
-    m = re.search(r"\b(\d+)\b", query)
-    if m:
-        return int(m.group(1))
-
-    return 5
 
 
 # ----------------------------------------------------------
@@ -77,14 +40,14 @@ def get_top_hazards_for_country(country: str, n: int = 5):
 # ----------------------------------------------------------
 
 @tool("query_hazards_tool", return_direct=True)
-def query_hazards_tool(query: str) -> dict:
+def query_hazards_tool(country: str, top_n: int = 5, location: str | None = None) -> dict:
     """
-    Exemples :
-    - "Paris"
-    - "Paris | 5"
-    - "show me 3 hazards in Tunis"
-    - "What are the top 4 risks in Canada?"
-    - "Tokyo | 7"
+    Returns the top hazards for a country based on Data360 hazards.
+
+    Args:
+        country: Country name (e.g., "Japan", "France").
+        top_n: Number of hazards to return.
+        location: Optional location string used only to provide best-effort coordinates for UI context.
     """
 
     if normalize_location_to_iso3 is None or get_hazards is None:
@@ -102,29 +65,25 @@ def query_hazards_tool(query: str) -> dict:
             error=True,
         )
 
-    # --------------------------
-    # 1) Extract params via shared service
-    # --------------------------
-    start_date, end_date, location, country_name, radius_km, disaster_type = extract_params_from_text(query)
-    n = extract_n(query)
-
-    # Prefer explicit country; else treat location as country-like input.
-    country = country_name or location
     if not isinstance(country, str) or not country.strip():
         return make_tool_response(
             tool_name="query_hazards_tool",
             message="Please specify a country (or a location that implies a country) in your query.",
-            start_date=start_date,
-            end_date=end_date,
             city=location,
-            country=country_name,
+            country=country,
             error=True,
         )
     country = country.strip()
+    try:
+        n = int(top_n)
+    except Exception:
+        n = 5
+    if n <= 0:
+        n = 5
 
     # Best-effort coordinates for UI context
     coords = None
-    bbox, lat, lon, city_name_final = get_city_bbox(location or country)
+    bbox, lat, lon, city_name_final = get_city_bbox((location or country))
     try:
         if lat is not None and lon is not None:
             coords = {"lat": float(lat), "lon": float(lon)}
@@ -141,10 +100,8 @@ def query_hazards_tool(query: str) -> dict:
         return make_tool_response(
             tool_name="query_hazards_tool",
             message=f"No hazards found for this location ({clean_address}).",
-            start_date=start_date,
-            end_date=end_date,
             city=location or clean_address,
-            country=country_name or country,
+            country=country,
             coordinates=coords,
             data={"top_n": n, "hazards": []},
             error=False,
@@ -164,10 +121,8 @@ def query_hazards_tool(query: str) -> dict:
     return make_tool_response(
         tool_name="query_hazards_tool",
         message="\n".join(output),
-        start_date=start_date,
-        end_date=end_date,
         city=location or clean_address,
-        country=country_name or country,
+        country=country,
         coordinates=coords,
         data={"top_n": n, "hazards": hazards},
         error=False,
