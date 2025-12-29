@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Callable
 
 from src.tools.contracts import ToolResponse, make_tool_response
 
 
-def invoke_agent(executor: Any, english_query: str, *, chat_history: Any = None) -> Any:
+def invoke_agent(
+    executor: Any,
+    english_query: str,
+    *,
+    chat_history: Any = None,
+    stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Any:
     """
     Single place that defines the agent contract used by the UI:
     - Call: executor.invoke({"input": english_query, "chat_history": [...]})
@@ -15,6 +21,8 @@ def invoke_agent(executor: Any, english_query: str, *, chat_history: Any = None)
     payload: Dict[str, Any] = {"input": english_query}
     if chat_history is not None:
         payload["chat_history"] = chat_history
+    if stream_callback is not None:
+        payload["stream_callback"] = stream_callback
 
     response = executor.invoke(payload)
 

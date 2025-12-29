@@ -36,6 +36,7 @@ class OrchestratorExecutor:
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         user_text = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
         chat_history = inputs.get("chat_history") if isinstance(inputs, dict) else None
+        stream_callback = inputs.get("stream_callback") if isinstance(inputs, dict) else None
         history_text = format_chat_history(chat_history, max_messages=12, max_chars=6000)
 
         augmented_user_text = user_text
@@ -58,16 +59,33 @@ class OrchestratorExecutor:
         needs_data = bool(plan.get("needs_data"))
         needs_analysis = bool(plan.get("needs_analysis"))
         print("[Orchestrator] plan_raw:", str(plan_msg.content))
-        print("[Orchestrator] plan_json:", plan)
         print(f"[Orchestrator] needs_data={needs_data} needs_analysis={needs_analysis}")
         
         data_query = plan.get("data_query") or user_text
         analysis_goal = plan.get("analysis_goal") or ""
 
+        orchestrator_trace = {
+            "needs_data": needs_data,
+            "needs_analysis": needs_analysis,
+            "data_query": data_query,
+            "analysis_goal": analysis_goal,
+        }
+
+        if callable(stream_callback):
+            try:
+                stream_callback({"type": "orchestrator_plan", "trace": orchestrator_trace})
+            except Exception:
+                pass
+
         # 2) DataAgent
         data_response: ToolResponse
         if needs_data:
-            raw = self.data_agent.invoke({"input": data_query, "context": history_text})
+            if callable(stream_callback):
+                try:
+                    stream_callback({"type": "stage", "stage": "data_agent", "message": "Running DataAgent tool steps…"})
+                except Exception:
+                    pass
+            raw = self.data_agent.invoke({"input": data_query, "context": history_text, "stream_callback": stream_callback})
             data_response = raw.get("output", raw) if isinstance(raw, dict) else make_tool_response(
                 tool_name="data_agent",
                 message=str(raw),
@@ -92,15 +110,24 @@ class OrchestratorExecutor:
                     HumanMessage(content=direct_user_text),
                 ]
             )
-            return {"output": make_tool_response(tool_name="orchestrator", message=str(msg.content), error=False)}
+            resp = make_tool_response(tool_name="orchestrator", message=str(msg.content), error=False)
+            resp_data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+            resp["data"] = {**dict(resp_data), "orchestrator_trace": orchestrator_trace}
+            return {"output": resp}
 
         # 4) AnalysisAgent (optional)
         if needs_analysis:
+            if callable(stream_callback):
+                try:
+                    stream_callback({"type": "stage", "stage": "analysis_agent", "message": "Writing analysis based on gathered data…"})
+                except Exception:
+                    pass
             analysis_raw = self.analysis_agent.invoke(
                 {
                     "user_question": f"{user_text}\n\nAnalysis goal: {analysis_goal}".strip(),
                     "data_response": data_response,
                     "context": history_text,
+                    "stream_callback": stream_callback,
                 }
             )
             analysis_resp = analysis_raw.get("output", analysis_raw) if isinstance(analysis_raw, dict) else make_tool_response(
@@ -108,9 +135,16 @@ class OrchestratorExecutor:
                 message=str(analysis_raw),
                 error=False,
             )
+
+            if isinstance(analysis_resp, dict):
+                analysis_data = analysis_resp.get("data") if isinstance(analysis_resp.get("data"), dict) else {}
+                analysis_resp["data"] = {**dict(analysis_data), "orchestrator_trace": orchestrator_trace}
             return {"output": analysis_resp}
 
         # 5) Otherwise: return DataAgent response
+        if isinstance(data_response, dict):
+            data_data = data_response.get("data") if isinstance(data_response.get("data"), dict) else {}
+            data_response["data"] = {**dict(data_data), "orchestrator_trace": orchestrator_trace}
         return {"output": data_response}
 
 

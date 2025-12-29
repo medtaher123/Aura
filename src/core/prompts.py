@@ -36,9 +36,11 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "OUTPUT FORMAT (STRICT):\n"
     "- Return ONLY valid JSON.\n"
     "- No markdown, no backticks, no explanations, no extra keys.\n"
-    "- Must match exactly:\n"
-    "OUTPUT FORMAT (STRICT): return ONLY valid JSON with exactly:\n"
-    '{{\"action\": \"<tool_name or FINAL>\", \"action_input\": <object|string>}}\n'
+    "- Must match exactly one of the following JSON shapes:\n"
+    '  1) {{"action": "<tool_name or FINAL>", "action_input": <object|string>}}\n'
+    '  2) {{"action": "<tool_name or FINAL>", "action_input": <object|string>, "commentary": "<one short sentence>"}}\n'
+    "- `commentary` (if present) MUST be a brief user-facing note about what you are doing (e.g., 'Calling query_stac_catalog to fetch Sentinel-2 thumbnails.').\n"
+    "- Do NOT include hidden reasoning, chain-of-thought, or private notes in `commentary`.\n"
     "\n"
     "When action is FINAL, action_input must be a concise summary of what you found.\n")
 
@@ -55,90 +57,90 @@ Each example uses: one or more tool-call steps, then FINAL.
 Example 1
 User: show me storm events in Germany between 2010 and 2025
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31","country_name":"Germany","disaster_type":"storm"}}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31","country_name":"Germany","disaster_type":"storm"},"commentary":"Calling query_disaster_events_tool to fetch storm events for Germany (2010–2025)."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I retrieved disaster event data for Germany (2010–2025). See the returned map/artifacts if available."}
+{"action":"FINAL","action_input":"I retrieved disaster event data for Germany (2010–2025). See the returned map/artifacts if available.","commentary":"Summarizing the retrieved disaster events."}
 
 Example 2
 User: are there fires in Potsdam in summer 2025 within a 100 km radius
 Step 1 JSON:
-{"action":"detect_fire_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","location":"Potsdam","radius_km":100}}
+{"action":"detect_fire_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","location":"Potsdam","radius_km":100},"commentary":"Calling detect_fire_tool to check fire detections near Potsdam (summer 2025, 100 km)."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I checked fire detections near Potsdam for summer 2025 within 100 km. See the returned fire map/artifacts if available."}
+{"action":"FINAL","action_input":"I checked fire detections near Potsdam for summer 2025 within 100 km. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
 
 Example 3
 User: Show me Sentinel-2 images of Casablanca in September 2025
 Step 1 JSON:
-{"action":"query_stac_catalog","action_input":{"city":"Casablanca","start_date":"2025-09-01","end_date":"2025-09-30","collection":"sentinel-2-l2a"}}
+{"action":"query_stac_catalog","action_input":{"city":"Casablanca","start_date":"2025-09-01","end_date":"2025-09-30","collection":"sentinel-2-l2a"},"commentary":"Calling query_stac_catalog to fetch Sentinel-2 thumbnails for Casablanca (Sep 2025)."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I fetched Sentinel-2 thumbnails for Casablanca in September 2025. See returned thumbnails/artifacts."}
+{"action":"FINAL","action_input":"I fetched Sentinel-2 thumbnails for Casablanca in September 2025. See returned thumbnails/artifacts.","commentary":"Summarizing the retrieved imagery."}
 
 Example 4
 User: What is the weather forecast for New York now?
 Step 1 JSON:
-{"action":"weather_tool","action_input":{"city_name":"New York","forecast_days":1}}
+{"action":"weather_tool","action_input":{"city_name":"New York","forecast_days":1},"commentary":"Calling weather_tool to fetch current weather/forecast for New York."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I fetched the current weather and forecast for New York. See the returned weather data."}
+{"action":"FINAL","action_input":"I fetched the current weather and forecast for New York. See the returned weather data.","commentary":"Summarizing the weather results."}
 
 Example 5
 User: meteo dresden hier?
 Step 1 JSON:
-{"action":"weather_tool","action_input":{"city_name":"Dresden","forecast_days":2}}
+{"action":"weather_tool","action_input":{"city_name":"Dresden","forecast_days":2},"commentary":"Calling weather_tool to fetch a short forecast for Dresden."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I fetched the weather forecast for Dresden. See the returned weather data."}
+{"action":"FINAL","action_input":"I fetched the weather forecast for Dresden. See the returned weather data.","commentary":"Summarizing the weather results."}
 
 Example 6
 User: Are there any extreme temperatures or storms in Tunis last summer?
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"extreme temperature"}}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"extreme temperature"},"commentary":"Fetching extreme temperature disaster events for Tunisia (last summer)."}
 Step 2 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"storm"}}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"storm"},"commentary":"Fetching storm disaster events for Tunisia (last summer)."}
 Step 3 JSON:
-{"action":"FINAL","action_input":"I retrieved extreme temperature and storm disaster events for Tunisia for the requested period. See the returned map/artifacts if available."}
+{"action":"FINAL","action_input":"I retrieved extreme temperature and storm disaster events for Tunisia for the requested period. See the returned map/artifacts if available.","commentary":"Summarizing the disaster event results."}
 
 Example 7
 User: Show me fires and satellite images near Berlin in 2024 within 200km
 Step 1 JSON:
-{"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Berlin","radius_km":200}}
+{"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Berlin","radius_km":200},"commentary":"Calling detect_fire_tool to check fires near Berlin (2024, 200 km)."}
 Step 2 JSON:
-{"action":"query_stac_catalog","action_input":"Sentinel-2 images of Berlin in 2024"}
+{"action":"query_stac_catalog","action_input":"Sentinel-2 images of Berlin in 2024","commentary":"Calling query_stac_catalog to fetch Sentinel-2 thumbnails for Berlin (2024)."}
 Step 3 JSON:
-{"action":"FINAL","action_input":"I gathered fire detections and Sentinel-2 thumbnails for Berlin in 2024 within 200 km. See the returned map and thumbnails."}
+{"action":"FINAL","action_input":"I gathered fire detections and Sentinel-2 thumbnails for Berlin in 2024 within 200 km. See the returned map and thumbnails.","commentary":"Summarizing the gathered fire + imagery results."}
 
 Example 8 
 User: show me the flood mask in geoserver for Casablanca. 
 Step 1 JSON:
-{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"flood","location":"Casablanca","render_mode":"auto"}}
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"flood","location":"Casablanca","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve the flood risk mask for Casablanca."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I retrieved the flood risk mask from GeoServer for Casablanca. See the returned map/artifacts if available."}
+{"action":"FINAL","action_input":"I retrieved the flood risk mask from GeoServer for Casablanca. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer mask retrieval."}
 
 Example 9
 User: Compute an itinerary from Paris to Lyon
 Step 1 JSON:
-{"action":"get_route_info","action_input":{"source":"Paris","destination":"Lyon"}}
+{"action":"get_route_info","action_input":{"source":"Paris","destination":"Lyon"},"commentary":"Calling get_route_info to compute a route from Paris to Lyon."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I computed a driving route from Paris to Lyon. See the returned route map/artifacts and step-by-step instructions."}
+{"action":"FINAL","action_input":"I computed a driving route from Paris to Lyon. See the returned route map/artifacts and step-by-step instructions.","commentary":"Summarizing the route results."}
 
 Example 10
 User: Estimate surface water ingress risk in Paris
 Step 1 JSON:
-{"action":"estimate_surface_water_ingress_tool","action_input":{"location_input":"Paris"}}
+{"action":"estimate_surface_water_ingress_tool","action_input":{"location_input":"Paris"},"commentary":"Calling estimate_surface_water_ingress_tool to estimate ingress risk for Paris."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I estimated surface water ingress risk for Paris and returned risk points and mitigation recommendations. See the returned map/artifacts if available."}
+{"action":"FINAL","action_input":"I estimated surface water ingress risk for Paris and returned risk points and mitigation recommendations. See the returned map/artifacts if available.","commentary":"Summarizing the ingress risk results."}
 
 Example 11
 User: What are the top 3 risks in Japan?
 Step 1 JSON:
-{"action":"query_hazards_tool","action_input":{"country":"Japan","top_n":3}}
+{"action":"query_hazards_tool","action_input":{"country":"Japan","top_n":3},"commentary":"Calling query_hazards_tool to fetch the top hazards for Japan."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I identified the top 3 hazards in Japan based on Data360 data. See the returned hazard list/artifacts if available."}
+{"action":"FINAL","action_input":"I identified the top 3 hazards in Japan based on Data360 data. See the returned hazard list/artifacts if available.","commentary":"Summarizing the hazard results."}
 
 Example 12 (ambiguous / missing info)
 User: Can you check the area for me?
 Step 1 JSON:
-{"action":"general_question_tool","action_input":"Can you check the area for me?"}
+{"action":"general_question_tool","action_input":"Can you check the area for me?","commentary":"Asking a clarifying question because the request is ambiguous."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I need a location and time range (and what you want: fires, floods, imagery, risk mask, etc.) to proceed."}
+{"action":"FINAL","action_input":"I need a location and time range (and what you want: fires, floods, imagery, risk mask, etc.) to proceed.","commentary":"Requesting missing details to proceed."}
 """.strip()
 
 

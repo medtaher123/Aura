@@ -45,20 +45,25 @@ def _extract_json_obj(text: str) -> Optional[dict]:
     return None
 
 
-def _pick_action(plan_text: str) -> Tuple[Optional[str], Any]:
+def _pick_action(plan_text: str) -> Tuple[Optional[str], Any, str]:
     obj = _extract_json_obj(plan_text)
     if not isinstance(obj, dict):
-        return None, None
+        return None, None, ""
     action = obj.get("action")
     action_input = obj.get("action_input")
+    commentary = obj.get("commentary")
     if not isinstance(action, str) or not action.strip():
-        return None, None
+        return None, None, ""
+
+    if not isinstance(commentary, str):
+        commentary = ""
+    commentary = commentary.strip()
 
     # Preserve dict/list inputs so tools with structured args can be called directly.
     # If it's null, keep it as empty string for backward compatibility.
     if action_input is None:
-        return action.strip(), ""
-    return action.strip(), action_input
+        return action.strip(), "", commentary
+    return action.strip(), action_input, commentary
 
 
 def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
@@ -240,7 +245,8 @@ class MultiStepDataAgentExecutor:
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         user_text = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
         context = inputs.get("context") if isinstance(inputs, dict) else None
-        result = self.graph.invoke({"input": user_text, "context": context})
+        stream_callback = inputs.get("stream_callback") if isinstance(inputs, dict) else None
+        result = self.graph.invoke({"input": user_text, "context": context, "stream_callback": stream_callback})
         return {"output": result.get("output", result)}
 
 
@@ -312,7 +318,7 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
 
         plan_text = str(msg.content)
         print("\n[DataAgent] plan_raw:", plan_text)
-        action, action_input = _pick_action(plan_text)
+        action, action_input, commentary = _pick_action(plan_text)
 
         if not action:
             # If planning fails after we already gathered data, finalize with fallback summary.
@@ -341,6 +347,7 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
             next_state.update({
                 "done": True,
                 "final_message": action_input or "",
+                "next_commentary": "",
                 "required_tools": required_tools,
                 "completed_tools": completed_tools,
                 "step_count": step_count,
@@ -358,6 +365,7 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
         next_state.update({
             "next_tool": action,
             "next_input": action_input,
+            "next_commentary": commentary,
             "done": False,
             "required_tools": required_tools,
             "completed_tools": completed_tools,
@@ -376,6 +384,12 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
 
         tool_name = next_state.get("next_tool")
         tool_input = next_state.get("next_input")
+        planner_commentary = next_state.get("next_commentary")
+        stream_callback = next_state.get("stream_callback")
+
+        if not isinstance(planner_commentary, str):
+            planner_commentary = ""
+        planner_commentary = planner_commentary.strip()
 
         if tool_input is None or (isinstance(tool_input, str) and not tool_input.strip()):
             tool_input = user_text
@@ -395,6 +409,19 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
                 )
             )
         else:
+            if callable(stream_callback):
+                try:
+                    stream_callback(
+                        {
+                            "type": "data_agent_step",
+                            "phase": "running",
+                            "tool_name": tool_name,
+                            "commentary": planner_commentary,
+                            "tool_input": tool_input,
+                        }
+                    )
+                except Exception:
+                    pass
             try:
                 raw = _invoke_tool_safely(tool, tool_input)
             except Exception as e:
@@ -406,8 +433,33 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
                 )
 
             coerced = _coerce_tool_response(raw, tool_name=tool_name)
+
+            # Attach safe trace metadata for UI/debugging (do not rely on this for tool correctness).
+            meta = coerced.get("data") if isinstance(coerced.get("data"), dict) else {}
+            meta = dict(meta)
+            meta.setdefault("tool_input", tool_input)
+            if planner_commentary:
+                meta.setdefault("commentary", planner_commentary)
+            coerced["data"] = meta
+
             print(f"[DataAgent] tool_done tool={tool_name} error={coerced.get('error')}")
             steps.append(coerced)
+
+            if callable(stream_callback):
+                try:
+                    stream_callback(
+                        {
+                            "type": "data_agent_step",
+                            "phase": "done",
+                            "tool_name": tool_name,
+                            "commentary": planner_commentary,
+                            "tool_input": tool_input,
+                            "observation": coerced.get("message"),
+                            "error": bool(coerced.get("error")),
+                        }
+                    )
+                except Exception:
+                    pass
 
             # Track completion only for required tools and only if the call succeeded.
             # IMPORTANT: if a required tool fails, don't endlessly retry it.
