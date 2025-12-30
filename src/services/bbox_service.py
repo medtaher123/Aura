@@ -31,3 +31,14 @@ def get_city_bbox(city_name):
                 continue
             print("Error: Failed to get bounding box from Nominatim after multiple attempts.")
             return None, None, None, city_name
+
+def reverse_geocode(lat: float, lon: float):
+    url = "https://nominatim.openstreetmap.org/reverse"
+    params = {"lat": lat, "lon": lon, "format": "json", "zoom": 10, "addressdetails": 1}
+    r = requests.get(url, params=params, headers={"User-Agent": "SurfaceIngressTool"})
+    data = r.json()
+    address = data.get("address", {})
+    city = address.get("city") or address.get("town") or address.get("village") or address.get("hamlet")
+    country = address.get("country")
+    country_code = address.get("country_code")
+    return {"city": city, "country": country, "country_iso": country_code.upper() if country_code else None}

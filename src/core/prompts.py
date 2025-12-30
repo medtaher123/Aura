@@ -57,7 +57,7 @@ Each example uses: one or more tool-call steps, then FINAL.
 Example 1
 User: show me storm events in Germany between 2010 and 2025
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31","country_name":"Germany","disaster_type":"storm"},"commentary":"Calling query_disaster_events_tool to fetch storm events for Germany (2010–2025)."}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31", "country_name":"Germany","location":null, "disaster_type":"storm"},"commentary":"Calling query_disaster_events_tool to fetch storm events for Germany (2010–2025)."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved disaster event data for Germany (2010–2025). See the returned map/artifacts if available.","commentary":"Summarizing the retrieved disaster events."}
 
@@ -92,9 +92,9 @@ Step 2 JSON:
 Example 6
 User: Are there any extreme temperatures or storms in Tunis last summer?
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"extreme temperature"},"commentary":"Fetching extreme temperature disaster events for Tunisia (last summer)."}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia", "location":null, "disaster_type":"extreme temperature"},"commentary":"Fetching extreme temperature disaster events for Tunisia (last summer)."}
 Step 2 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","disaster_type":"storm"},"commentary":"Fetching storm disaster events for Tunisia (last summer)."}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","location":null, "disaster_type":"storm"},"commentary":"Fetching storm disaster events for Tunisia (last summer)."}
 Step 3 JSON:
 {"action":"FINAL","action_input":"I retrieved extreme temperature and storm disaster events for Tunisia for the requested period. See the returned map/artifacts if available.","commentary":"Summarizing the disaster event results."}
 

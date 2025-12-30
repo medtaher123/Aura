@@ -160,6 +160,7 @@ def query_disaster_events_tool(
     start_date: str,
     end_date: str | None,
     country_name: str,
+    location: str | None = None,
     disaster_type: str = "flood",
 ) -> dict:
     """
@@ -168,7 +169,8 @@ def query_disaster_events_tool(
     industrial accident, transport) in a country and for a given date or date range.
     start_date: YYYY-MM-DD
     end_date: YYYY-MM-DD (optional, if not provided, only start_date is used)
-    country_name: Name of the country (e.g., "France", "Japan")
+    location: Specific location within the country if available
+    country_name: Name of the country (e.g., "France", "Japan"), if available else use location to infer country
     disaster_type: Type of disaster to search for (default "flood"). Valid types:
       - flood
       - storm

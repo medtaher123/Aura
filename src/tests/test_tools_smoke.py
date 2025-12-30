@@ -175,6 +175,7 @@ def test_query_disaster_events_tool_smoke(monkeypatch):
         {
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
+            "location": None,
             "country_name": "Germany",
             "disaster_type": "flood",
         }
