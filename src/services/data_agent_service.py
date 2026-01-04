@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, List
 
@@ -18,18 +17,8 @@ def _extract_json_obj(text: str) -> Optional[dict]:
     if not text:
         return None
 
-    # 1) Prefer fenced ```json ... ``` blocks. These may contain nested braces.
-    for m in re.finditer(r"```json\s*(\{.*\})\s*```", str(text), flags=re.DOTALL | re.IGNORECASE):
-        blob = m.group(1).strip()
-        try:
-            obj = json.loads(blob)
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            pass
-
-    # 2) Robust fallback: scan for JSON objects using JSONDecoder.raw_decode.
-    # This handles nested objects unlike the naive non-greedy regex.
+    # Robust: scan for JSON objects using JSONDecoder.raw_decode.
+    # This handles nested objects without regex and tolerates surrounding text.
     dec = json.JSONDecoder()
     s = str(text)
     for i, ch in enumerate(s):
@@ -204,8 +193,90 @@ def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_
     merged_thumbs = dedup(merged_thumbs)
     merged_urls = dedup(merged_urls)
 
-    # Keep legacy string maps first (stable ordering), then structured map specs.
-    merged_maps: list[Any] = [*merged_maps_str, *merged_maps_other]
+    # If multiple tools produced Pydeck/deck.gl-style map specs, combine them into a
+    # single map by concatenating their layers.
+    #
+    # Supported formats:
+    # - Generic: {layers: [{type, data, ...}, ...]}
+    # - Shorthand: {points: [...], ...}  (UI turns this into a ScatterplotLayer)
+    def _is_pydeck_spec(x: Any) -> bool:
+        return isinstance(x, dict) and (
+            isinstance(x.get("layers"), list) or isinstance(x.get("points"), list)
+        )
+
+    pydeck_specs: list[dict] = [m for m in merged_maps_other if _is_pydeck_spec(m)]
+    non_pydeck_specs: list[Any] = [m for m in merged_maps_other if not _is_pydeck_spec(m)]
+
+    def _layers_from_spec(spec: dict) -> list[dict]:
+        layers: list[dict] = []
+        layer_specs = spec.get("layers")
+        if isinstance(layer_specs, list):
+            layers.extend([x for x in layer_specs if isinstance(x, dict)])
+
+        points = spec.get("points")
+        if isinstance(points, list):
+            # Convert shorthand into an explicit ScatterplotLayer spec.
+            layers.append(
+                {
+                    "type": "ScatterplotLayer",
+                    "data": points,
+                    "get_position": spec.get("get_position", "[lon, lat]"),
+                    "get_radius": spec.get("radius", 50),
+                    "radius_units": spec.get("radius_units", "meters"),
+                    "radius_min_pixels": spec.get("radius_min_pixels", 3),
+                    "radius_max_pixels": spec.get("radius_max_pixels", 15),
+                    "get_fill_color": spec.get("fill_color", [255, 0, 0, 160]),
+                    "pickable": bool(spec.get("pickable", True)),
+                }
+            )
+        return layers
+
+    combined_specs: list[Any] = []
+    if len(pydeck_specs) >= 2:
+        base = dict(pydeck_specs[0])
+        combined_layers: list[dict] = []
+        titles: list[str] = []
+
+        # Prefer the first non-empty tooltip.
+        tooltip = base.get("tooltip") if isinstance(base.get("tooltip"), dict) else None
+
+        for spec in pydeck_specs:
+            combined_layers.extend(_layers_from_spec(spec))
+
+            title = spec.get("title")
+            if isinstance(title, str) and title.strip():
+                titles.append(title.strip())
+
+            if tooltip is None and isinstance(spec.get("tooltip"), dict):
+                tooltip = spec.get("tooltip")
+
+        # De-dup titles while preserving order
+        seen_titles = set()
+        titles = [t for t in titles if not (t in seen_titles or seen_titles.add(t))]
+        if titles:
+            base["title"] = " + ".join(titles)
+
+        if tooltip is not None:
+            base["tooltip"] = tooltip
+
+        # Normalize to generic layers form after merge.
+        base.pop("points", None)
+        base.pop("fill_color", None)
+        base.pop("radius", None)
+        base.pop("radius_units", None)
+        base.pop("radius_min_pixels", None)
+        base.pop("radius_max_pixels", None)
+        base.pop("get_position", None)
+        base["layers"] = combined_layers
+
+        combined_specs.append(base)
+    elif len(pydeck_specs) == 1:
+        combined_specs.append(pydeck_specs[0])
+
+    combined_specs.extend(non_pydeck_specs)
+
+    # Keep legacy string maps first (stable ordering), then the combined structured map spec(s).
+    merged_maps: list[Any] = [*merged_maps_str, *combined_specs]
 
     if isinstance(final_message, str) and final_message.strip():
         message = final_message.strip()
@@ -238,6 +309,15 @@ def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_
     )
 
 
+def _tool_call_signature(tool_name: str, tool_input: Any) -> str:
+    """Stable signature for de-duplicating identical tool calls."""
+    try:
+        payload = json.dumps(tool_input, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        payload = str(tool_input)
+    return f"{tool_name}::{payload}"
+
+
 @dataclass
 class MultiStepDataAgentExecutor:
     graph: Any
@@ -250,13 +330,23 @@ class MultiStepDataAgentExecutor:
         return {"output": result.get("output", result)}
 
 
-def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecutor:
+def create_data_agent_executor(
+    max_steps: int = 10,
+    *,
+    llm: Any | None = None,
+    tools: list[Any] | None = None,
+) -> MultiStepDataAgentExecutor:
     # DataAgent should focus on data/tools, not chit-chat or utilities.
     excluded = {"general_question_tool", "calculator", "get_date", "get_time"}
-    tools = [t for t in get_all_tools() if getattr(t, "name", None) not in excluded]
+    if tools is None:
+        tools = [t for t in get_all_tools() if getattr(t, "name", None) not in excluded]
+    else:
+        tools = [t for t in tools if getattr(t, "name", None) not in excluded]
+
     tool_map = {t.name: t for t in tools}
 
-    llm = ChatOllama(model="mistral", temperature=0.1)
+    if llm is None:
+        llm = ChatOllama(model="mistral", temperature=0.1)
     prompt = get_data_agent_react_prompt(list(tool_map.keys()))
 
     graph = StateGraph(dict)
@@ -277,7 +367,8 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
         remaining = [t for t in required_tools if t not in completed_tools]
 
         # Auto-finalize when all required tools ran successfully.
-        if steps and not remaining:
+        # IMPORTANT: only do this if required_tools was explicitly provided.
+        if steps and required_tools and not remaining:
             next_state.update({
                 "done": True,
                 "final_message": "",
@@ -289,8 +380,11 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
 
         history_lines = []
         for i, r in enumerate(steps[-5:], start=1):
+            tool_input = None
+            if isinstance(r.get("data"), dict):
+                tool_input = r.get("data", {}).get("tool_input")
             history_lines.append(
-                f"{i}) tool={r.get('tool_name')} error={r.get('error')} message={r.get('message')}"
+                f"{i}) tool={r.get('tool_name')} error={r.get('error')} input={tool_input} message={r.get('message')}"
             )
         history = "\n".join(history_lines) if history_lines else "(none)"
 
@@ -344,6 +438,19 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
             return next_state
 
         if action.upper() == "FINAL":
+            # If required tools remain, do not accept FINAL yet.
+            if remaining:
+                print(f"[DataAgent] planner returned FINAL but remaining_required={remaining}; continuing")
+                next_state.update({
+                    "next_tool": remaining[0],
+                    "next_input": user_text,
+                    "next_commentary": "",
+                    "done": False,
+                    "required_tools": required_tools,
+                    "completed_tools": completed_tools,
+                    "step_count": step_count,
+                })
+                return next_state
             next_state.update({
                 "done": True,
                 "final_message": action_input or "",
@@ -382,6 +489,9 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
         required_tools: list[str] = next_state.get("required_tools") or []
         completed_tools: list[str] = next_state.get("completed_tools") or []
 
+        executed_sigs: list[str] = next_state.get("executed_tool_call_sigs") or []
+        executed_sig_set = set(executed_sigs)
+
         tool_name = next_state.get("next_tool")
         tool_input = next_state.get("next_input")
         planner_commentary = next_state.get("next_commentary")
@@ -399,6 +509,22 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
             return next_state
 
         tool = tool_map.get(tool_name)
+
+        # De-duplicate exact same tool call (tool + args). This prevents loops where the
+        # planner keeps repeating the same step instead of returning FINAL.
+        sig = _tool_call_signature(tool_name, tool_input)
+        if sig in executed_sig_set and steps:
+            print(f"[DataAgent] duplicate_tool_call skipped sig={sig}")
+            next_state.update({
+                "done": True,
+                "final_message": "",
+                "steps": steps,
+                "step_count": step_count,
+                "required_tools": required_tools,
+                "completed_tools": completed_tools,
+                "executed_tool_call_sigs": executed_sigs,
+            })
+            return next_state
         if tool is None:
             steps.append(
                 make_tool_response(
@@ -445,6 +571,10 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
             print(f"[DataAgent] tool_done tool={tool_name} error={coerced.get('error')}")
             steps.append(coerced)
 
+            if sig not in executed_sig_set:
+                executed_sigs.append(sig)
+                executed_sig_set.add(sig)
+
             if callable(stream_callback):
                 try:
                     stream_callback(
@@ -477,6 +607,7 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
                 "step_count": step_count,
                 "required_tools": required_tools,
                 "completed_tools": completed_tools,
+                "executed_tool_call_sigs": executed_sigs,
             })
             return next_state
 
@@ -485,6 +616,7 @@ def create_data_agent_executor(max_steps: int = 10) -> MultiStepDataAgentExecuto
             "step_count": step_count,
             "required_tools": required_tools,
             "completed_tools": completed_tools,
+            "executed_tool_call_sigs": executed_sigs,
         })
         return next_state
 

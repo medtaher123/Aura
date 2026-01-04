@@ -272,8 +272,52 @@ agent_executor = st.session_state.agent_executor
 # DISPLAY CHAT HISTORY
 # ---------------------------------------------------
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+    role = msg.get("role", "assistant")
+    content = msg.get("content", "")
+    artifacts = msg.get("artifacts") or {}
+    maps = artifacts.get("maps") or []
+    thumbnails = artifacts.get("thumbnails") or []
+    is_error = bool(msg.get("error"))
+
+    with st.chat_message(role):
+        if role == "assistant" and is_error:
+            st.error(content or "An error occurred.")
+        elif role != "assistant":
+            st.write(content)
+        else:
+            # assistant + not error
+            has_map = any(
+                (isinstance(x, str) and x.endswith(".html"))
+                or (
+                    isinstance(x, dict)
+                    and isinstance(x.get("view_state"), dict)
+                    and (isinstance(x.get("points"), list) or isinstance(x.get("layers"), list))
+                )
+                for x in maps
+            )
+
+            if has_map:
+                col_text, col_map = st.columns([2, 3], vertical_alignment="top")
+                with col_text:
+                    st.write(content)
+
+                with col_map:
+                    for item in maps:
+                        if isinstance(item, dict) and isinstance(item.get("view_state"), dict):
+                            _render_pydeck_map_spec(item)
+
+                    if thumbnails:
+                        st.write("### Satellite Images:")
+                        for url in thumbnails:
+                            if isinstance(url, str) and url:
+                                st.image(url, width=300)
+            else:
+                st.write(content)
+                if thumbnails:
+                    st.write("### Satellite Images:")
+                    for url in thumbnails:
+                        if isinstance(url, str) and url:
+                            st.image(url, width=300)    
 
 
 # ---------------------------------------------------
@@ -286,20 +330,16 @@ if user_input:
     with st.chat_message("user"):
         st.write(user_input)
 
-    # Render assistant bubble immediately with a live trace area.
     with st.chat_message("assistant"):
-        # Place the spinner ABOVE the trace.
         with st.spinner("Thinking..."):
             trace_placeholder = st.empty()
             live_callback = _make_live_trace_updater(trace_placeholder)
+
             try:
                 english_query, detected_lang = detect_and_translate_to_english(user_input)
                 st.session_state.last_lang = detected_lang
-
-                # Keep the agent-facing conversation in English.
                 st.session_state.messages_en.append({"role": "user", "content": english_query})
 
-                # Exclude the current user turn from history to avoid duplication.
                 history_for_agent = st.session_state.messages_en[:-1]
                 agent_output = invoke_agent(
                     agent_executor,
@@ -307,88 +347,42 @@ if user_input:
                     chat_history=history_for_agent,
                     stream_callback=live_callback,
                 )
-                result = coerce_tool_response(agent_output)
 
-                assistant_message_en = result.get("message") if isinstance(result, dict) else ""
+                result = coerce_tool_response(agent_output)
+                if not isinstance(result, dict):
+                    result = make_tool_response(
+                        tool_name="ui",
+                        message=str(result),
+                        artifacts={"maps": [], "thumbnails": [], "urls": []},
+                        error=True,
+                    )
+
+                assistant_message_en = result.get("message") or ""
                 if not isinstance(assistant_message_en, str):
                     assistant_message_en = str(assistant_message_en)
 
-                if isinstance(result.get("message"), str):
-                    result["message"] = translate_from_english(result["message"], detected_lang)
+                ui_message = result.get("message") or ""
+                if isinstance(ui_message, str):
+                    ui_message = translate_from_english(ui_message, detected_lang)
 
-                # Persist assistant message in English for future turns.
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": assistant_message_en}
-                )
-
+                st.session_state.messages_en.append({"role": "assistant", "content": assistant_message_en})
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": str(result.get("message", ""))}
+                    {
+                        "role": "assistant",
+                        "content": ui_message,
+                        "artifacts": (result.get("artifacts") or {}),
+                        "error": bool(result.get("error")),
+                    }
                 )
 
             except Exception as e:
-                traceback.print_exc()
                 error_msg = f"❌ Error: {str(e)}"
-                result = make_tool_response(
-                    tool_name="ui",
-                    message=error_msg,
-                    artifacts={"maps": [], "thumbnails": [], "urls": []},
-                    error=True,
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": error_msg, "artifacts": {}, "error": True}
                 )
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
                 st.session_state.messages_en.append({"role": "assistant", "content": error_msg})
 
-        # Clear the live trace once the final answer is ready.
-        trace_placeholder.empty()
+            finally:
+                trace_placeholder.empty()
 
-        if not isinstance(result, dict):
-            result = make_tool_response(
-                tool_name="ui",
-                message=str(result),
-                artifacts={"maps": [], "thumbnails": [], "urls": []},
-                error=True,
-            )
-
-        artifacts = result.get("artifacts") or {}
-        maps = artifacts.get("maps") or []
-        thumbnails = artifacts.get("thumbnails") or []
-
-        has_map = any(
-            (isinstance(x, str) and x.endswith(".html"))
-            or (
-                isinstance(x, dict)
-                and isinstance(x.get("view_state"), dict)
-                and (isinstance(x.get("points"), list) or isinstance(x.get("layers"), list))
-            )
-            for x in maps
-        )
-
-        # Layout: text left, map right when a map exists.
-        if result.get("error") or not has_map:
-            if result.get("error"):
-                st.error(result.get("message") or "An error occurred.")
-            else:
-                st.write(result.get("message") or "")
-
-            # Keep thumbnails visible even when there is no map.
-            if thumbnails:
-                st.write("### Satellite Images:")
-                for url in thumbnails:
-                    if isinstance(url, str) and url:
-                        st.image(url, width=300)
-
-        else:
-            # Give the map more horizontal room.
-            col_text, col_map = st.columns([2, 3], vertical_alignment="top")
-            with col_text:
-                st.write(result.get("message") or "")
-
-            with col_map:
-                for item in maps:
-                    if isinstance(item, dict) and isinstance(item.get("view_state"), dict):
-                        _render_pydeck_map_spec(item)
-
-                if thumbnails:
-                    st.write("### Satellite Images:")
-                    for url in thumbnails:
-                        if isinstance(url, str) and url:
-                            st.image(url, width=300)
+    st.rerun()

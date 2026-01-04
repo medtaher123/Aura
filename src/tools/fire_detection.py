@@ -197,7 +197,7 @@ def detect_fire_tool(
     start_date: str,
     end_date: str | None,
     location: str,
-    radius_km: float = 100,
+    radius_km: float | None = 100,
 ) -> dict:
     """
     Tool to detect fires near a city/country for a given date range and radius.

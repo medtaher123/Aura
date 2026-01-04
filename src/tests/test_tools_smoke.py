@@ -185,6 +185,21 @@ def test_query_disaster_events_tool_smoke(monkeypatch):
     assert resp["error"] is False
     assert resp.get("data", {}).get("events"), "Expected at least one event"
 
+    # Also accept list-valued disaster_type and return events_by_type hashmap
+    resp2 = query_disaster_events_tool.invoke(
+        {
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "location": None,
+            "country_name": "Germany",
+            "disaster_type": ["flood", "storm"],
+        }
+    )
+    assert_tool_response(resp2, "query_disaster_events_tool")
+    assert resp2["error"] is False
+    assert isinstance(resp2.get("data", {}).get("events_by_type"), dict)
+    assert "flood" in resp2.get("data", {}).get("events_by_type", {})
+
 
 def test_estimate_surface_water_ingress_tool_smoke(monkeypatch):
     from src.tools.water_ingress import estimate_surface_water_ingress_tool

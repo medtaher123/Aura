@@ -26,9 +26,10 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "CRITICAL RULES:\n"
     "- If the user query is about GeoServer masks, use the geoserver_risk_mask_tool and do not call other tools.\n"
     "- You may call multiple tools over multiple steps.\n"
-    "- For fires, use only the detect_fire_tool.\n"
+    "- For fires, use the detect_fire_tool.\n"
     "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
+    "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
     "- Use ONLY the listed tools.\n"
     "- If you have enough information to answer, stop.\n"
     "- NEVER invent tool outputs, observations, results, URLs, or data.\n"
@@ -55,11 +56,13 @@ FEW-SHOT EXAMPLES (follow the pattern exactly).
 Each example uses: one or more tool-call steps, then FINAL.
 
 Example 1
-User: show me storm events in Germany between 2010 and 2025
+User: show me storm events in Germany between 2010 and 2025 and fires in Berlin 2024
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31", "country_name":"Germany","location":null, "disaster_type":"storm"},"commentary":"Calling query_disaster_events_tool to fetch storm events for Germany (2010–2025)."}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2010-01-01","end_date":"2025-12-31", "country_name":"Germany","location":null, "disaster_type":["storm"]},"commentary":"Calling query_disaster_events_tool to fetch storm events for Germany (2010–2025)."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I retrieved disaster event data for Germany (2010–2025). See the returned map/artifacts if available.","commentary":"Summarizing the retrieved disaster events."}
+{"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Berlin","radius_km":null},"commentary":"Calling detect_fire_tool to check fire detections near Berlin in 2024."}
+Step 3 JSON:
+{"action":"FINAL","action_input":"I retrieved disaster event data for Germany (2010–2025) and fire detection data for Berlin (2024). See the returned map/artifacts if available.","commentary":"Summarizing the retrieved disaster events and fire detections."}
 
 Example 2
 User: are there fires in Potsdam in summer 2025 within a 100 km radius
@@ -92,10 +95,8 @@ Step 2 JSON:
 Example 6
 User: Are there any extreme temperatures or storms in Tunis last summer?
 Step 1 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia", "location":null, "disaster_type":"extreme temperature"},"commentary":"Fetching extreme temperature disaster events for Tunisia (last summer)."}
+{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia", "location":null, "disaster_type":["extreme temperature","storm"]},"commentary":"Fetching extreme temperature + storm disaster events for Tunisia (last summer)."}
 Step 2 JSON:
-{"action":"query_disaster_events_tool","action_input":{"start_date":"2025-06-01","end_date":"2025-08-31","country_name":"Tunisia","location":null, "disaster_type":"storm"},"commentary":"Fetching storm disaster events for Tunisia (last summer)."}
-Step 3 JSON:
 {"action":"FINAL","action_input":"I retrieved extreme temperature and storm disaster events for Tunisia for the requested period. See the returned map/artifacts if available.","commentary":"Summarizing the disaster event results."}
 
 Example 7
@@ -103,7 +104,7 @@ User: Show me fires and satellite images near Berlin in 2024 within 200km
 Step 1 JSON:
 {"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Berlin","radius_km":200},"commentary":"Calling detect_fire_tool to check fires near Berlin (2024, 200 km)."}
 Step 2 JSON:
-{"action":"query_stac_catalog","action_input":"Sentinel-2 images of Berlin in 2024","commentary":"Calling query_stac_catalog to fetch Sentinel-2 thumbnails for Berlin (2024)."}
+{"action":"query_stac_catalog","action_input":{"city":"Berlin","start_date":"2024-01-01","end_date":"2024-12-31","collection":"sentinel-2-l2a"},"commentary":"Calling query_stac_catalog to fetch Sentinel-2 thumbnails for Berlin (2024)."}
 Step 3 JSON:
 {"action":"FINAL","action_input":"I gathered fire detections and Sentinel-2 thumbnails for Berlin in 2024 within 200 km. See the returned map and thumbnails.","commentary":"Summarizing the gathered fire + imagery results."}
 
@@ -171,7 +172,7 @@ Return ONLY valid JSON with EXACT keys:
 
 Rules:
 - If the user asks to "analyze", "report", "summarize findings", "assess risk", "explain results", set needs_analysis=true.
-- If the user asks to show maps/images/events/weather/risk mask/fires/floods/routes or anything requiring external data, set needs_data=true.
+- If the user asks about disasters( storms, Extreme weather, Earthquakes, floods...)/events/maps/images/weather/risk mask/fires/floods/routes or anything requiring external data, set needs_data=true.
 - If needs_data=false, still set data_query to the original user request (string).
 - If needs_analysis=false, set analysis_goal to "".
 - NEVER invent tool outputs. Only plan.

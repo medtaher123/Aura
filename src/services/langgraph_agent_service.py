@@ -13,23 +13,6 @@ from ..tools.tools import get_all_tools
 from ..tools.contracts import make_tool_response
 
 
-def _coerce_system_prompt(prompt_template: Any) -> str:
-    if prompt_template is None:
-        return ""
-    if isinstance(prompt_template, str):
-        return prompt_template
-
-    prefix = getattr(prompt_template, "prefix", None)
-    if isinstance(prefix, str) and prefix.strip():
-        return prefix
-
-    template = getattr(prompt_template, "template", None)
-    if isinstance(template, str) and template.strip():
-        return template
-
-    return str(prompt_template)
-
-
 def _extract_json_obj(text: str) -> Optional[dict]:
     if not text:
         return None
