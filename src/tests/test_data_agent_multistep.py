@@ -236,3 +236,87 @@ def test_data_agent_merges_structured_maps_into_one():
     dict_maps = [m for m in merged if isinstance(m, dict) and isinstance(m.get("layers"), list)]
     assert len(dict_maps) == 1, dict_maps
     assert len(dict_maps[0]["layers"]) == 2
+
+
+def test_data_agent_pause_and_resume_location_confirmation():
+    """Regression test: DataAgent should pause on location confirmation and resume without restarting."""
+
+    from src.services.data_agent_service import create_data_agent_executor
+    from src.tools.contracts import make_tool_response
+
+    class _Msg:
+        def __init__(self, content: str):
+            self.content = content
+
+    class _PlannerLLM:
+        def __init__(self):
+            self.i = 0
+
+        def invoke(self, _messages):
+            steps = [
+                {
+                    "action": "weather_tool",
+                    "action_input": {"city_name": "Paris", "forecast_days": 2},
+                    "commentary": "Calling weather_tool",
+                },
+                {"action": "FINAL", "action_input": "Done"},
+            ]
+            payload = json.dumps(steps[self.i])
+            self.i = min(self.i + 1, len(steps) - 1)
+            return _Msg(payload)
+
+    class _Tool:
+        def __init__(self, name: str):
+            self.name = name
+            self.calls: list[object] = []
+            self._mode = "pause"
+
+        def invoke(self, tool_input):
+            self.calls.append(tool_input)
+            if self._mode == "pause":
+                return make_tool_response(
+                    tool_name=self.name,
+                    message="Please confirm location",
+                    data={
+                        "needs_location_confirmation": True,
+                        "location_query": "Paris",
+                        "candidates": [
+                            {"display_name": "Paris, France", "name": "Paris", "lat": 48.8, "lon": 2.3, "bbox": [0, 0, 0, 0]},
+                            {"display_name": "Paris, Texas, USA", "name": "Paris", "lat": 33.6, "lon": -95.5, "bbox": [0, 0, 0, 0]},
+                        ],
+                        "resume_patch": {"field": "city_name"},
+                    },
+                    error=True,
+                )
+
+            return make_tool_response(
+                tool_name=self.name,
+                message="ok",
+                artifacts={"maps": [], "thumbnails": [], "urls": []},
+                error=False,
+            )
+
+    llm = _PlannerLLM()
+    tool = _Tool("weather_tool")
+    executor = create_data_agent_executor(max_steps=4, llm=llm, tools=[tool])
+
+    out1 = executor.invoke({"input": "weather"})
+    resp1 = out1["output"]
+    assert resp1.get("data", {}).get("needs_location_confirmation") is True
+    pause = resp1.get("data", {}).get("pause")
+    assert isinstance(pause, dict) and isinstance(pause.get("resume_state"), dict)
+
+    # Simulate user choice and resume.
+    resume_state = dict(pause["resume_state"])
+    next_input = resume_state.get("next_input")
+    if isinstance(next_input, dict):
+        next_input["city_name"] = "Paris, France"
+    else:
+        resume_state["next_input"] = {"city_name": "Paris, France"}
+
+    tool._mode = "ok"
+    out2 = executor.invoke({"resume_state": resume_state})
+    resp2 = out2["output"]
+    # Underlying tool should have been called twice total (pause + resume)
+    assert len(tool.calls) == 2
+    assert resp2.get("error") in (False, True)

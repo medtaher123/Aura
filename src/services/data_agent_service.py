@@ -323,6 +323,15 @@ class MultiStepDataAgentExecutor:
     graph: Any
 
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(inputs, dict) and isinstance(inputs.get("resume_state"), dict):
+            # Resume from a previously paused state (e.g., location confirmation).
+            state = dict(inputs["resume_state"])
+            stream_callback = inputs.get("stream_callback")
+            if stream_callback is not None:
+                state["stream_callback"] = stream_callback
+            result = self.graph.invoke(state)
+            return {"output": result.get("output", result)}
+
         user_text = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
         context = inputs.get("context") if isinstance(inputs, dict) else None
         stream_callback = inputs.get("stream_callback") if isinstance(inputs, dict) else None
@@ -351,15 +360,48 @@ def create_data_agent_executor(
 
     graph = StateGraph(dict)
 
+    def _norm_key(s: str) -> str:
+        return " ".join(str(s).strip().lower().split())
+
+    def _apply_confirmed_locations(obj: Any, confirmed: dict[str, str]) -> Any:
+        if not confirmed:
+            return obj
+        if isinstance(obj, str):
+            k = _norm_key(obj)
+            if k in confirmed and not obj.startswith("@"):
+                return confirmed[k]
+            return obj
+        if isinstance(obj, list):
+            return [_apply_confirmed_locations(x, confirmed) for x in obj]
+        if isinstance(obj, dict):
+            return {k: _apply_confirmed_locations(v, confirmed) for k, v in obj.items()}
+        return obj
+
     def plan_node(state: dict) -> dict:
         # IMPORTANT: With a dict-typed StateGraph, returning partial dicts can
         # overwrite state. Always carry forward existing keys.
         next_state = dict(state)
 
+        # Resume path: when we paused on a tool call (e.g. ambiguous geocoding),
+        # we want to jump straight back to the tool without calling the planner LLM.
+        if next_state.get("resume_from_pause") and isinstance(next_state.get("next_tool"), str):
+            next_state["resume_from_pause"] = False
+            next_state["done"] = False
+            return next_state
+
         user_text = next_state.get("input", "") or ""
         context = next_state.get("context") or ""
         steps: list[ToolResponse] = next_state.get("steps", []) or []
         step_count = int(next_state.get("step_count", 0))
+
+        confirmed_locations = next_state.get("confirmed_locations")
+        if not isinstance(confirmed_locations, dict):
+            confirmed_locations = {}
+        # Normalize keys once.
+        confirmed_locations_norm: dict[str, str] = {}
+        for k, v in confirmed_locations.items():
+            if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip():
+                confirmed_locations_norm[_norm_key(k)] = v
 
         required_tools: list[str] = next_state.get("required_tools") or []
         completed_tools: list[str] = next_state.get("completed_tools") or []
@@ -413,6 +455,11 @@ def create_data_agent_executor(
         plan_text = str(msg.content)
         print("\n[DataAgent] plan_raw:", plan_text)
         action, action_input, commentary = _pick_action(plan_text)
+
+        # If we already confirmed ambiguous locations earlier in this run, apply the
+        # same resolution to future tool inputs to avoid re-triggering confirmation.
+        if confirmed_locations_norm:
+            action_input = _apply_confirmed_locations(action_input, confirmed_locations_norm)
 
         if not action:
             # If planning fails after we already gathered data, finalize with fallback summary.
@@ -568,6 +615,39 @@ def create_data_agent_executor(
                 meta.setdefault("commentary", planner_commentary)
             coerced["data"] = meta
 
+            # Pause point: let the UI ask the user to disambiguate the location,
+            # then resume from this exact tool call (without re-running prior steps).
+            if bool(meta.get("needs_location_confirmation")) is True:
+                paused_state = dict(next_state)
+                paused_state.pop("stream_callback", None)  # not serializable
+                paused_state.pop("output", None)
+                paused_state.pop("pause", None)
+                paused_state["done"] = False
+                paused_state["final_message"] = ""
+                paused_state["resume_from_pause"] = True
+
+                pause_payload = {
+                    "resume_state": paused_state,
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                }
+
+                next_state["pause"] = {"tool_response": coerced, "pause": pause_payload}
+                next_state["done"] = True
+                next_state["final_message"] = ""
+
+                if callable(stream_callback):
+                    try:
+                        stream_callback(
+                            {
+                                "type": "data_agent_finalizing",
+                                "message": "Waiting for location confirmation…",
+                            }
+                        )
+                    except Exception:
+                        pass
+                return next_state
+
             print(f"[DataAgent] tool_done tool={tool_name} error={coerced.get('error')}")
             steps.append(coerced)
 
@@ -621,6 +701,20 @@ def create_data_agent_executor(
         return next_state
 
     def finalize_node(state: dict) -> dict:
+        # If the agent paused (e.g. location confirmation), return that tool response
+        # directly (do not merge as final answer), and attach a resumable state blob.
+        pause = state.get("pause")
+        if isinstance(pause, dict) and isinstance(pause.get("tool_response"), dict) and isinstance(pause.get("pause"), dict):
+            tool_resp = dict(pause["tool_response"])
+            tool_data = tool_resp.get("data") if isinstance(tool_resp.get("data"), dict) else {}
+            tool_data = dict(tool_data)
+            tool_data["pause"] = pause["pause"]
+            tool_resp["data"] = tool_data
+
+            next_state = dict(state)
+            next_state["output"] = tool_resp
+            return next_state
+
         user_text = state.get("input", "") or ""
         steps: list[ToolResponse] = state.get("steps", []) or []
         final_message = state.get("final_message")

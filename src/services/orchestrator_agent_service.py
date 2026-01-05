@@ -39,6 +39,77 @@ class OrchestratorExecutor:
         stream_callback = inputs.get("stream_callback") if isinstance(inputs, dict) else None
         history_text = format_chat_history(chat_history, max_messages=12, max_chars=6000)
 
+        # Resume path: continue from a paused DataAgent state without replanning.
+        resume = inputs.get("resume") if isinstance(inputs, dict) else None
+        if isinstance(resume, dict) and isinstance(resume.get("resume_state"), dict):
+            resume_state = resume.get("resume_state")
+            orchestrator_trace = resume.get("orchestrator_trace") if isinstance(resume.get("orchestrator_trace"), dict) else {}
+            needs_analysis = bool(resume.get("needs_analysis") or orchestrator_trace.get("needs_analysis"))
+            analysis_goal = resume.get("analysis_goal") or orchestrator_trace.get("analysis_goal") or ""
+            original_user_text = resume.get("user_text") or user_text
+
+            if callable(stream_callback):
+                try:
+                    stream_callback({"type": "stage", "stage": "data_agent", "message": "Resuming DataAgent…"})
+                except Exception:
+                    pass
+
+            raw = self.data_agent.invoke({"resume_state": resume_state, "stream_callback": stream_callback})
+            data_response = raw.get("output", raw) if isinstance(raw, dict) else make_tool_response(
+                tool_name="data_agent",
+                message=str(raw),
+                error=False,
+            )
+
+            # If we paused again (multiple ambiguous locations), return immediately.
+            if isinstance(data_response, dict):
+                data_data = data_response.get("data") if isinstance(data_response.get("data"), dict) else {}
+                if bool(data_data.get("needs_location_confirmation")) is True:
+                    pause = data_data.get("pause") if isinstance(data_data.get("pause"), dict) else {}
+                    data_response["data"] = {
+                        **dict(data_data),
+                        "orchestrator_trace": orchestrator_trace,
+                        "pause": {
+                            **dict(pause),
+                            "orchestrator_trace": orchestrator_trace,
+                            "needs_analysis": needs_analysis,
+                            "analysis_goal": analysis_goal,
+                            "user_text": original_user_text,
+                        },
+                    }
+                    return {"output": data_response}
+
+            # AnalysisAgent (optional) after data completes.
+            if needs_analysis:
+                if callable(stream_callback):
+                    try:
+                        stream_callback({"type": "stage", "stage": "analysis_agent", "message": "Writing analysis based on gathered data…"})
+                    except Exception:
+                        pass
+                analysis_raw = self.analysis_agent.invoke(
+                    {
+                        "user_question": f"{original_user_text}\n\nAnalysis goal: {analysis_goal}".strip(),
+                        "data_response": data_response,
+                        "context": history_text,
+                        "stream_callback": stream_callback,
+                    }
+                )
+                analysis_resp = analysis_raw.get("output", analysis_raw) if isinstance(analysis_raw, dict) else make_tool_response(
+                    tool_name="analysis_agent",
+                    message=str(analysis_raw),
+                    error=False,
+                )
+
+                if isinstance(analysis_resp, dict):
+                    analysis_data = analysis_resp.get("data") if isinstance(analysis_resp.get("data"), dict) else {}
+                    analysis_resp["data"] = {**dict(analysis_data), "orchestrator_trace": orchestrator_trace}
+                return {"output": analysis_resp}
+
+            if isinstance(data_response, dict):
+                data_data = data_response.get("data") if isinstance(data_response.get("data"), dict) else {}
+                data_response["data"] = {**dict(data_data), "orchestrator_trace": orchestrator_trace}
+            return {"output": data_response}
+
         augmented_user_text = user_text
         if history_text:
             augmented_user_text = (
@@ -98,6 +169,25 @@ class OrchestratorExecutor:
                 message=user_text,  # placeholder; next step will answer properly
                 error=False,
             )
+
+        # If DataAgent paused (e.g. location confirmation), return immediately and
+        # attach orchestrator metadata so the UI can resume without replanning.
+        if isinstance(data_response, dict):
+            data_data = data_response.get("data") if isinstance(data_response.get("data"), dict) else {}
+            if bool(data_data.get("needs_location_confirmation")) is True:
+                pause = data_data.get("pause") if isinstance(data_data.get("pause"), dict) else {}
+                data_response["data"] = {
+                    **dict(data_data),
+                    "orchestrator_trace": orchestrator_trace,
+                    "pause": {
+                        **dict(pause),
+                        "orchestrator_trace": orchestrator_trace,
+                        "needs_analysis": needs_analysis,
+                        "analysis_goal": analysis_goal,
+                        "user_text": user_text,
+                    },
+                }
+                return {"output": data_response}
 
         # 3) If no data needed and no analysis needed: answer directly (no tools)
         if not needs_data and not needs_analysis:

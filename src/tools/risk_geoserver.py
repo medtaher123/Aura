@@ -11,7 +11,7 @@ from langchain.tools import tool
 from .contracts import make_tool_response
 from shapely.geometry import shape
 
-from src.services.bbox_service import get_city_bbox
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 
 
 GEOSERVER_BASE_URL = os.getenv(
@@ -81,11 +81,16 @@ def _ensure_bbox(filters: dict[str, Any]) -> None:
     if not isinstance(location, str) or not location.strip():
         return
 
-    bbox_result = get_city_bbox(location.strip())
-    if bbox_result and len(bbox_result) == 5:
-        min_lon, min_lat, max_lon, max_lat, _ = bbox_result
-        if None not in (min_lon, min_lat, max_lon, max_lat):
-            filters["bbox"] = [float(min_lon), float(min_lat), float(max_lon), float(max_lat)]
+    bbox_raw, lat, lon, _ = get_city_bbox(location.strip(), require_confirmation=True)
+    if bbox_raw and len(bbox_raw) == 4:
+        try:
+            min_lat = float(bbox_raw[0])
+            max_lat = float(bbox_raw[1])
+            min_lon = float(bbox_raw[2])
+            max_lon = float(bbox_raw[3])
+            filters["bbox"] = [min_lon, min_lat, max_lon, max_lat]
+        except Exception:
+            return
 
 
 def _wfs_get_features(
@@ -215,7 +220,21 @@ def geoserver_risk_mask_tool(
             except Exception:
                 filters["bbox"] = None
 
-        _ensure_bbox(filters)
+        try:
+            _ensure_bbox(filters)
+        except LocationAmbiguousError as e:
+            return make_tool_response(
+                tool_name="geoserver_risk_mask_tool",
+                message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+                city=location,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": "location"},
+                },
+                error=True,
+            )
         cql = _build_cql_filter(filters)
         layer_name = str(filters["layer_name"])
         limit = int(filters.get("limit") or 500)

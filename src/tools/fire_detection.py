@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import os
 from pathlib import Path
-from src.services.bbox_service import get_city_bbox
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 from langchain.tools import tool
 from .contracts import make_tool_response
 
@@ -112,7 +112,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
-    bbox, lat_city, lon_city, city_name_final = get_city_bbox(city_name)
+    bbox, lat_city, lon_city, city_name_final = get_city_bbox(city_name, require_confirmation=True)
     print("City coordinates:", lat_city, lon_city)
     if lat_city is None:
         raise GeocodingError(
@@ -126,6 +126,9 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         raise GeocodingError(
             f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
         )
+
+    coords = {"lat": lat_city_f, "lon": lon_city_f}
+    resolved_name = city_name_final or city_name
 
     use_api = should_use_api(start_date, end_date)
 
@@ -147,12 +150,12 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     # Ensure date column exists
     if "acq_date" not in df.columns:
         print("Date column 'acq_date' not found in data.")
-        return None
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
 
     # Ensure required coordinate columns exist and are numeric
     if "latitude" not in df.columns or "longitude" not in df.columns:
         print("Latitude/longitude columns not found in data.")
-        return None
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
 
     df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
@@ -163,7 +166,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         (df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)
     ].copy()
     if df.empty:
-        return None
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
 
     df["distance"] = haversine(
         lat_city_f,
@@ -174,7 +177,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     df_filtered = df[df["distance"] <= radius_km]
 
     if df_filtered.empty:
-        return None
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
 
     points = [
         {
@@ -186,7 +189,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         }
         for _, row in df_filtered.iterrows()
     ]
-    return points, len(df_filtered)
+    return {"points": points, "nb_fires": len(df_filtered), "coords": coords, "location_name": resolved_name}
 
 
 
@@ -227,57 +230,50 @@ def detect_fire_tool(
 
         result = detect_fire_near_city(start_date, end_date, location, radius_km_f)
         print("Detection result:", result)
+        points = result.get("points") if isinstance(result, dict) else None
+        nb_fires = result.get("nb_fires") if isinstance(result, dict) else None
+        coords = result.get("coords") if isinstance(result, dict) else None
+        location_name = result.get("location_name") if isinstance(result, dict) else None
+
+        display_location = location_name if isinstance(location_name, str) and location_name.strip() else location
+
         # NO FIRES FOUND
-        if not result:
+        if not nb_fires:
             if start_date == end_date:
                 message = (
-                    f"There were no fires detected near {location} on {start_date} "
+                    f"There were no fires detected near {display_location} on {start_date} "
                     f"within a radius of {radius_km_f} km."
                 )
             else:
                 message = (
-                    f"There were no fires detected near {location} from {start_date} to {end_date} "
+                    f"There were no fires detected near {display_location} from {start_date} to {end_date} "
                     f"within a radius of {radius_km_f} km."
                 )
-            coords = None
-            try:
-                bbox, lat, lon, city_name_final = get_city_bbox(location)
-                if lat is not None and lon is not None:
-                    coords = {"lat": float(lat), "lon": float(lon)}
-            except Exception:
-                coords = None
             return make_tool_response(
                 tool_name="detect_fire_tool",
                 message=message,
                 start_date=start_date,
                 end_date=end_date,
-                city=location,
+                city=display_location,
                 coordinates=coords,
                 data={"radius_km": radius_km_f, "nb_fires": 0},
                 error=False,
             )
 
         # FIRES FOUND
-        points, nb_fires = result
+        points = points or []
+        nb_fires = int(nb_fires)
 
         if start_date == end_date:
             message = (
-                f"{nb_fires} fire(s) detected near {location} on {start_date} "
+                f"{nb_fires} fire(s) detected near {display_location} on {start_date} "
                 f"within a radius of {radius_km_f} km."
             )
         else:
             message = (
-                f"{nb_fires} fire(s) detected near {location} from {start_date} to {end_date} "
+                f"{nb_fires} fire(s) detected near {display_location} from {start_date} to {end_date} "
                 f"within a radius of {radius_km_f} km."
             )
-
-        coords = None
-        try:
-            bbox, lat, lon, city_name_final = get_city_bbox(location)
-            if lat is not None and lon is not None:
-                coords = {"lat": float(lat), "lon": float(lon)}
-        except Exception:
-            coords = None
 
         # Build a structured map spec that the UI can render with Pydeck.
         view_state = None
@@ -313,7 +309,7 @@ def detect_fire_tool(
             },
             start_date=start_date,
             end_date=end_date,
-            city=location,
+            city=display_location,
             coordinates=coords,
             data={"radius_km": radius_km_f, "nb_fires": nb_fires},
             error=False,
@@ -323,6 +319,21 @@ def detect_fire_tool(
         return make_tool_response(
             tool_name="detect_fire_tool",
             message=str(e),
+            error=True,
+        )
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="detect_fire_tool",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+            city=location,
+            start_date=start_date,
+            end_date=end_date,
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "location"},
+            },
             error=True,
         )
     except Exception as e:

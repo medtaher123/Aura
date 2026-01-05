@@ -4,16 +4,14 @@ from langchain.tools import tool
 
 from .contracts import make_tool_response
 
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
+
 # Geocoding via Nominatim (OpenStreetMap)
 def geocode_place(place_name):
-    url = "https://nominatim.openstreetmap.org/search"
-    params = {"q": place_name, "format": "json", "limit": 3}
-    r = requests.get(url, params=params, headers={"User-Agent": "route-steps-app"})
-    r.raise_for_status()
-    data = r.json()
-    if not data:
+    bbox, lat, lon, _ = get_city_bbox(place_name, require_confirmation=True)
+    if lat is None or lon is None:
         return None, None
-    return float(data[0]["lat"]), float(data[0]["lon"])
+    return float(lat), float(lon)
 
 
 # Route via OSRM (driving)
@@ -165,8 +163,41 @@ def get_route_info(source: str | None = None, destination: str | None = None, qu
             error=True,
         )
 
-    lat1, lon1 = geocode_place(start)
-    lat2, lon2 = geocode_place(end)
+    try:
+        lat1, lon1 = geocode_place(start)
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct start location.",
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "source"},
+                "source": source,
+                "destination": destination,
+                "query": query,
+            },
+            error=True,
+        )
+
+    try:
+        lat2, lon2 = geocode_place(end)
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct destination location.",
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "destination"},
+                "source": source,
+                "destination": destination,
+                "query": query,
+            },
+            error=True,
+        )
     if not lat1 or not lon1 or not lat2 or not lon2:
         return make_tool_response(
             tool_name="get_route_info",

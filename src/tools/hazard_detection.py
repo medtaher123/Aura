@@ -7,7 +7,7 @@ This tool mirrors the structure of other tools in this repo:
 
 from langchain.tools import tool
 
-from src.services.bbox_service import get_city_bbox
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 
 from .contracts import make_tool_response
 from .data360_hazards import get_hazards, normalize_location_to_iso3
@@ -83,7 +83,24 @@ def query_hazards_tool(country: str, top_n: int = 5, location: str | None = None
 
     # Best-effort coordinates for UI context
     coords = None
-    bbox, lat, lon, city_name_final = get_city_bbox((location or country))
+    location_query = (location or country)
+    patch_field = "location" if isinstance(location, str) and location.strip() else "country"
+    try:
+        bbox, lat, lon, city_name_final = get_city_bbox(location_query, require_confirmation=True)
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="query_hazards_tool",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+            city=location_query,
+            country=country,
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": patch_field},
+            },
+            error=True,
+        )
     try:
         if lat is not None and lon is not None:
             coords = {"lat": float(lat), "lon": float(lon)}

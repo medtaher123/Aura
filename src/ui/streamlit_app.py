@@ -265,6 +265,17 @@ if "agent_executor" not in st.session_state:
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
 
+if "pending_location_confirmation" not in st.session_state:
+    st.session_state.pending_location_confirmation = None
+
+if "confirmed_locations" not in st.session_state:
+    # Map normalized location_query -> {"token": str, "display": str}
+    st.session_state.confirmed_locations = {}
+
+if "auto_confirm_attempts" not in st.session_state:
+    # Map normalized location_query -> int attempts in current session
+    st.session_state.auto_confirm_attempts = {}
+
 agent_executor = st.session_state.agent_executor
 
 
@@ -323,7 +334,273 @@ for msg in st.session_state.messages:
 # ---------------------------------------------------
 # CHAT INPUT
 # ---------------------------------------------------
-user_input = st.chat_input("Ask me anything about Earth observation or STAC...")
+pending = st.session_state.pending_location_confirmation
+
+if isinstance(pending, dict) and pending.get("candidates"):
+    st.info("Please confirm the intended location to continue.")
+    location_query = pending.get("location_query") if isinstance(pending.get("location_query"), str) else None
+    norm_key = " ".join(location_query.lower().split()) if isinstance(location_query, str) else None
+
+    # If we've already confirmed this exact ambiguous query earlier in the session,
+    # auto-apply the same choice to avoid asking repeatedly (common when multiple
+    # tools need the same city).
+    cached = st.session_state.confirmed_locations.get(norm_key) if norm_key else None
+    attempts = st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
+    if isinstance(cached, dict) and isinstance(cached.get("token"), str) and norm_key and attempts < 1:
+        resume = pending.get("pause") if isinstance(pending.get("pause"), dict) else {}
+        resume_state = resume.get("resume_state") if isinstance(resume.get("resume_state"), dict) else None
+        resume_patch = pending.get("resume_patch") if isinstance(pending.get("resume_patch"), dict) else {}
+        field = resume_patch.get("field")
+        patched_value = cached.get("token")
+
+        if isinstance(resume_state, dict):
+            next_input = resume_state.get("next_input")
+            if isinstance(field, str) and field.strip():
+                if isinstance(next_input, dict):
+                    next_input[field] = patched_value
+                else:
+                    resume_state["next_input"] = {field: patched_value}
+            else:
+                resume_state["next_input"] = patched_value
+
+            confirmed = resume_state.get("confirmed_locations")
+            if not isinstance(confirmed, dict):
+                confirmed = {}
+            confirmed[norm_key] = patched_value
+            resume_state["confirmed_locations"] = confirmed
+            resume["resume_state"] = resume_state
+
+        st.session_state.auto_confirm_attempts[norm_key] = attempts + 1
+        st.session_state.pending_location_confirmation = None
+
+        with st.chat_message("assistant"):
+            with st.spinner("Continuing..."):
+                trace_placeholder = st.empty()
+                live_callback = _make_live_trace_updater(trace_placeholder)
+                try:
+                    english_query = resume.get("user_text") or ""
+                    history_for_agent = st.session_state.messages_en
+                    agent_output = invoke_agent(
+                        agent_executor,
+                        english_query,
+                        chat_history=history_for_agent,
+                        resume=resume,
+                        stream_callback=live_callback,
+                    )
+
+                    result = coerce_tool_response(agent_output)
+                    if not isinstance(result, dict):
+                        result = make_tool_response(
+                            tool_name="ui",
+                            message=str(result),
+                            artifacts={"maps": [], "thumbnails": [], "urls": []},
+                            error=True,
+                        )
+
+                    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                    if bool(data.get("needs_location_confirmation")) is True:
+                        st.session_state.pending_location_confirmation = data
+
+                    detected_lang = st.session_state.last_lang or "en"
+                    assistant_message_en = result.get("message") or ""
+                    if not isinstance(assistant_message_en, str):
+                        assistant_message_en = str(assistant_message_en)
+
+                    ui_message = result.get("message") or ""
+                    if isinstance(ui_message, str):
+                        ui_message = translate_from_english(ui_message, detected_lang)
+
+                    st.session_state.messages_en.append({"role": "assistant", "content": assistant_message_en})
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": ui_message,
+                            "artifacts": (result.get("artifacts") or {}),
+                            "error": bool(result.get("error")),
+                        }
+                    )
+                except Exception as e:
+                    error_msg = f"❌ Error: {str(e)}"
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": error_msg, "artifacts": {}, "error": True}
+                    )
+                    st.session_state.messages_en.append({"role": "assistant", "content": error_msg})
+                finally:
+                    trace_placeholder.empty()
+
+        st.rerun()
+
+    candidates = pending.get("candidates") or []
+    if not isinstance(candidates, list):
+        candidates = []
+
+    def _candidate_label(c: dict) -> str:
+        display = str(c.get("display_name") or c.get("name") or "(unknown)")
+        lat = c.get("lat")
+        lon = c.get("lon")
+        pid = c.get("place_id")
+        suffix_parts: list[str] = []
+        try:
+            if lat is not None and lon is not None:
+                suffix_parts.append(f"{float(lat):.4f}, {float(lon):.4f}")
+        except Exception:
+            pass
+        if pid is not None:
+            suffix_parts.append(f"place_id={pid}")
+        if suffix_parts:
+            return f"{display} ({' | '.join(suffix_parts)})"
+        return display
+
+    option_indices = list(range(len(candidates)))
+
+    with st.form("location_confirmation_form"):
+        choice_idx = st.radio(
+            "Select a location",
+            options=option_indices,
+            index=0,
+            format_func=lambda i: _candidate_label(candidates[i]) if 0 <= i < len(candidates) and isinstance(candidates[i], dict) else str(i),
+        )
+        submitted = st.form_submit_button("Confirm location")
+
+    if submitted:
+        chosen = candidates[choice_idx] if isinstance(choice_idx, int) and 0 <= choice_idx < len(candidates) else None
+        chosen_display = None
+        chosen_token = None
+        if isinstance(chosen, dict):
+            chosen_display = str(chosen.get("display_name") or chosen.get("name") or "")
+            osm_type = chosen.get("osm_type")
+            osm_id = chosen.get("osm_id")
+            if osm_type in {"relation", "way", "node"} and osm_id is not None:
+                prefix = {"relation": "R", "way": "W", "node": "N"}.get(osm_type)
+                if prefix:
+                    chosen_token = f"@osm_id:{prefix}{int(osm_id)}"
+            if not chosen_token:
+                pid = chosen.get("place_id")
+                if pid is not None:
+                    chosen_token = f"@place_id:{pid}"
+
+        resume = pending.get("pause") if isinstance(pending.get("pause"), dict) else {}
+        resume_state = resume.get("resume_state") if isinstance(resume.get("resume_state"), dict) else None
+        resume_patch = pending.get("resume_patch") if isinstance(pending.get("resume_patch"), dict) else {}
+        field = resume_patch.get("field")
+
+        # Prefer a stable token that resolves to the exact chosen place.
+        patched_value = chosen_token or chosen_display or ""
+
+        # Cache confirmation for this query so other tools can reuse it.
+        if norm_key:
+            display_val = chosen_display or patched_value
+            # Store under both the full query and its base token (before comma)
+            # to handle cases like "Paris" vs "Paris, France".
+            base_key = norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+            for k in {norm_key, base_key}:
+                if k:
+                    st.session_state.confirmed_locations[k] = {
+                        "token": patched_value,
+                        "display": display_val,
+                    }
+            # Reset auto-confirm attempts after an explicit choice.
+            st.session_state.auto_confirm_attempts[norm_key] = 0
+            if base_key != norm_key:
+                st.session_state.auto_confirm_attempts[base_key] = 0
+
+        if isinstance(resume_state, dict):
+            next_input = resume_state.get("next_input")
+            if isinstance(field, str) and field.strip():
+                if isinstance(next_input, dict):
+                    next_input[field] = patched_value
+                else:
+                    resume_state["next_input"] = {field: patched_value}
+            else:
+                # Fallback: replace next_input entirely.
+                resume_state["next_input"] = patched_value
+
+            # Persist confirmed disambiguations into the agent state so later planner
+            # steps can reuse them (avoid re-asking for the same city).
+            if norm_key:
+                confirmed = resume_state.get("confirmed_locations")
+                if not isinstance(confirmed, dict):
+                    confirmed = {}
+                confirmed[norm_key] = patched_value
+                base_key = norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+                if base_key and base_key != norm_key:
+                    confirmed[base_key] = patched_value
+                resume_state["confirmed_locations"] = confirmed
+
+            resume["resume_state"] = resume_state
+
+        # Append a short confirmation message to chat history for user visibility.
+        detected_lang = st.session_state.last_lang or "en"
+        confirm_en = f"Confirmed location: {chosen_display or patched_value}"
+        confirm_ui = translate_from_english(confirm_en, detected_lang) if detected_lang != "en" else confirm_en
+        st.session_state.messages.append({"role": "user", "content": confirm_ui})
+        st.session_state.messages_en.append({"role": "user", "content": confirm_en})
+
+        # Clear pending state before resuming.
+        st.session_state.pending_location_confirmation = None
+
+        with st.chat_message("assistant"):
+            with st.spinner("Continuing..."):
+                trace_placeholder = st.empty()
+                live_callback = _make_live_trace_updater(trace_placeholder)
+                try:
+                    english_query = resume.get("user_text") or ""
+                    history_for_agent = st.session_state.messages_en[:-1]
+                    agent_output = invoke_agent(
+                        agent_executor,
+                        english_query,
+                        chat_history=history_for_agent,
+                        resume=resume,
+                        stream_callback=live_callback,
+                    )
+
+                    result = coerce_tool_response(agent_output)
+                    if not isinstance(result, dict):
+                        result = make_tool_response(
+                            tool_name="ui",
+                            message=str(result),
+                            artifacts={"maps": [], "thumbnails": [], "urls": []},
+                            error=True,
+                        )
+
+                    # If we paused again, store pending and show the prompt.
+                    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                    if bool(data.get("needs_location_confirmation")) is True:
+                        st.session_state.pending_location_confirmation = data
+
+                    assistant_message_en = result.get("message") or ""
+                    if not isinstance(assistant_message_en, str):
+                        assistant_message_en = str(assistant_message_en)
+
+                    ui_message = result.get("message") or ""
+                    if isinstance(ui_message, str):
+                        ui_message = translate_from_english(ui_message, detected_lang)
+
+                    st.session_state.messages_en.append({"role": "assistant", "content": assistant_message_en})
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": ui_message,
+                            "artifacts": (result.get("artifacts") or {}),
+                            "error": bool(result.get("error")),
+                        }
+                    )
+                except Exception as e:
+                    error_msg = f"❌ Error: {str(e)}"
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": error_msg, "artifacts": {}, "error": True}
+                    )
+                    st.session_state.messages_en.append({"role": "assistant", "content": error_msg})
+                finally:
+                    trace_placeholder.empty()
+
+        st.rerun()
+
+# Normal chat input path (disabled while waiting for confirmation)
+user_input = st.chat_input(
+    "Ask me anything about Earth observation or STAC...",
+    disabled=bool(st.session_state.pending_location_confirmation),
+)
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -356,6 +633,10 @@ if user_input:
                         artifacts={"maps": [], "thumbnails": [], "urls": []},
                         error=True,
                     )
+
+                data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                if bool(data.get("needs_location_confirmation")) is True:
+                    st.session_state.pending_location_confirmation = data
 
                 assistant_message_en = result.get("message") or ""
                 if not isinstance(assistant_message_en, str):

@@ -4,6 +4,8 @@ from langchain.tools import tool
 
 from .contracts import make_tool_response
 
+from src.services.bbox_service import get_city_candidates
+
 # --- Country Info ---
 def get_country_info(country_name: str):
     """Return main information about a country via the restcountries.com API."""
@@ -90,7 +92,24 @@ def geo_info_tool(name: str) -> dict:
 
     # If not found => Try city
     if not info:
-        info = get_city_info(name)
+        candidates = get_city_candidates(name)
+        if len(candidates) > 1:
+            return make_tool_response(
+                tool_name="geo_info_tool",
+                message=f"I found multiple matches for '{name}'. Please confirm the correct location.",
+                city=name,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": name,
+                    "candidates": candidates,
+                    "resume_patch": {"field": "name"},
+                },
+                error=True,
+            )
+        if candidates:
+            info = get_city_info(candidates[0].get("display_name") or name)
+        else:
+            info = get_city_info(name)
 
     if not info:
         return make_tool_response(

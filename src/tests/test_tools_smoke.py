@@ -77,7 +77,7 @@ def test_query_stac_catalog_smoke(monkeypatch):
     monkeypatch.setattr(
         mod,
         "get_city_bbox",
-        lambda city: ([52.3, 52.6, 13.1, 13.6], 52.52, 13.405, "Berlin"),
+        lambda city, require_confirmation=False, limit=3: ([52.3, 52.6, 13.1, 13.6], 52.52, 13.405, "Berlin"),
     )
 
     def fake_post(*args, **kwargs):
@@ -116,8 +116,8 @@ def test_detect_fire_tool_smoke(monkeypatch):
     monkeypatch.setattr(
         mod,
         "detect_fire_near_city",
-        lambda start_date, end_date, city_name, radius_km: (
-            [
+        lambda start_date, end_date, city_name, radius_km: {
+            "points": [
                 {
                     "lat": 52.5,
                     "lon": 13.4,
@@ -126,10 +126,16 @@ def test_detect_fire_tool_smoke(monkeypatch):
                     "acq_time": "1200",
                 }
             ],
-            1,
-        ),
+            "nb_fires": 1,
+            "coords": {"lat": 52.52, "lon": 13.405},
+            "location_name": "Berlin, Germany",
+        },
     )
-    monkeypatch.setattr(mod, "get_city_bbox", lambda city: ([0, 0, 0, 0], 52.52, 13.405, city))
+    monkeypatch.setattr(
+        mod,
+        "get_city_bbox",
+        lambda city, require_confirmation=False, limit=3: ([0, 0, 0, 0], 52.52, 13.405, city),
+    )
 
     resp = detect_fire_tool.invoke(
         {
@@ -207,6 +213,14 @@ def test_estimate_surface_water_ingress_tool_smoke(monkeypatch):
 
     monkeypatch.setattr(
         mod,
+        "get_city_candidates",
+        lambda city_name, limit=3: [
+            {"display_name": city_name, "name": city_name, "lat": 48.8, "lon": 2.3, "bbox": [0, 0, 0, 0]}
+        ],
+    )
+
+    monkeypatch.setattr(
+        mod,
         "estimate_surface_water_ingress",
         lambda location_input: {
             "Ingress_paths_estimate": "Water follows flow paths to low points.",
@@ -273,7 +287,11 @@ def test_weather_tool_smoke(monkeypatch):
     from src.tools.weather import weather_tool
     import src.tools.weather as mod
 
-    monkeypatch.setattr(mod, "get_city_bbox", lambda city: ([0, 0, 0, 0], 52.52, 13.405, "Berlin"))
+    monkeypatch.setattr(
+        mod,
+        "get_city_bbox",
+        lambda city, require_confirmation=False, limit=3: ([0, 0, 0, 0], 52.52, 13.405, "Berlin"),
+    )
 
     monkeypatch.setattr(
         mod.requests,
@@ -357,7 +375,11 @@ def test_query_hazards_tool_smoke(monkeypatch):
     import src.tools.hazard_detection as mod
 
     monkeypatch.setattr(mod, "get_top_hazards_for_country", lambda country, n=5: [{"hazard": "Flood", "level": "High", "score": 4.0}])
-    monkeypatch.setattr(mod, "get_city_bbox", lambda loc: ([0, 0, 0, 0], 35.0, 139.0, "Tokyo"))
+    monkeypatch.setattr(
+        mod,
+        "get_city_bbox",
+        lambda loc, require_confirmation=False, limit=3: ([0, 0, 0, 0], 35.0, 139.0, "Tokyo"),
+    )
 
     resp = query_hazards_tool.invoke({"country": "Japan", "top_n": 1, "location": "Tokyo"})
 

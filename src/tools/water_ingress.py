@@ -11,6 +11,8 @@ from .contracts import make_tool_response
 from rasterio.features import geometry_mask
 from shapely.geometry import Point, shape
 
+from src.services.bbox_service import get_city_candidates
+
 # OpenTopography API key
 OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed1")
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
@@ -282,6 +284,24 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
      - Apply mitigation rules to propose actions.
     """
     try:
+        if isinstance(location_input, str) and location_input.strip():
+            candidates = get_city_candidates(location_input.strip())
+            if len(candidates) > 1:
+                return make_tool_response(
+                    tool_name="estimate_surface_water_ingress_tool",
+                    message=(
+                        f"I found multiple matches for '{location_input}'. "
+                        "Please confirm the correct location."
+                    ),
+                    city=location_input,
+                    data={
+                        "needs_location_confirmation": True,
+                        "location_query": location_input,
+                        "candidates": candidates,
+                        "resume_patch": {"field": "location_input"},
+                    },
+                    error=True,
+                )
         result = estimate_surface_water_ingress(location_input)
 
         ingress = result.get("Ingress_paths_estimate", "Not available")

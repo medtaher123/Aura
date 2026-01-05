@@ -3,7 +3,7 @@ import re
 import requests
 from langchain_core.tools import tool
 from requests.exceptions import RequestException, Timeout
-from src.services.bbox_service import get_city_bbox
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 import json
 from ast import literal_eval
 
@@ -65,7 +65,23 @@ def query_stac_catalog(
                 end_date=end_date,
                 error=True,
             )
-        bbox_city, lat, lon, city_name_final = get_city_bbox(city.strip())
+        try:
+            bbox_city, lat, lon, city_name_final = get_city_bbox(city.strip(), require_confirmation=True)
+        except LocationAmbiguousError as e:
+            return make_tool_response(
+                tool_name="query_stac_catalog",
+                message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+                city=city.strip(),
+                start_date=start_date,
+                end_date=end_date,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": "city"},
+                },
+                error=True,
+            )
         city_name = city_name_final or city.strip()
         if not bbox_city:
             return make_tool_response(

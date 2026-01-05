@@ -10,6 +10,7 @@ def invoke_agent(
     english_query: str,
     *,
     chat_history: Any = None,
+    resume: Any = None,
     stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Any:
     """
@@ -21,6 +22,8 @@ def invoke_agent(
     payload: Dict[str, Any] = {"input": english_query}
     if chat_history is not None:
         payload["chat_history"] = chat_history
+    if resume is not None:
+        payload["resume"] = resume
     if stream_callback is not None:
         payload["stream_callback"] = stream_callback
 

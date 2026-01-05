@@ -1,7 +1,7 @@
 import requests
 from typing import Optional
 from langchain.tools import tool
-from src.services.bbox_service import get_city_bbox
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 from .contracts import make_tool_response
 
 @tool("weather_tool", return_direct=True)
@@ -12,8 +12,22 @@ def weather_tool(city_name: str, forecast_days: Optional[int] = 5) -> dict:
     :param forecast_days: Number of days to show forecasts for (default 5)
     example: weather_tool("Paris", 3)
     """
-    #  Geocoding via Nominatim 
-    bbox, lat, lon, city_name_final = get_city_bbox(city_name)
+    #  Geocoding via Nominatim
+    try:
+        bbox, lat, lon, city_name_final = get_city_bbox(city_name, require_confirmation=True)
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="weather_tool",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+            city=city_name,
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "city_name"},
+            },
+            error=True,
+        )
     if not lat or not lon:
         return make_tool_response(
             tool_name="weather_tool",
