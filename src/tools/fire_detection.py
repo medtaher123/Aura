@@ -1,10 +1,9 @@
 # fire_detection.py
 from datetime import datetime, timedelta, date
-import pandas as pd
-import numpy as np
 import os
 from pathlib import Path
 from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
+from src.services.map_view_service import view_state_from_bbox, view_state_from_points
 from langchain.tools import tool
 from .contracts import make_tool_response
 
@@ -31,6 +30,8 @@ def haversine(lat1, lon1, lat2, lon2):
 
     Accepts scalars or numpy arrays/Series. Inputs are coerced to float.
     """
+    import numpy as np
+
     lat1 = np.asarray(lat1, dtype="float64")
     lon1 = np.asarray(lon1, dtype="float64")
     lat2 = np.asarray(lat2, dtype="float64")
@@ -130,7 +131,17 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     coords = {"lat": lat_city_f, "lon": lon_city_f}
     resolved_name = city_name_final or city_name
 
+    bbox_norm = None
+    if isinstance(bbox, list) and len(bbox) == 4:
+        try:
+            south, north, west, east = (float(x) for x in bbox)
+            bbox_norm = [min(south, north), max(south, north), min(west, east), max(west, east)]
+        except Exception:
+            bbox_norm = None
+
     use_api = should_use_api(start_date, end_date)
+
+    import pandas as pd
 
     if use_api:
         print("Using API for fire data")
@@ -150,12 +161,12 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     # Ensure date column exists
     if "acq_date" not in df.columns:
         print("Date column 'acq_date' not found in data.")
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
 
     # Ensure required coordinate columns exist and are numeric
     if "latitude" not in df.columns or "longitude" not in df.columns:
         print("Latitude/longitude columns not found in data.")
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
 
     df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
@@ -166,7 +177,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         (df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)
     ].copy()
     if df.empty:
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
 
     df["distance"] = haversine(
         lat_city_f,
@@ -177,7 +188,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     df_filtered = df[df["distance"] <= radius_km]
 
     if df_filtered.empty:
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name}
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
 
     points = [
         {
@@ -189,7 +200,13 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         }
         for _, row in df_filtered.iterrows()
     ]
-    return {"points": points, "nb_fires": len(df_filtered), "coords": coords, "location_name": resolved_name}
+    return {
+        "points": points,
+        "nb_fires": len(df_filtered),
+        "coords": coords,
+        "location_name": resolved_name,
+        "bbox": bbox_norm,
+    }
 
 
 
@@ -231,6 +248,7 @@ def detect_fire_tool(
         result = detect_fire_near_city(start_date, end_date, location, radius_km_f)
         print("Detection result:", result)
         points = result.get("points") if isinstance(result, dict) else None
+        print("points:", points)
         nb_fires = result.get("nb_fires") if isinstance(result, dict) else None
         coords = result.get("coords") if isinstance(result, dict) else None
         location_name = result.get("location_name") if isinstance(result, dict) else None
@@ -276,16 +294,13 @@ def detect_fire_tool(
             )
 
         # Build a structured map spec that the UI can render with Pydeck.
-        view_state = None
-        if isinstance(coords, dict) and "lat" in coords and "lon" in coords:
-            view_state = {"latitude": coords["lat"], "longitude": coords["lon"], "zoom": 7}
-        elif points:
-            try:
-                view_state = {"latitude": float(points[0]["lat"]), "longitude": float(points[0]["lon"]), "zoom": 7}
-            except Exception:
-                view_state = {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
-        else:
-            view_state = {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
+        # Prefer bbox-based zoom when available (city/country extent), else fallback to points.
+        bbox = result.get("bbox") if isinstance(result, dict) else None
+        view_state = (
+            view_state_from_bbox(bbox, padding=0.18, min_zoom=4.0, max_zoom=10.5)
+            if isinstance(bbox, list) and len(bbox) == 4
+            else view_state_from_points(points or [], padding=0.18, min_zoom=4.0, max_zoom=10.5)
+        )
 
         return make_tool_response(
             tool_name="detect_fire_tool",

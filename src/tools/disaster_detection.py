@@ -4,6 +4,7 @@ import pycountry
 from datetime import datetime
 import hashlib
 import colorsys
+import math
 import re
 from geopy.geocoders import Nominatim
 import time
@@ -11,6 +12,9 @@ from langchain.tools import tool
 
 from .contracts import make_tool_response
 from typing import Optional
+
+from src.services.bbox_service import get_city_candidates
+from src.services.map_view_service import view_state_from_bbox, view_state_from_points
 
 VALID_DISASTER_TYPES = [
     "flood", "storm", "earthquake",
@@ -127,18 +131,35 @@ def _safe_float(x) -> Optional[float]:
         return None
 
 
-def _infer_view_state(points: list[dict]) -> dict:
-    if not points:
-        return {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
-    lats = [p.get("lat") for p in points if isinstance(p.get("lat"), (int, float))]
-    lons = [p.get("lon") for p in points if isinstance(p.get("lon"), (int, float))]
-    if not lats or not lons:
-        return {"latitude": 0.0, "longitude": 0.0, "zoom": 2}
-    return {
-        "latitude": float(sum(lats) / len(lats)),
-        "longitude": float(sum(lons) / len(lons)),
-        "zoom": 3,
-    }
+def _infer_view_state(points: list[dict], *, bbox: list[float] | None = None) -> dict:
+    # Prefer an explicit bbox (e.g., city/country extent) when available.
+    if isinstance(bbox, list) and len(bbox) == 4:
+        return view_state_from_bbox(bbox, padding=0.18, min_zoom=2.0, max_zoom=10.5)
+    return view_state_from_points(points or [], padding=0.18, min_zoom=2.0, max_zoom=10.5)
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    # Mean Earth radius in kilometers
+    r = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _distance_point_to_bbox_km(lat: float, lon: float, bbox: list[float]) -> float:
+    """Distance from a point to a lat/lon bbox (0 if inside).
+
+    bbox: [min_lat, max_lat, min_lon, max_lon]
+    """
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return float("inf")
+    min_lat, max_lat, min_lon, max_lon = bbox
+    clamped_lat = min(max(float(lat), float(min_lat)), float(max_lat))
+    clamped_lon = min(max(float(lon), float(min_lon)), float(max_lon))
+    return _haversine_km(float(lat), float(lon), clamped_lat, clamped_lon)
 
 
 def _emoji_for_disaster_type(disaster_type: str) -> str:
@@ -248,6 +269,76 @@ def query_disaster_events_tool(
         )
 
     # -----------------------
+    # Optional: location bbox filter (city/region within country)
+    # -----------------------
+    location_bbox: list[float] | None = None
+    country_bbox: list[float] | None = None
+    location_display: str | None = None
+    location_coordinates: dict | None = None
+    radius_km = 100.0
+
+    if isinstance(location, str) and location.strip():
+        loc_norm = location.strip().lower()
+        country_norm = (country_name or "").strip().lower()
+        # Only activate bbox filtering if user gave a sub-location (not the country itself)
+        if loc_norm != country_norm:
+            query = f"{location.strip()}, {country_name}"
+            candidates = get_city_candidates(query, limit=5)
+
+            if len(candidates) > 1:
+                return make_tool_response(
+                    tool_name="query_disaster_events_tool",
+                    message=f"I found multiple matches for '{location}'. Please confirm the correct location.",
+                    country=country_name,
+                    city=location,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data={
+                        "needs_location_confirmation": True,
+                        "location_query": location,
+                        "candidates": candidates,
+                        "resume_patch": {"field": "location"},
+                    },
+                    error=True,
+                )
+
+            if not candidates or not candidates[0].get("bbox"):
+                return make_tool_response(
+                    tool_name="query_disaster_events_tool",
+                    message=f"Couldn't resolve '{location}' to a bounding box inside {country_name}.",
+                    country=country_name,
+                    city=location,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data={"location": location, "country": country_name},
+                    error=True,
+                )
+
+            location_bbox = candidates[0].get("bbox")
+            location_display = candidates[0].get("display_name") or location
+            try:
+                lat0 = candidates[0].get("lat")
+                lon0 = candidates[0].get("lon")
+                if lat0 is not None and lon0 is not None:
+                    location_coordinates = {"lat": float(lat0), "lon": float(lon0)}
+            except Exception:
+                location_coordinates = None
+
+    # -----------------------
+    # Country bbox (for country-wide framing)
+    # -----------------------
+    # If the user didn't specify a sub-location, try to frame the country itself.
+    if location_bbox is None and isinstance(country_name, str) and country_name.strip():
+        try:
+            cands = get_city_candidates(country_name.strip(), limit=1)
+            if cands and isinstance(cands[0], dict) and cands[0].get("bbox"):
+                cb = cands[0].get("bbox")
+                if isinstance(cb, list) and len(cb) == 4:
+                    country_bbox = cb
+        except Exception:
+            country_bbox = None
+
+    # -----------------------
     # Retrieve events
     # -----------------------
     events = get_emdat_by_iso3(iso3)
@@ -317,6 +408,14 @@ def query_disaster_events_tool(
                             print(f"Geocoding error for {place}: {ex}")
                             continue
 
+            # If user requested a city/region filter, only keep events within radius_km of the bbox.
+            # If we can't determine coordinates, skip the event (can't prove it's close).
+            if location_bbox is not None:
+                if not (isinstance(lat, float) and isinstance(lon, float)):
+                    continue
+                if _distance_point_to_bbox_km(lat, lon, location_bbox) > radius_km:
+                    continue
+
             event_payload = {
                 "requested_disaster_type": dtype_key,
                 "type": e.get('disastertype', e.get('subgroupname', '')),
@@ -327,8 +426,8 @@ def query_disaster_events_tool(
                 "total_deaths": e.get('totaldeaths'),
                 "total_affected": e.get('totalaffected'),
                 "origin": e.get('origin'),
-                "latitude": e.get('latitude'),
-                "longitude": e.get('longitude'),
+                "latitude": lat if isinstance(lat, float) else e.get('latitude'),
+                "longitude": lon if isinstance(lon, float) else e.get('longitude'),
             }
 
             if isinstance(lat, float) and isinstance(lon, float):
@@ -356,11 +455,15 @@ def query_disaster_events_tool(
             events_by_type.setdefault(dtype_key, []).append(event_payload)
             events_list.append(event_payload)
 
+    total_near_events = sum(len(v) for v in (events_by_type or {}).values())
     parts = [f"{t}: {len(events_by_type.get(t, []))}" for t in requested_types]
     human_text = (
         f"{total_events} event(s) found in {country_name} between {start_date} and {end_date}. "
         f"Breakdown: {', '.join(parts)}."
     )
+    if location_bbox is not None:
+        label = location_display or location
+        human_text += f" Filtered to {total_near_events} event(s) within {int(radius_km)} km of {label}."
     if geocode_attempts:
         human_text += f" Geocoded {geocode_success}/{geocode_attempts} missing locations."
 
@@ -371,7 +474,7 @@ def query_disaster_events_tool(
         artifacts["maps"].append(
             {
                 "title": f"Disaster events in {country_name}",
-                "view_state": _infer_view_state(map_points),
+                "view_state": _infer_view_state(map_points, bbox=location_bbox or country_bbox),
                 "tooltip": {
                     "text": "{emoji} {type}\n{location}, {country}\n{start_date} → {end_date}\nDeaths: {total_deaths}\nAffected: {total_affected}",
                 },
@@ -409,6 +512,8 @@ def query_disaster_events_tool(
         message=human_text,
         artifacts=artifacts,
         country=country_name,
+        city=location if isinstance(location, str) and location.strip() and location_bbox is not None else None,
+        coordinates=location_coordinates if location_bbox is not None else None,
         start_date=start_date,
         end_date=end_date,
         data={
@@ -416,6 +521,16 @@ def query_disaster_events_tool(
             "iso3": iso3,
             "events_by_type": events_by_type,
             "events": events_list,
+            "location_filter": (
+                {
+                    "query": location,
+                    "display_name": location_display,
+                    "bbox": location_bbox,
+                    "radius_km": radius_km,
+                }
+                if location_bbox is not None
+                else None
+            ),
         },
         error=False,
     )

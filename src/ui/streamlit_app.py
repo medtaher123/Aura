@@ -128,54 +128,6 @@ def _shorten(text: str, *, max_len: int = 220) -> str:
     return s[: max_len - 1].rstrip() + "…"
 
 
-def _render_agent_trace(result: dict) -> None:
-    """Show a lightweight trace of what the agent did.
-
-    Policy note: this intentionally avoids exposing hidden chain-of-thought.
-    We display only tool actions/inputs/observations and short user-facing commentary.
-    """
-
-    if not isinstance(result, dict):
-        return
-
-    data = result.get("data") or {}
-    if not isinstance(data, dict):
-        return
-
-    orch = data.get("orchestrator_trace")
-    if isinstance(orch, dict):
-        needs_data = orch.get("needs_data")
-        needs_analysis = orch.get("needs_analysis")
-        st.caption(f"Orchestrator: needs_data={needs_data} needs_analysis={needs_analysis}")
-
-    tool_calls = data.get("tool_calls")
-    if not isinstance(tool_calls, list) or not tool_calls:
-        return
-
-    for idx, call in enumerate(tool_calls, start=1):
-        if not isinstance(call, dict):
-            continue
-
-        tool_name = call.get("tool_name")
-        error = bool(call.get("error"))
-        msg = call.get("message")
-        call_data = call.get("data") if isinstance(call.get("data"), dict) else {}
-
-        commentary = call_data.get("commentary") if isinstance(call_data.get("commentary"), str) else ""
-        tool_input = call_data.get("tool_input")
-
-        status = "error" if error else "ok"
-
-        if commentary:
-            st.caption(f"Step {idx}: {commentary}")
-        if tool_name:
-            st.caption(f"Step {idx}: action={tool_name} status={status}")
-        if tool_input is not None:
-            st.caption(f"Step {idx}: input={_shorten(str(tool_input), max_len=180)}")
-        if msg:
-            st.caption(f"Step {idx}: observation={_shorten(str(msg), max_len=220)}")
-
-
 def _make_live_trace_updater(trace_placeholder: st.delta_generator.DeltaGenerator):
     lines: list[str] = []
 

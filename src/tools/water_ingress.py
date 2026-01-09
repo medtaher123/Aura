@@ -12,6 +12,7 @@ from rasterio.features import geometry_mask
 from shapely.geometry import Point, shape
 
 from src.services.bbox_service import get_city_candidates
+from src.services.map_view_service import view_state_from_bbox, view_state_from_points
 
 # OpenTopography API key
 OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed1")
@@ -245,6 +246,15 @@ def estimate_surface_water_ingress(location_input):
             idx = rng.choice(len(risk_points), size=max_points, replace=False)
             risk_points = [risk_points[i] for i in idx]
 
+        bounds = None
+        if isinstance(bbox, list) and len(bbox) == 4:
+            try:
+                # Nominatim bbox is [south, north, west, east]
+                south, north, west, east = (float(x) for x in bbox)
+                bounds = [min(west, east), min(south, north), max(west, east), max(south, north)]
+            except Exception:
+                bounds = None
+
         return {
             "Ingress_paths_estimate": "Water follows the D8 flow paths towards low points.",
             "Mitigation_actions": actions,
@@ -258,6 +268,7 @@ def estimate_surface_water_ingress(location_input):
             ),
             "Location": location_info,
             "Coordinates": {"lat": float(lat), "lon": float(lon)},
+            "Bounds": bounds,
         }
     finally:
         if os.path.exists(dem_file):
@@ -350,16 +361,26 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         if isinstance(maps, dict):
             risk_points = maps.get("Risk_points")
             coords = result.get("Coordinates")
+            bounds_raw = result.get("Bounds")
+            bbox = None
+            if isinstance(bounds_raw, list) and len(bounds_raw) == 4:
+                try:
+                    # result Bounds is [min_lon, min_lat, max_lon, max_lat]
+                    min_lon, min_lat, max_lon, max_lat = (float(x) for x in bounds_raw)
+                    bbox = [min_lat, max_lat, min_lon, max_lon]
+                except Exception:
+                    bbox = None
             if isinstance(risk_points, list) and isinstance(coords, dict):
+                view_state = (
+                    view_state_from_bbox(bbox, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+                    if bbox is not None
+                    else view_state_from_points(risk_points, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+                )
                 artifacts["maps"].append(
                     {
                         "title": "Surface water ingress risk",
                         "points": risk_points,
-                        "view_state": {
-                            "latitude": float(coords.get("lat", 0.0) or 0.0),
-                            "longitude": float(coords.get("lon", 0.0) or 0.0),
-                            "zoom": 14,
-                        },
+                        "view_state": view_state,
                         "tooltip": {"text": ""},
                         "fill_color": [255, 0, 0, 120],
                         "radius": 5,

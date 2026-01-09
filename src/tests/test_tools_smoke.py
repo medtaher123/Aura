@@ -156,6 +156,21 @@ def test_query_disaster_events_tool_smoke(monkeypatch):
     import src.tools.disaster_detection as mod
 
     monkeypatch.setattr(mod, "get_iso3_from_country_name", lambda name: "DEU")
+    # Provide a country bbox to avoid network calls and to assert country framing.
+    monkeypatch.setattr(
+        mod,
+        "get_city_candidates",
+        lambda query, limit=1: [
+            {
+                "display_name": "Germany",
+                "name": "Germany",
+                "lat": 51.0,
+                "lon": 10.0,
+                # [min_lat, max_lat, min_lon, max_lon]
+                "bbox": [47.2, 55.1, 5.9, 15.1],
+            }
+        ],
+    )
 
     events = [
         {
@@ -191,6 +206,13 @@ def test_query_disaster_events_tool_smoke(monkeypatch):
     assert resp["error"] is False
     assert resp.get("data", {}).get("events"), "Expected at least one event"
 
+    maps = resp.get("artifacts", {}).get("maps", [])
+    assert maps and isinstance(maps[0], dict)
+    vs = maps[0].get("view_state")
+    assert isinstance(vs, dict)
+    # With a country bbox, zoom should be computed from bbox extent.
+    assert 3.0 < float(vs.get("zoom")) < 9.0
+
     # Also accept list-valued disaster_type and return events_by_type hashmap
     resp2 = query_disaster_events_tool.invoke(
         {
@@ -205,6 +227,90 @@ def test_query_disaster_events_tool_smoke(monkeypatch):
     assert resp2["error"] is False
     assert isinstance(resp2.get("data", {}).get("events_by_type"), dict)
     assert "flood" in resp2.get("data", {}).get("events_by_type", {})
+
+
+def test_query_disaster_events_tool_location_bbox_filter(monkeypatch):
+    from src.tools.disaster_detection import query_disaster_events_tool
+    import src.tools.disaster_detection as mod
+
+    monkeypatch.setattr(mod, "get_iso3_from_country_name", lambda name: "DEU")
+
+    # Berlin bbox-ish + coords
+    monkeypatch.setattr(
+        mod,
+        "get_city_candidates",
+        lambda query, limit=5: [
+            {
+                "display_name": "Berlin, Germany",
+                "name": "Berlin",
+                "lat": 52.52,
+                "lon": 13.405,
+                # [min_lat, max_lat, min_lon, max_lon]
+                "bbox": [52.3, 52.7, 13.0, 13.7],
+            }
+        ],
+    )
+
+    events = [
+        {
+            "disastertype": "Flood",
+            "country": "Germany",
+            "location": "Berlin",
+            "startyear": 2024,
+            "startmonth": 1,
+            "startday": 2,
+            "endyear": 2024,
+            "endmonth": 1,
+            "endday": 5,
+            "totaldeaths": 0,
+            "totalaffected": 100,
+            "origin": "Test",
+            "latitude": 52.52,
+            "longitude": 13.405,
+        },
+        # Far away (Munich)
+        {
+            "disastertype": "Flood",
+            "country": "Germany",
+            "location": "Munich",
+            "startyear": 2024,
+            "startmonth": 2,
+            "startday": 1,
+            "endyear": 2024,
+            "endmonth": 2,
+            "endday": 2,
+            "totaldeaths": 0,
+            "totalaffected": 50,
+            "origin": "Test",
+            "latitude": 48.137,
+            "longitude": 11.575,
+        },
+    ]
+    monkeypatch.setattr(mod, "get_emdat_by_iso3", lambda iso3: events)
+
+    resp = query_disaster_events_tool.invoke(
+        {
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "location": "Berlin",
+            "country_name": "Germany",
+            "disaster_type": "flood",
+        }
+    )
+
+    assert_tool_response(resp, "query_disaster_events_tool")
+    assert resp["error"] is False
+
+    maps = resp.get("artifacts", {}).get("maps", [])
+    assert maps and isinstance(maps[0], dict)
+    vs = maps[0].get("view_state")
+    assert isinstance(vs, dict)
+    # With a bbox, zoom should be computed from bbox extent.
+    assert 6.0 < float(vs.get("zoom")) <= 10.5
+    filtered = resp.get("data", {}).get("events", [])
+    assert len(filtered) == 1
+    assert filtered[0].get("location") == "Berlin"
+    assert resp.get("data", {}).get("location_filter", {}).get("radius_km") == 100.0
 
 
 def test_estimate_surface_water_ingress_tool_smoke(monkeypatch):

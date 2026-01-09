@@ -3,6 +3,7 @@ import requests
 from langchain.tools import tool
 
 from .contracts import make_tool_response
+from src.services.map_view_service import view_state_from_bbox
 
 from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 
@@ -243,11 +244,13 @@ def get_route_info(source: str | None = None, destination: str | None = None, qu
         f"{steps_block}"
     )
 
-    view_state = {
-        "latitude": float((lat1 + lat2) / 2.0),
-        "longitude": float((lon1 + lon2) / 2.0),
-        "zoom": 9,
-    }
+    bbox = [
+        float(min(lat1, lat2)),
+        float(max(lat1, lat2)),
+        float(min(lon1, lon2)),
+        float(max(lon1, lon2)),
+    ]
+    view_state = view_state_from_bbox(bbox, padding=0.20, min_zoom=2.0, max_zoom=12.0)
 
     map_spec = {
         "title": f"Route: {start} → {end}",

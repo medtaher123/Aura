@@ -26,7 +26,8 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "CRITICAL RULES:\n"
     "- If the user query is about GeoServer masks, use the geoserver_risk_mask_tool and do not call other tools.\n"
     "- You may call multiple tools over multiple steps.\n"
-    "- For fires, use the detect_fire_tool.\n"
+    "- For fires, use only the detect_fire_tool.\n"
+    "- Never call disaster event tools for fires.\n"
     "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
@@ -136,7 +137,14 @@ Step 1 JSON:
 Step 2 JSON:
 {"action":"FINAL","action_input":"I identified the top 3 hazards in Japan based on Data360 data. See the returned hazard list/artifacts if available.","commentary":"Summarizing the hazard results."}
 
-Example 12 (ambiguous / missing info)
+Example 12
+User: Check for fire events in Dubai (United Arab Emirates) in 2024.
+Step 1 JSON:
+{"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Dubai, United Arab Emirates","radius_km":null},"commentary":"Calling detect_fire_tool to check fire detections near Dubai in 2024."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I checked for fire events in Dubai (United Arab Emirates) in 2024. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
+
+Example 13 (ambiguous / missing info)
 User: Can you check the area for me?
 Step 1 JSON:
 {"action":"general_question_tool","action_input":"Can you check the area for me?","commentary":"Asking a clarifying question because the request is ambiguous."}
