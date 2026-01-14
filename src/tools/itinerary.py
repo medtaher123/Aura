@@ -1,19 +1,18 @@
 #itinerary.py
 import requests
-import folium
-from pathlib import Path
 from langchain.tools import tool
+
+from .contracts import make_tool_response
+from src.services.map_view_service import view_state_from_bbox
+
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
 
 # Geocoding via Nominatim (OpenStreetMap)
 def geocode_place(place_name):
-    url = "https://nominatim.openstreetmap.org/search"
-    params = {"q": place_name, "format": "json", "limit": 3}
-    r = requests.get(url, params=params, headers={"User-Agent": "route-steps-app"})
-    r.raise_for_status()
-    data = r.json()
-    if not data:
+    bbox, lat, lon, _ = get_city_bbox(place_name, require_confirmation=True)
+    if lat is None or lon is None:
         return None, None
-    return float(data[0]["lat"]), float(data[0]["lon"])
+    return float(lat), float(lon)
 
 
 # Route via OSRM (driving)
@@ -110,56 +109,121 @@ def format_step(step):
     return f"{stype.capitalize()} ({dist})."
 
 
-# Map generation
-# Map generation
-MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
-MAPS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def create_map(lat1, lon1, lat2, lon2, route_data, start, end):
-    m = folium.Map(location=[lat1, lon1], zoom_start=12)
-    for leg in route_data.get("routes", []):
-        for l in leg.get("legs", []):
-            coords = []
-            for step in l.get("steps", []):
-                geom = step.get("geometry", {}).get("coordinates", [])
-                coords.extend([(lat, lon) for lon, lat in geom])
-            if coords:
-                folium.PolyLine(coords, color="blue", weight=5, opacity=0.8).add_to(m)
-
-    folium.Marker([lat1, lon1], tooltip=f"Departure: {start}", icon=folium.Icon(color="green")).add_to(m)
-    folium.Marker([lat2, lon2], tooltip=f"Arrival: {end}", icon=folium.Icon(color="red")).add_to(m)
-
-    file_path = MAPS_DIR / "itinerary.html"
-    m.save(file_path)
-    return file_path.name
+def _build_route_path(route_data: dict) -> list[list[float]]:
+    # PathLayer expects a list of [lon, lat] pairs
+    coords: list[list[float]] = []
+    for route in route_data.get("routes", []) or []:
+        for leg in route.get("legs", []) or []:
+            for step in leg.get("steps", []) or []:
+                geom = (step.get("geometry") or {}).get("coordinates") or []
+                for pair in geom:
+                    try:
+                        lon, lat = pair
+                        coords.append([float(lon), float(lat)])
+                    except Exception:
+                        continue
+    # Deduplicate adjacent duplicates
+    cleaned: list[list[float]] = []
+    for p in coords:
+        if not cleaned or cleaned[-1] != p:
+            cleaned.append(p)
+    return cleaned
 
 
 @tool("get_route_info", return_direct=True)
-def get_route_info(query: str) -> str:
+def get_route_info(source: str | None = None, destination: str | None = None, query: str | None = None) -> dict:
     """
     Compute a driving route between two places.
-    Input format: "Start -> End"
-    Example: "Paris -> Lyon"
+    Preferred inputs:
+    - source: "Paris"
+    - destination: "Lyon"
+
+    Backward-compatible input:
+    - query: "Paris -> Lyon"
+
     Output: a structured dict with route summary (distance, duration, steps) and a saved HTML map.
     """
-    if "->" not in query:
-        return "Final Answer: Expected format: 'Start -> End'."
+    start = (source or "").strip()
+    end = (destination or "").strip()
 
-    start, end = [x.strip() for x in query.split("->")]
+    if (not start or not end) and isinstance(query, str) and query.strip():
+        if "->" not in query:
+            return make_tool_response(
+                tool_name="get_route_info",
+                message="Expected either (source, destination) or query formatted as 'Start -> End'.",
+                data={"source": source, "destination": destination, "query": query},
+                error=True,
+            )
+        start, end = [x.strip() for x in query.split("->", 1)]
 
-    lat1, lon1 = geocode_place(start)
-    lat2, lon2 = geocode_place(end)
+    if not start or not end:
+        return make_tool_response(
+            tool_name="get_route_info",
+            message="Please provide both 'source' and 'destination'.",
+            data={"source": source, "destination": destination, "query": query},
+            error=True,
+        )
+
+    try:
+        lat1, lon1 = geocode_place(start)
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct start location.",
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "source"},
+                "source": source,
+                "destination": destination,
+                "query": query,
+            },
+            error=True,
+        )
+
+    try:
+        lat2, lon2 = geocode_place(end)
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct destination location.",
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "destination"},
+                "source": source,
+                "destination": destination,
+                "query": query,
+            },
+            error=True,
+        )
     if not lat1 or not lon1 or not lat2 or not lon2:
-        return f"Final Answer: Location not found: {start} or {end}"
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"Location not found: {start} or {end}.",
+            data={"start": start, "end": end},
+            error=True,
+        )
 
     try:
         data = get_route((lat1, lon1), (lat2, lon2))
     except requests.RequestException as e:
-        return f"Final Answer: Network error: {e}"
+        return make_tool_response(
+            tool_name="get_route_info",
+            message=f"Network error: {e}",
+            data={"start": start, "end": end},
+            error=True,
+        )
 
     if not data or data.get("code") != "Ok" or not data.get("routes"):
-        return "Final Answer: Unable to compute route."
+        return make_tool_response(
+            tool_name="get_route_info",
+            message="Unable to compute route.",
+            data={"start": start, "end": end},
+            error=True,
+        )
 
     route = data["routes"][0]
     total_dist = human_distance(route["distance"])
@@ -172,11 +236,71 @@ def get_route_info(query: str) -> str:
             steps_txt.append(f"{step_index}. {format_step(step)}")
             step_index += 1
 
-    file_name = create_map(lat1, lon1, lat2, lon2, data, start, end)
+    path = _build_route_path(data)
 
     steps_block = "\n".join(steps_txt)
-    return (
-        "Final Answer: "
-        f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}. "
-        f"Map saved to {file_name}.\n{steps_block}"
+    message = (
+        f"Route from {start} to {end}: distance {total_dist}, duration {total_dur}.\n"
+        f"{steps_block}"
+    )
+
+    # Calculate center coordinates from start and end points
+    coords = {
+        'lat': (float(lat1) + float(lat2)) / 2,
+        'lon': (float(lon1) + float(lon2)) / 2
+    }
+    view_state = view_state_from_bbox(coords, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+
+    map_spec = {
+        "title": f"Route: {start} → {end}",
+        "view_state": view_state,
+        "tooltip": {"text": ""},
+        "layers": [
+            {
+                "type": "PathLayer",
+                "data": [{"name": "route", "path": path}],
+                "get_path": "path",
+                "get_color": [0, 120, 255, 200],
+                "width_min_pixels": 3,
+                "pickable": False,
+            },
+            {
+                "type": "ScatterplotLayer",
+                "data": [{"lat": float(lat1), "lon": float(lon1), "label": f"Departure: {start}"}],
+                "get_position": "[lon, lat]",
+                "get_radius": 5,
+                "radius_units": "pixels",
+                "radius_min_pixels": 6,
+                "radius_max_pixels": 7,
+                "get_fill_color": [0, 200, 0, 200],
+                "pickable": True,
+            },
+            {
+                "type": "ScatterplotLayer",
+                "data": [{"lat": float(lat2), "lon": float(lon2), "label": f"Arrival: {end}"}],
+                "get_position": "[lon, lat]",
+                "get_radius": 5,
+                "radius_units": "pixels",
+                "radius_min_pixels": 6,
+                "radius_max_pixels": 7,
+                "get_fill_color": [220, 0, 0, 200],
+                "pickable": True,
+            },
+        ],
+    }
+
+    return make_tool_response(
+        tool_name="get_route_info",
+        message=message,
+        artifacts={"maps": [map_spec], "thumbnails": [], "urls": []},
+        data={
+            "start": start,
+            "end": end,
+            "start_coordinates": {"lat": lat1, "lon": lon1},
+            "end_coordinates": {"lat": lat2, "lon": lon2},
+            "distance_human": total_dist,
+            "duration_human": total_dur,
+            "steps": steps_txt,
+        },
+        error=False,
     )

@@ -1,6 +1,8 @@
 from langchain.tools import tool
 from langchain_ollama import OllamaLLM
 
+from .contracts import make_tool_response
+
 # Local LLM via Ollama
 llm = OllamaLLM(
     model="mistral",
@@ -8,7 +10,7 @@ llm = OllamaLLM(
 )
 
 @tool(return_direct=True)
-def general_question_tool(query_text: str) -> str:
+def general_question_tool(query_text: str) -> dict:
     """
     Tool for answering general questions, explanations, summaries,
     or conversational queries that are not related to the other tools.
@@ -33,6 +35,14 @@ def general_question_tool(query_text: str) -> str:
         """
 
         response = llm.invoke(prompt)
-        return f"Final Answer: {response}"
+        return make_tool_response(
+            tool_name="general_question_tool",
+            message=str(response),
+            error=False,
+        )
     except Exception as e:
-        return f"Error while answering general question: {str(e)}"
+        return make_tool_response(
+            tool_name="general_question_tool",
+            message=f"Error while answering general question: {str(e)}",
+            error=True,
+        )

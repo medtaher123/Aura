@@ -1,25 +1,43 @@
 # fire_detection.py
 from datetime import datetime, timedelta, date
-import time
-import pandas as pd
-import requests
-import folium
-import numpy as np
 import os
 from pathlib import Path
-from langchain_ollama import OllamaLLM
+from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
+from src.services.map_view_service import view_state_from_bbox, view_state_from_points
+from langchain.tools import tool
+from .contracts import make_tool_response
 
 MAP_KEY = "f44596f0cc01c26985abd6bfff78ac92"
-ARCHIVE_DIR = "./Data"
+_DEFAULT_ARCHIVE_DIR = "/home/inesb/Metaplanet_llm-main_v1/Data"
+ARCHIVE_DIR = os.getenv("FIRE_ARCHIVE_DIR", str(_DEFAULT_ARCHIVE_DIR))
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ARCHIVE_DIR = r"C:\MEPDev\LLM_Demo\langgraph_project\Data"
 
 
+class FireArchiveMissingError(RuntimeError):
+    pass
+
+
+class FireDataUnavailableError(RuntimeError):
+    pass
+
+
 # Calculate the great-circle distance between two points on the Earth (Haversine formula)
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
+    """Great-circle distance (km) using the Haversine formula.
+
+    Accepts scalars or numpy arrays/Series. Inputs are coerced to float.
+    """
+    import numpy as np
+
+    lat1 = np.asarray(lat1, dtype="float64")
+    lon1 = np.asarray(lon1, dtype="float64")
+    lat2 = np.asarray(lat2, dtype="float64")
+    lon2 = np.asarray(lon2, dtype="float64")
+
+    R = 6371.0
     phi1, phi2 = np.radians(lat1), np.radians(lat2)
     dphi = np.radians(lat2 - lat1)
     dlambda = np.radians(lon2 - lon1)
@@ -27,27 +45,18 @@ def haversine(lat1, lon1, lat2, lon2):
     return 2 * R * np.arcsin(np.sqrt(a))
 
 
-# Get latitude and longitude for a city name using OpenStreetMap Nominatim API
-def get_city_coordinates(city_name):
-    print("Getting coordinates for city:", city_name)
-    url = (
-        f"https://nominatim.openstreetmap.org/search?q={city_name}&format=json&limit=1"
-    )
-    for attempt in range(5):
-        try:
-            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            data = response.json()
-            if data:
-                return float(data[0]["lat"]), float(data[0]["lon"])         
-        except Exception:
-            if attempt < 4:
-                time.sleep(1)
-                continue
-            return None, None
-
+class GeocodingError(RuntimeError):
+    pass
 
 # Find the archive file that contains data for the given date
 def find_archive_file_for_range(start_date_obj, end_date_obj):
+    archive_dir = Path(ARCHIVE_DIR)
+    if not archive_dir.exists() or not archive_dir.is_dir():
+        raise FireArchiveMissingError(
+            f"Fire archive folder not found: '{archive_dir}'. "
+            "Create it and add FIRMS CSV archives, or set FIRE_ARCHIVE_DIR to the correct path."
+        )
+
     # --- SPECIAL CASE FILES (explicit date ranges) ----
     SPECIAL_FILES = [
         {
@@ -64,15 +73,16 @@ def find_archive_file_for_range(start_date_obj, end_date_obj):
 
     for sf in SPECIAL_FILES:
         if not (end_date_obj < sf["start"] or start_date_obj > sf["end"]):
-            full_path = os.path.join(ARCHIVE_DIR, sf["filename"])
+            full_path = archive_dir / sf["filename"]
             print("Using special file:", full_path)
-            if os.path.exists(full_path):
-                return full_path
+            if full_path.exists():
+                return str(full_path)
 
     # ---- DEFAULT LOGIC FOR ALL OTHER ARCHIVE FILES ----
-    for filename in sorted(os.listdir(ARCHIVE_DIR)):
+    for entry in sorted(archive_dir.iterdir()):
+        filename = entry.name
         print("Checking archive file:", filename)
-        if filename.endswith(".csv") and "fire_archive_" in filename:
+        if entry.is_file() and filename.endswith(".csv") and "fire_archive_" in filename:
             try:
                 parts = filename.replace(".csv", "").split("_")
                 start_year = int(parts[2])
@@ -83,7 +93,7 @@ def find_archive_file_for_range(start_date_obj, end_date_obj):
 
                 # Check overlap
                 if not (end_date_obj < file_start or start_date_obj > file_end):
-                    return os.path.join(ARCHIVE_DIR, filename)
+                    return str(entry)
 
             except Exception:
                 continue
@@ -103,12 +113,36 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
-    lat_city, lon_city = get_city_coordinates(city_name)
+    bbox, lat_city, lon_city, city_name_final = get_city_bbox(city_name, require_confirmation=True)
+    print("City bbox:", bbox)
     print("City coordinates:", lat_city, lon_city)
     if lat_city is None:
-        return None
+        raise GeocodingError(
+            f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
+        )
+
+    try:
+        lat_city_f = float(lat_city)
+        lon_city_f = float(lon_city)
+    except (TypeError, ValueError):
+        raise GeocodingError(
+            f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
+        )
+
+    coords = {"lat": lat_city_f, "lon": lon_city_f}
+    resolved_name = city_name_final or city_name
+
+    bbox_norm = None
+    if isinstance(bbox, list) and len(bbox) == 4:
+        try:
+            south, north, west, east = (float(x) for x in bbox)
+            bbox_norm = [min(south, north), max(south, north), min(west, east), max(west, east)]
+        except Exception:
+            bbox_norm = None
 
     use_api = should_use_api(start_date, end_date)
+
+    import pandas as pd
 
     if use_api:
         print("Using API for fire data")
@@ -118,189 +152,210 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         file_path = find_archive_file_for_range(start_date_obj, end_date_obj)
         print("Using archive file for fire data:", file_path)
         if not file_path:
-            print("No archive file found for the given date range.")
-            return None
+            raise FireDataUnavailableError(
+                "No fire archive CSV found for the requested date range. "
+                f"Checked folder: '{Path(ARCHIVE_DIR)}'. "
+                "Add the required FIRMS archive CSV files there (or set FIRE_ARCHIVE_DIR)."
+            )
         df = pd.read_csv(file_path)
 
     # Ensure date column exists
     if "acq_date" not in df.columns:
         print("Date column 'acq_date' not found in data.")
-        return None
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
+
+    # Ensure required coordinate columns exist and are numeric
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        print("Latitude/longitude columns not found in data.")
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
+
+    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+    df = df.dropna(subset=["latitude", "longitude"]).copy()
 
     df["acq_date"] = pd.to_datetime(df["acq_date"]).dt.date
     df = df[
         (df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)
     ].copy()
     if df.empty:
-        return None
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
 
-    df["distance"] = df.apply(
-        lambda row: haversine(lat_city, lon_city, row["latitude"], row["longitude"]),
-        axis=1,
+    df["distance"] = haversine(
+        lat_city_f,
+        lon_city_f,
+        df["latitude"].to_numpy(),
+        df["longitude"].to_numpy(),
     )
     df_filtered = df[df["distance"] <= radius_km]
 
-    m = folium.Map(location=[lat_city, lon_city], zoom_start=7)
-    for _, row in df_filtered.iterrows():
-        popup = f"Brightness: {row.get('brightness', row.get('bright_ti4', 'N/A'))}, Date: {row['acq_date']}, Time: {row['acq_time']}"
-        folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=5,
-            color="red",
-            fill=True,
-            fill_color="red",
-            fill_opacity=0.7,
-            popup=popup,
-        ).add_to(m)
+    if df_filtered.empty:
+        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
 
-    filename = MAPS_DIR / "Fires.html"
-    m.save(filename)
-    return filename.name, len(df_filtered)
-
-
-def extract_params_from_text(text: str):
-    """
-    Extracts start_date, end_date, city/location, and radius using a single LLM call.
-    Returns: (start_date, end_date, location, radius_km)
-    """
-    if not text:
-        return None, None, None, 100
-
-    # --- Build LLM extraction prompt ---
-    system_prompt = """
-    You are an expert system that extracts structured data from natural language.
-    Your job is to identify:
-    - start_date (YYYY-MM-DD or null)
-    - end_date (YYYY-MM-DD or null)
-    - location (city, region, or country)
-    - radius_km (integer or null)
-    
-    RULES:
-    - If only one date is mentioned, set start_date = end_date.
-    - If a year is mentioned alone (e.g. "in 2022"), return full year range.
-    - If a month is mentioned ("in July 2023"), return first and last day.
-    - If a season is mentioned (winter, summer, etc.), use:
-        * winter: Dec 1 – Feb 28
-        * spring: Mar 1 – May 31
-        * summer: Jun 1 – Aug 31
-        * autumn/fall: Sep 1 – Nov 30
-    - If radius is not mentioned, return null.
-    - ALWAYS answer with pure JSON. NO explanations.
-    """
-
-    few_shot = """
-    Example 1:
-    User input: "Marseille 2025-01 - 250"
-    Response:
-    {
-      "start_date": "2025-01-01",
-      "end_date": "2025-01-31",
-      "location": "Marseille",
-      "radius_km": 250
+    points = [
+        {
+            "lat": float(row["latitude"]),
+            "lon": float(row["longitude"]),
+            "brightness": float(row.get("brightness", row.get("bright_ti4", 0)) or 0),
+            "acq_date": str(row["acq_date"]),
+            "acq_time": str(row.get("acq_time", "")),
+        }
+        for _, row in df_filtered.iterrows()
+    ]
+    return {
+        "points": points,
+        "nb_fires": len(df_filtered),
+        "coords": coords,
+        "location_name": resolved_name,
+        "bbox": bbox_norm,
     }
 
-    Example 2:
-    User input: "Tunis summer 50"
-    Response:
-    {
-      "start_date": "2024-06-01",
-      "end_date": "2024-08-31",
-      "location": "Tunis",
-      "radius_km": 50
-    }
-
-    Example 3:
-    User input: "Rome December 1st to December 10th 2023"
-    Response:
-    {
-      "start_date": "2023-12-01",
-      "end_date": "2023-12-10",
-      "location": "Rome",
-      "radius_km": null
-    }
-
-    Example 4:
-    User input: "Morocco"
-    Response:
-    {
-      "start_date": null,
-      "end_date": null,
-      "location": "Morocco",
-      "radius_km": null
-    }
-    """
-
-    # --- Invoke LLM ---
-    llm = OllamaLLM(model="mistral", temperature=0.1, system_prompt=system_prompt)
-    prompt = f'{few_shot}\nUser input: "{text}"\nReturn JSON:'
-    llm_response = llm.invoke(prompt)
-
-    import json
-
-    try:
-        data = json.loads(llm_response)
-    except Exception:
-        return {"error": f"❌ LLM returned invalid JSON: {llm_response}"}
-
-    # --- Extract fields ---
-    start_date = data.get("start_date")
-    end_date = data.get("end_date")
-    location = data.get("location")
-    radius_km = data.get("radius_km") or 100  # default radius
-
-    return start_date, end_date, location, radius_km
 
 
-from langchain.tools import tool
 
 
 @tool(return_direct=True)
-def detect_fire_tool(query_text: str) -> str:
+def detect_fire_tool(
+    start_date: str,
+    end_date: str | None,
+    location: str,
+    radius_km: float | None = 100,
+) -> dict:
     """
-    Tool to detect fires from a natural language query.
+    Tool to detect fires near a city/country for a given date range and radius.
     """
     try:
-        print("Detecting fire with query:", query_text)
-        start_date, end_date, city, radius_km = extract_params_from_text(query_text)
-        print("Extracted parameters:", start_date, end_date, city, radius_km)
+        if end_date is None or (isinstance(end_date, str) and not end_date.strip()):
+            end_date = start_date
 
-        if not start_date or not city:
-            return (
-                "ERROR: Please specify a city and a date (YYYY-MM-DD, month, or year) "
-                "in your query."
+        print("Detecting fire with params:", start_date, end_date, location, radius_km)
+
+        if not start_date or not location:
+            return make_tool_response(
+                tool_name="detect_fire_tool",
+                message=(
+                    "Please specify a city and a start_date (YYYY-MM-DD)."
+                ),
+                location=location,
+                start_date=start_date,
+                end_date=end_date,
+                error=True,
             )
 
-        result = detect_fire_near_city(start_date, end_date, city, radius_km)
+        try:
+            radius_km_f = float(radius_km)
+        except Exception:
+            radius_km_f = 100.0
+
+        result = detect_fire_near_city(start_date, end_date, location, radius_km_f)
         print("Detection result:", result)
+        points = result.get("points") if isinstance(result, dict) else None
+        print("points:", points)
+        nb_fires = result.get("nb_fires") if isinstance(result, dict) else None
+        coords = result.get("coords") if isinstance(result, dict) else None
+        location_name = result.get("location_name") if isinstance(result, dict) else None
+
+        display_location = location_name if isinstance(location_name, str) and location_name.strip() else location
+
         # NO FIRES FOUND
-        if not result:
+        if not nb_fires:
             if start_date == end_date:
                 message = (
-                    f"There were no fires detected near {city} on {start_date} "
-                    f"within a radius of {radius_km} km."
+                    f"There were no fires detected near {display_location} on {start_date} "
+                    f"within a radius of {radius_km_f} km."
                 )
             else:
                 message = (
-                    f"There were no fires detected near {city} from {start_date} to {end_date} "
-                    f"within a radius of {radius_km} km."
+                    f"There were no fires detected near {display_location} from {start_date} to {end_date} "
+                    f"within a radius of {radius_km_f} km."
                 )
-            return f"Final Answer: {message}"
+            return make_tool_response(
+                tool_name="detect_fire_tool",
+                message=message,
+                start_date=start_date,
+                end_date=end_date,
+                city=display_location,
+                coordinates=coords,
+                data={"radius_km": radius_km_f, "nb_fires": 0},
+                error=False,
+            )
 
         # FIRES FOUND
-        file_html, nb_fires = result
+        points = points or []
+        nb_fires = int(nb_fires)
 
         if start_date == end_date:
             message = (
-                f"{nb_fires} fire(s) detected near {city} on {start_date} "
-                f"within a radius of {radius_km} km.\nMap: {file_html}"
+                f"{nb_fires} fire(s) detected near {display_location} on {start_date} "
+                f"within a radius of {radius_km_f} km."
             )
         else:
             message = (
-                f"{nb_fires} fire(s) detected near {city} from {start_date} to {end_date} "
-                f"within a radius of {radius_km} km.\nMap: {file_html}"
+                f"{nb_fires} fire(s) detected near {display_location} from {start_date} to {end_date} "
+                f"within a radius of {radius_km_f} km."
             )
 
-        return f"Final Answer: {message}"
+        # Build a structured map spec that the UI can render with Pydeck.
+        # Prefer bbox-based zoom when available (city/country extent), else fallback to points.
+        bbox = result.get("bbox") if isinstance(result, dict) else None
+        coords = result.get("coords") if isinstance(result, dict) else None
+        view_state = (
+            view_state_from_bbox(coords, padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
+            if isinstance(bbox, list) and len(bbox) == 4
+            else view_state_from_points(points or [], padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
+        )
 
+        return make_tool_response(
+            tool_name="detect_fire_tool",
+            message=message,
+            artifacts={
+                "maps": [
+                    {
+                        "title": "Fires near city",
+                        "points": points,
+                        "view_state": view_state,
+                        "tooltip": {"text": "{acq_date} {acq_time}\nBrightness: {brightness}"},
+                        "fill_color": [255, 0, 0, 160],
+                        "radius": 5,
+                        "radius_units": "pixels",
+                        "radius_min_pixels": 2,
+                        "radius_max_pixels": 7,
+                    }
+                ],
+                "thumbnails": [],
+                "urls": [],
+            },
+            start_date=start_date,
+            end_date=end_date,
+            city=display_location,
+            coordinates=coords,
+            data={"radius_km": radius_km_f, "nb_fires": nb_fires},
+            error=False,
+        )
+
+    except GeocodingError as e:
+        return make_tool_response(
+            tool_name="detect_fire_tool",
+            message=str(e),
+            error=True,
+        )
+    except LocationAmbiguousError as e:
+        return make_tool_response(
+            tool_name="detect_fire_tool",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+            city=location,
+            start_date=start_date,
+            end_date=end_date,
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "location"},
+            },
+            error=True,
+        )
     except Exception as e:
-        return f"ERROR: Unexpected error during processing: {str(e)}"
+        return make_tool_response(
+            tool_name="detect_fire_tool",
+            message=f"Unexpected error during processing: {str(e)}",
+            error=True,
+        )

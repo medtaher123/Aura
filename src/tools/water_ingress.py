@@ -5,10 +5,14 @@ import requests
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
-import folium
 from langchain.tools import tool
+
+from .contracts import make_tool_response
 from rasterio.features import geometry_mask
 from shapely.geometry import Point, shape
+
+from src.services.bbox_service import get_city_candidates
+from src.services.map_view_service import view_state_from_bbox, view_state_from_points
 
 # OpenTopography API key
 OPENTOP_API_KEY = os.getenv("OPENTOPO_API_KEY", "811d1f7cbb4522dc7e623ec70a657ed1")
@@ -17,6 +21,25 @@ MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Geocoding (name -> lat/lon)
 def geocode_city(city_name: str):
+    # Support disambiguation tokens produced by the UI, e.g. "@osm_id:R1639973" or "@place_id:123".
+    # bbox_service knows how to resolve these via Nominatim lookup.
+    if isinstance(city_name, str):
+        q = city_name.strip()
+        if q.startswith("@"):
+            try:
+                candidates = get_city_candidates(q, limit=1)
+            except Exception:
+                candidates = []
+            if candidates:
+                c = candidates[0]
+                lat = c.get("lat")
+                lon = c.get("lon")
+                bbox = c.get("bbox")
+                if lat is not None and lon is not None:
+                    # bbox_service returns bbox as [min_lat, max_lat, min_lon, max_lon]
+                    # which matches this module's expected indexing.
+                    return float(lat), float(lon), bbox, None
+
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": city_name, "format": "json", "limit": 1, "polygon_geojson": 1}
     r = requests.get(url, params=params, headers={"User-Agent": "SurfaceIngressTool"})
@@ -167,11 +190,14 @@ def mitigation_rules(dem, slope, acc, risk_mask):
 
 #Estimation principale
 def estimate_surface_water_ingress(location_input):
+    print('I am in location_input:', location_input)
     if isinstance(location_input, str):
         lat, lon, bbox, polygon = geocode_city(location_input)
         location_info = reverse_geocode(lat, lon)
     elif isinstance(location_input, (tuple, list)) and len(location_input) == 2:
         lat, lon = location_input
+        bbox = None
+        polygon = None
         # call reverse geocode for coordinates
         location_info = reverse_geocode(lat, lon)
     else:
@@ -214,39 +240,55 @@ def estimate_surface_water_ingress(location_input):
         plt.imsave(MAPS_DIR / "map_flowacc.png", acc, cmap="Blues")
         plt.imsave(MAPS_DIR / "Map_risk.png", risk_mask.astype(float), cmap="Reds")
 
-        # Folium map
+        # Build risk points for Pydeck (sampled to keep payload reasonable)
         risk_coords = np.argwhere(risk_mask)
-        folium_map = folium.Map(location=[lat, lon], zoom_start=15)
-        
-        polygon_shape = shape(polygon)  # ton polygone GeoJSON
 
-        risk_coords_filtered = []
-        for y, x in risk_coords:
-            rlon, rlat = rasterio.transform.xy(transform, y, x)
-            if polygon_shape.contains(Point(rlon, rlat)):
-                risk_coords_filtered.append((y, x))
-                
-        for y, x in risk_coords_filtered:
+        polygon_shape = None
+        if polygon:
             try:
-                rlon, rlat = rasterio.transform.xy(transform, y, x)
-                folium.CircleMarker(location=[rlat, rlon], radius=0.5, color='red', fill=True, fill_opacity=0.5).add_to(folium_map)
+                polygon_shape = shape(polygon)
+            except Exception:
+                polygon_shape = None
+
+        risk_points = []
+        for y, x in risk_coords:
+            try:
+                rlon, rlat = rasterio.transform.xy(transform, int(y), int(x))
+                if polygon_shape is not None and not polygon_shape.contains(Point(rlon, rlat)):
+                    continue
+                risk_points.append({"lat": float(rlat), "lon": float(rlon)})
             except Exception:
                 continue
-        map_html_path = MAPS_DIR / "Map_risk_folium.html"
-        folium_map.save(map_html_path)
+
+        max_points = 2500
+        if len(risk_points) > max_points:
+            rng = np.random.default_rng(0)
+            idx = rng.choice(len(risk_points), size=max_points, replace=False)
+            risk_points = [risk_points[i] for i in idx]
+
+        bounds = None
+        if isinstance(bbox, list) and len(bbox) == 4:
+            try:
+                # Nominatim bbox is [south, north, west, east]
+                south, north, west, east = (float(x) for x in bbox)
+                bounds = [min(west, east), min(south, north), max(west, east), max(south, north)]
+            except Exception:
+                bounds = None
 
         return {
             "Ingress_paths_estimate": "Water follows the D8 flow paths towards low points.",
             "Mitigation_actions": actions,
             **stats,
             "Maps": {
-                "Risk_Folium": map_html_path.name
+                "Risk_points": risk_points
             },
             "Explanation": (
                 "How to read the maps:\n"
                 "Risk map: red areas indicate likely accumulation."
             ),
-            "Location": location_info
+            "Location": location_info,
+            "Coordinates": {"lat": float(lat), "lon": float(lon)},
+            "Bounds": bounds,
         }
     finally:
         if os.path.exists(dem_file):
@@ -269,15 +311,40 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
      - Download DEM from OpenTopography.
      - Compute slope and D8 flow accumulation.
      - Identify risk areas (low elevation, low slope, high accumulation).
-     - Generate Matplotlib & Folium maps.
+        - Generate Matplotlib maps and a Pydeck-ready set of risk points.
      - Apply mitigation rules to propose actions.
     """
     try:
+        if isinstance(location_input, str) and location_input.strip():
+            candidates = get_city_candidates(location_input.strip())
+            if len(candidates) > 1:
+                return make_tool_response(
+                    tool_name="estimate_surface_water_ingress_tool",
+                    message=(
+                        f"I found multiple matches for '{location_input}'. "
+                        "Please confirm the correct location."
+                    ),
+                    city=location_input,
+                    data={
+                        "needs_location_confirmation": True,
+                        "location_query": location_input,
+                        "candidates": candidates,
+                        "resume_patch": {"field": "location_input"},
+                    },
+                    error=True,
+                )
         result = estimate_surface_water_ingress(location_input)
 
         ingress = result.get("Ingress_paths_estimate", "Not available")
         mitigation = result.get("Mitigation_actions", [])
-        stats = result.get("Statistics", {})
+        stats = {
+            "DEM_shape": result.get("DEM_shape"),
+            "Elevation_min": result.get("Elevation_min"),
+            "Elevation_max": result.get("Elevation_max"),
+            "Elevation_mean": result.get("Elevation_mean"),
+            "Slope_mean": result.get("Slope_mean"),
+            "Risk_zone_percent": result.get("Risk_zone_percent"),
+        }
         maps = result.get("Maps", {})
         explanation = result.get("Explanation", "Not available")
 
@@ -305,7 +372,10 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         if maps:
             message_parts.append("\n### 🗺 Generated Maps")
             for key, path in maps.items():
-                message_parts.append(f"- **{key}**: {path}")
+                if key == "Risk_points" and isinstance(path, list):
+                    message_parts.append(f"- **{key}**: {len(path)} point(s)")
+                else:
+                    message_parts.append(f"- **{key}**: {path}")
 
         if explanation:
             message_parts.append("\n### ℹ️ How to Interpret the Maps")
@@ -314,8 +384,61 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         # Join message
         message = "\n".join(message_parts)
 
-        return f"Final Answer: {message}"
+        artifacts = {"maps": [], "thumbnails": [], "urls": []}
+        if isinstance(maps, dict):
+            risk_points = maps.get("Risk_points")
+            coords = result.get("Coordinates")
+            if isinstance(risk_points, list) and isinstance(coords, dict):
+                view_state = (
+                    view_state_from_bbox(coords, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+                    if coords is not None and coords.get("lat") is not None and coords.get("lon") is not None
+                    else view_state_from_points(risk_points, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+                )
+                artifacts["maps"].append(
+                    {
+                        "title": "Surface water ingress risk",
+                        "points": risk_points,
+                        "view_state": view_state,
+                        "tooltip": {"text": ""},
+                        "fill_color": [255, 0, 0, 120],
+                        "radius": 5,
+                        "radius_units": "pixels",
+                        "radius_min_pixels": 2,
+                        "radius_max_pixels": 7,
+                    }
+                )
+
+        coords = None
+        try:
+            c = result.get("Coordinates")
+            if isinstance(c, dict) and c.get("lat") is not None and c.get("lon") is not None:
+                coords = {"lat": float(c["lat"]), "lon": float(c["lon"])}
+        except Exception:
+            coords = None
+
+        location_info = result.get("Location") or {}
+
+        country = None
+        city = None
+        if isinstance(location_info, dict):
+            country = location_info.get("country")
+            city = location_info.get("city")
+
+        return make_tool_response(
+            tool_name="estimate_surface_water_ingress_tool",
+            message=message,
+            artifacts=artifacts,
+            country=country,
+            city=city,
+            coordinates=coords,
+            data={"result": result},
+            error=False,
+        )
 
     except Exception as e:
         error_message = f"An error occurred while processing the request: {str(e)}"
-        return f"Final Answer: {error_message}"
+        return make_tool_response(
+            tool_name="estimate_surface_water_ingress_tool",
+            message=error_message,
+            error=True,
+        )

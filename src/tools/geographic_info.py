@@ -2,6 +2,10 @@
 import requests
 from langchain.tools import tool
 
+from .contracts import make_tool_response
+
+from src.services.bbox_service import get_city_candidates
+
 # --- Country Info ---
 def get_country_info(country_name: str):
     """Return main information about a country via the restcountries.com API."""
@@ -68,7 +72,7 @@ def get_city_info(city_name: str):
 
 # --- TOOL LangChain ---
 @tool("geo_info_tool", return_direct=True)
-def geo_info_tool(name: str) -> str:
+def geo_info_tool(name: str) -> dict:
     """
     Retrieve geographic information about a country or a city.
 
@@ -88,11 +92,60 @@ def geo_info_tool(name: str) -> str:
 
     # If not found => Try city
     if not info:
-        info = get_city_info(name)
+        candidates = get_city_candidates(name)
+        if len(candidates) > 1:
+            return make_tool_response(
+                tool_name="geo_info_tool",
+                message=f"I found multiple matches for '{name}'. Please confirm the correct location.",
+                city=name,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": name,
+                    "candidates": candidates,
+                    "resume_patch": {"field": "name"},
+                },
+                error=True,
+            )
+        if candidates:
+            info = get_city_info(candidates[0].get("display_name") or name)
+        else:
+            info = get_city_info(name)
 
     if not info:
-        return f"Final Answer: No results found for '{name}'."
+        return make_tool_response(
+            tool_name="geo_info_tool",
+            message=f"No results found for '{name}'.",
+            city=name,
+            error=True,
+        )
 
     # Formater en texte lisible
     summary = "\n".join([f"{k} : {v}" for k, v in info.items()])
-    return f"Final Answer:\n{summary}"
+
+    # Best-effort structured fields
+    country = None
+    city = None
+    coordinates = None
+    info_type = str(info.get("Type") or "").lower()
+    if info_type == "country":
+        country = info.get("Name")
+    elif info_type == "city":
+        city = name
+        country = info.get("Country")
+        try:
+            lat = info.get("Latitude")
+            lon = info.get("Longitude")
+            if lat is not None and lon is not None:
+                coordinates = {"lat": float(lat), "lon": float(lon)}
+        except Exception:
+            coordinates = None
+
+    return make_tool_response(
+        tool_name="geo_info_tool",
+        message=summary,
+        country=country,
+        city=city,
+        coordinates=coordinates,
+        data={"info": info},
+        error=False,
+    )

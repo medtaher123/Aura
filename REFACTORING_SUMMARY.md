@@ -33,7 +33,7 @@ Metaplanet_llm-main_v1/
 │   │   ├── general_chat.py      # General Q&A tool
 │   │   ├── water_ingress.py     # Water ingress risk analysis
 │   │   ├── itinerary.py         # Route/itinerary tool
-│   │   ├── tools_geocode.py     # Geocoding utilities
+│   │   ├── bbox_service.py     # Geocoding utilities
 │   │   ├── tools_risk.py        # Risk analysis utilities & agent tools
 │   │   ├── tools_stac.py        # STAC catalog query tool
 │   │   ├── tools_weather.py     # Weather data retrieval
@@ -88,7 +88,7 @@ Metaplanet_llm-main_v1/
 ### 4. **Tools Organization** (`src/tools/`)
    - All agent tools grouped together
    - Each tool is a separate module for better maintainability
-   - Shared utilities (`tools_risk.py`, `tools_geocode.py`, `tools_stac.py`, `tools_weather.py`)
+   - Shared utilities (`tools_risk.py`, `bbox_service.py`, `tools_stac.py`, `tools_weather.py`)
 
 ### 5. **Models** (`src/models/`)
    - Pydantic schemas for type safety
@@ -163,7 +163,7 @@ logger = get_logger(__name__)
 - `general_chat.py` - General chat (moved from root)
 - `water_ingress.py` - Water ingress analysis (moved from root)
 - `itinerary.py` - Route planning (moved from root)
-- `tools_geocode.py` - Geocoding utilities (moved from root)
+- `bbox_service.py` - Geocoding utilities (moved from root)
 - `tools_risk.py` - Risk analysis utilities (moved from root, refactored)
 - `tools_stac.py` - STAC queries (moved from root)
 - `tools_weather.py` - Weather data (moved from root)

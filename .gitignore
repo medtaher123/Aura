@@ -4,3 +4,13 @@ __pycache__/
 .pytest_cache/
 .vscode/
 Data/
+# Environment files (do not commit)
+.env
+.env.*
+.env/
+
+# Generated Folium maps (do not commit)
+src/maps/RiskMask_*.html
+
+test.ipynb
+*.html
