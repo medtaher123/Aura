@@ -278,7 +278,7 @@ def query_disaster_events_tool(
     country_bbox: list[float] | None = None
     location_display: str | None = None
     location_coordinates: dict | None = None
-    radius_km = 50.0
+    radius_km = 100.0
 
     if isinstance(location, str) and location.strip():
         loc_norm = location.strip().lower()
