@@ -56,74 +56,85 @@ def bbox_from_points(points: list[dict[str, Any]]) -> list[float] | None:
     if not lats or not lons:
         return None
 
-    return [min(lats), max(lats), min(lons), max(lons)]
+    return {'lat': sum(lats) / len(lats), 'lon': sum(lons) / len(lons)}  # center point
 
+
+import math
 
 def view_state_from_bbox(
-    bbox: list[float],
+    coords: dict[str, float],
     *,
     padding: float = 0.15,
-    min_zoom: float = 2.0,
+    min_zoom: float = 5.0,
     max_zoom: float = 10.5,
+    radius: float | None = None,
 ) -> dict[str, float]:
     """Derive a map view_state from bbox.
-
-    Uses a simple, renderer-agnostic approximation for zoom based on angular span.
-
-    Args:
-        bbox: [min_lat, max_lat, min_lon, max_lon]
-        padding: relative padding around bbox (0.15 = +15% span)
-        min_zoom/max_zoom: clamp range
-
-    Returns:
-        {"latitude": center_lat, "longitude": center_lon, "zoom": zoom}
     """
-    if not isinstance(bbox, list) or len(bbox) != 4:
+    # Use coords instead of bbox
+    print('radius is:', radius)
+    if not isinstance(coords, dict):
         return {"latitude": 0.0, "longitude": 0.0, "zoom": float(min_zoom)}
 
     try:
-        min_lat, max_lat, min_lon, max_lon = (float(x) for x in bbox)
+        center_lat = float(coords["lat"])
+        center_lon = float(coords["lon"])
     except Exception:
         return {"latitude": 0.0, "longitude": 0.0, "zoom": float(min_zoom)}
 
-    min_lat, max_lat = (min(min_lat, max_lat), max(min_lat, max_lat))
-    min_lon, max_lon = (min(min_lon, max_lon), max(min_lon, max_lon))
+    # --- create a virtual bbox around the point ---
+    # controls how "wide" the initial view is (city-level)
+    base_span = radius/100 if radius is not None else 1.5  # degrees (~20km), adjust if needed
 
-    center_lat = (min_lat + max_lat) / 2.0
-    center_lon = (min_lon + max_lon) / 2.0
+    min_lat = center_lat - base_span / 2
+    max_lat = center_lat + base_span / 2
+    min_lon = center_lon - base_span / 2
+    max_lon = center_lon + base_span / 2
 
-    lat_span = max(0.0, max_lat - min_lat)
-    lon_span = max(0.0, max_lon - min_lon)
+    lat_span = max_lat - min_lat
+    lon_span = max_lon - min_lon
 
-    # Apply padding.
-    pad = 1.0 + max(0.0, float(padding))
+    # Apply padding
+    pad = 1.0 + max(0.0, padding)
     lat_span *= pad
     lon_span *= pad
 
-    # Avoid division by zero; treat single-point bbox as a close zoom.
-    span = max(lat_span, lon_span, 1e-6)
+    # Prevent zero-span
+    lat_span = max(lat_span, 1e-6)
+    lon_span = max(lon_span, 1e-6)
 
-    # Approximate: at zoom=0 the world is ~360 degrees wide.
-    raw_zoom = math.log2(360.0 / span)
-    print('I am in view_state_from_bbox, and raw_zoom is:', raw_zoom)
+    lat_rad = math.radians(center_lat)
+    lon_span_corrected = lon_span * math.cos(lat_rad)
 
-    zoom = _clamp(raw_zoom, float(min_zoom), float(max_zoom))
-    print('I am in view_state_from_bbox, and zoom is:', zoom)
-    return {"latitude": float(center_lat), "longitude": float(center_lon), "zoom": float(zoom)}
+    # World extents
+    zoom_lat = math.log2(180.0 / lat_span)
+    zoom_lon = math.log2(360.0 / lon_span_corrected)
+
+    raw_zoom = min(zoom_lat, zoom_lon)
+    print('I am in view_state_from_bbox and raw_zoom is:', raw_zoom)
+    zoom = max(min(raw_zoom, max_zoom), min_zoom)
+    print('I am in view_state_from_bbox and calculated zoom is:', zoom)
+    return {
+        "latitude": center_lat,
+        "longitude": center_lon,
+        "zoom": float(zoom),
+    }
+
 
 
 def view_state_from_points(
     points: list[dict[str, Any]],
     *,
     padding: float = 0.15,
-    min_zoom: float = 2.0,
+    min_zoom: float = 5.0,
     max_zoom: float = 10.5,
+    radius: float | None = None,
 ) -> dict[str, float]:
     """Derive view_state from points by computing bbox first."""
-    bbox = bbox_from_points(points)
-    if bbox is None:
+    coords = bbox_from_points(points)
+    if coords is None:
         print('I am in view_state_from_points and bbox is None, and zoom is:', min_zoom)
         return {"latitude": 0.0, "longitude": 0.0, "zoom": float(min_zoom)}
     
-    print('I am in view_state_from_points and bbox is:', bbox)
-    return view_state_from_bbox(bbox, padding=padding, min_zoom=min_zoom, max_zoom=max_zoom)
+    print('I am in view_state_from_points and coords is:', coords)
+    return view_state_from_bbox(coords, padding=padding, min_zoom=min_zoom, max_zoom=max_zoom,radius=radius)

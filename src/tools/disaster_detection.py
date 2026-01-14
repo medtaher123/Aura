@@ -131,11 +131,11 @@ def _safe_float(x) -> Optional[float]:
         return None
 
 
-def _infer_view_state(points: list[dict], *, bbox: list[float] | None = None) -> dict:
-    # Prefer an explicit bbox (e.g., city/country extent) when available.
-    if isinstance(bbox, list) and len(bbox) == 4:
-        return view_state_from_bbox(bbox, padding=0.18, min_zoom=2.0, max_zoom=10.5)
-    return view_state_from_points(points or [], padding=0.18, min_zoom=2.0, max_zoom=10.5)
+def _infer_view_state(points: list[dict], *, coords: dict[str, float] | None = None) -> dict:
+    # Prefer an explicit coords (e.g., city/country extent) when available.
+    if isinstance(coords, dict) and coords.get("lat") is not None and coords.get("lon") is not None:
+        return view_state_from_bbox(coords, padding=0.18, min_zoom=4.0, max_zoom=9)
+    return view_state_from_points(points or [], padding=0.18, min_zoom=4.0, max_zoom=9)
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -230,7 +230,7 @@ def query_disaster_events_tool(
       - transport
     example: query_disaster_events_tool("2023-06-01", "2023-06-30", "France", "flood")
     """
-
+    print("I am in query_disaster_events_tool")
     if end_date is None or (isinstance(end_date, str) and not end_date.strip()):
         end_date = start_date
 
@@ -256,7 +256,10 @@ def query_disaster_events_tool(
     # -----------------------
     # Country ISO3 code
     # -----------------------
-    iso3 = get_iso3_from_country_name(country_name)
+    if country_name is not None and country_name.strip():
+        iso3 = get_iso3_from_country_name(country_name)
+    else:
+        iso3 = None
     if not iso3:
         return make_tool_response(
             tool_name="query_disaster_events_tool",
@@ -275,7 +278,7 @@ def query_disaster_events_tool(
     country_bbox: list[float] | None = None
     location_display: str | None = None
     location_coordinates: dict | None = None
-    radius_km = 100.0
+    radius_km = 50.0
 
     if isinstance(location, str) and location.strip():
         loc_norm = location.strip().lower()
@@ -328,15 +331,17 @@ def query_disaster_events_tool(
     # Country bbox (for country-wide framing)
     # -----------------------
     # If the user didn't specify a sub-location, try to frame the country itself.
+    country_coords: dict[str, float] | None = None
     if location_bbox is None and isinstance(country_name, str) and country_name.strip():
         try:
             cands = get_city_candidates(country_name.strip(), limit=1)
-            if cands and isinstance(cands[0], dict) and cands[0].get("bbox"):
-                cb = cands[0].get("bbox")
-                if isinstance(cb, list) and len(cb) == 4:
-                    country_bbox = cb
+            if cands and isinstance(cands[0], dict):
+                lat_c = cands[0].get("lat")
+                lon_c = cands[0].get("lon")
+                if lat_c is not None and lon_c is not None:
+                    country_coords = {"lat": float(lat_c), "lon": float(lon_c)}
         except Exception:
-            country_bbox = None
+            country_coords = None
 
     # -----------------------
     # Retrieve events
@@ -474,7 +479,7 @@ def query_disaster_events_tool(
         artifacts["maps"].append(
             {
                 "title": f"Disaster events in {country_name}",
-                "view_state": _infer_view_state(map_points, bbox=location_bbox or country_bbox),
+                "view_state": _infer_view_state(map_points, coords=location_coordinates or country_coords),
                 "tooltip": {
                     "text": "{emoji} {type}\n{location}, {country}\n{start_date} → {end_date}\nDeaths: {total_deaths}\nAffected: {total_affected}",
                 },

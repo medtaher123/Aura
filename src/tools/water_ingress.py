@@ -21,6 +21,25 @@ MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Geocoding (name -> lat/lon)
 def geocode_city(city_name: str):
+    # Support disambiguation tokens produced by the UI, e.g. "@osm_id:R1639973" or "@place_id:123".
+    # bbox_service knows how to resolve these via Nominatim lookup.
+    if isinstance(city_name, str):
+        q = city_name.strip()
+        if q.startswith("@"):
+            try:
+                candidates = get_city_candidates(q, limit=1)
+            except Exception:
+                candidates = []
+            if candidates:
+                c = candidates[0]
+                lat = c.get("lat")
+                lon = c.get("lon")
+                bbox = c.get("bbox")
+                if lat is not None and lon is not None:
+                    # bbox_service returns bbox as [min_lat, max_lat, min_lon, max_lon]
+                    # which matches this module's expected indexing.
+                    return float(lat), float(lon), bbox, None
+
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": city_name, "format": "json", "limit": 1, "polygon_geojson": 1}
     r = requests.get(url, params=params, headers={"User-Agent": "SurfaceIngressTool"})
@@ -171,6 +190,7 @@ def mitigation_rules(dem, slope, acc, risk_mask):
 
 #Estimation principale
 def estimate_surface_water_ingress(location_input):
+    print('I am in location_input:', location_input)
     if isinstance(location_input, str):
         lat, lon, bbox, polygon = geocode_city(location_input)
         location_info = reverse_geocode(lat, lon)
@@ -317,7 +337,14 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
 
         ingress = result.get("Ingress_paths_estimate", "Not available")
         mitigation = result.get("Mitigation_actions", [])
-        stats = result.get("Statistics", {})
+        stats = {
+            "DEM_shape": result.get("DEM_shape"),
+            "Elevation_min": result.get("Elevation_min"),
+            "Elevation_max": result.get("Elevation_max"),
+            "Elevation_mean": result.get("Elevation_mean"),
+            "Slope_mean": result.get("Slope_mean"),
+            "Risk_zone_percent": result.get("Risk_zone_percent"),
+        }
         maps = result.get("Maps", {})
         explanation = result.get("Explanation", "Not available")
 
@@ -361,19 +388,10 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         if isinstance(maps, dict):
             risk_points = maps.get("Risk_points")
             coords = result.get("Coordinates")
-            bounds_raw = result.get("Bounds")
-            bbox = None
-            if isinstance(bounds_raw, list) and len(bounds_raw) == 4:
-                try:
-                    # result Bounds is [min_lon, min_lat, max_lon, max_lat]
-                    min_lon, min_lat, max_lon, max_lat = (float(x) for x in bounds_raw)
-                    bbox = [min_lat, max_lat, min_lon, max_lon]
-                except Exception:
-                    bbox = None
             if isinstance(risk_points, list) and isinstance(coords, dict):
                 view_state = (
-                    view_state_from_bbox(bbox, padding=0.20, min_zoom=2.0, max_zoom=12.0)
-                    if bbox is not None
+                    view_state_from_bbox(coords, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+                    if coords is not None and coords.get("lat") is not None and coords.get("lon") is not None
                     else view_state_from_points(risk_points, padding=0.20, min_zoom=2.0, max_zoom=12.0)
                 )
                 artifacts["maps"].append(

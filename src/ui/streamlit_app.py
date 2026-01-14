@@ -24,6 +24,7 @@ load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 from src.services.agent_runner import invoke_agent, coerce_tool_response
 from src.tools.contracts import make_tool_response
+from src.services.document_service import extract_text_from_pdf_bytes
 
 MAPS_DIR = PROJECT_ROOT / "src" / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -201,6 +202,14 @@ st.markdown("</div>", unsafe_allow_html=True)
 st.title("🛰️🔥 Metaplanet Earth Agent")
 
 
+def _augment_with_document(english_query: str) -> str:
+    doc = st.session_state.get("document_text") or ""
+    use_doc = bool(st.session_state.get("use_document", True))
+    if use_doc and isinstance(doc, str) and doc.strip():
+        return f"document:\n{doc}\n\nuser question:\n{english_query}".strip()
+    return english_query
+
+
 # ---------------------------------------------------
 # SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
@@ -228,7 +237,53 @@ if "auto_confirm_attempts" not in st.session_state:
     # Map normalized location_query -> int attempts in current session
     st.session_state.auto_confirm_attempts = {}
 
+if "document_text" not in st.session_state:
+    st.session_state.document_text = ""
+
+if "document_name" not in st.session_state:
+    st.session_state.document_name = ""
+
+if "use_document" not in st.session_state:
+    st.session_state.use_document = True
+
 agent_executor = st.session_state.agent_executor
+
+
+# ---------------------------------------------------
+# DOCUMENT UPLOAD (PDF)
+# ---------------------------------------------------
+with st.sidebar:
+    st.subheader("Document (PDF)")
+    uploaded = st.file_uploader("Upload a PDF", type=["pdf"], accept_multiple_files=False)
+    st.session_state.use_document = st.checkbox(
+        "Use document in prompt",
+        value=bool(st.session_state.use_document),
+    )
+
+    if uploaded is not None:
+        try:
+            pdf_bytes = uploaded.getvalue()
+            # Hard cap: avoid gigantic uploads impacting memory/prompt.
+            if isinstance(pdf_bytes, (bytes, bytearray)) and len(pdf_bytes) > 10 * 1024 * 1024:
+                st.error("PDF too large (max 10MB).")
+            else:
+                text = extract_text_from_pdf_bytes(pdf_bytes, max_chars=120_000)
+                st.session_state.document_text = text
+                st.session_state.document_name = uploaded.name or ""
+                if text:
+                    st.caption(f"Loaded {uploaded.name} ({len(text)} chars extracted)")
+                else:
+                    st.warning("No extractable text found in this PDF.")
+        except Exception as e:
+            st.error(f"PDF extraction failed: {e}")
+
+    if st.session_state.document_text:
+        with st.expander("Preview extracted text"):
+            st.text(st.session_state.document_text[:4000])
+
+    if st.button("Clear document"):
+        st.session_state.document_text = ""
+        st.session_state.document_name = ""
 
 
 # ---------------------------------------------------
@@ -331,6 +386,8 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 live_callback = _make_live_trace_updater(trace_placeholder)
                 try:
                     english_query = resume.get("user_text") or ""
+                    english_query = _augment_with_document(english_query)
+                    print('english_query:', english_query)
                     history_for_agent = st.session_state.messages_en
                     agent_output = invoke_agent(
                         agent_executor,
@@ -497,6 +554,8 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 live_callback = _make_live_trace_updater(trace_placeholder)
                 try:
                     english_query = resume.get("user_text") or ""
+                    english_query = _augment_with_document(english_query)
+                    print('english_query:', english_query)
                     history_for_agent = st.session_state.messages_en[:-1]
                     agent_output = invoke_agent(
                         agent_executor,
@@ -569,6 +628,8 @@ if user_input:
                 st.session_state.last_lang = detected_lang
                 st.session_state.messages_en.append({"role": "user", "content": english_query})
 
+                english_query = _augment_with_document(english_query)
+                print('english_query:', english_query)
                 history_for_agent = st.session_state.messages_en[:-1]
                 agent_output = invoke_agent(
                     agent_executor,

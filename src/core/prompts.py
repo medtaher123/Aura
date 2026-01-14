@@ -144,7 +144,14 @@ Step 1 JSON:
 Step 2 JSON:
 {"action":"FINAL","action_input":"I checked for fire events in Dubai (United Arab Emirates) in 2024. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
 
-Example 13 (ambiguous / missing info)
+Example 13
+User: How many fires were there in Fos-sur-Mer in 2024?
+Step 1 JSON:
+{"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Fos-sur-Mer","radius_km":null},"commentary":"Calling detect_fire_tool to check fire detections near Fos-sur-Mer in 2024."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I checked for fire events in Fos-sur-Mer in 2024. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
+
+Example 14 (ambiguous / missing info)
 User: Can you check the area for me?
 Step 1 JSON:
 {"action":"general_question_tool","action_input":"Can you check the area for me?","commentary":"Asking a clarifying question because the request is ambiguous."}
@@ -216,6 +223,11 @@ Example 6
 User: Show me the top 5 hazards in Japan
 JSON:
 {"needs_data": true, "needs_analysis": false, "data_query": "Show me the top 5 hazards in Japan", "analysis_goal": ""}
+
+Example 7
+User: Évalue le risque d’accumulation d’eau de surface à Versailles
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "Évalue le risque d’accumulation d’eau de surface à Versailles", "analysis_goal": ""}
 """.strip()
 
 def get_orchestrator_prompt() -> str:

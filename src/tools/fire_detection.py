@@ -114,6 +114,7 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
     bbox, lat_city, lon_city, city_name_final = get_city_bbox(city_name, require_confirmation=True)
+    print("City bbox:", bbox)
     print("City coordinates:", lat_city, lon_city)
     if lat_city is None:
         raise GeocodingError(
@@ -296,10 +297,11 @@ def detect_fire_tool(
         # Build a structured map spec that the UI can render with Pydeck.
         # Prefer bbox-based zoom when available (city/country extent), else fallback to points.
         bbox = result.get("bbox") if isinstance(result, dict) else None
+        coords = result.get("coords") if isinstance(result, dict) else None
         view_state = (
-            view_state_from_bbox(bbox, padding=0.18, min_zoom=4.0, max_zoom=10.5)
+            view_state_from_bbox(coords, padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
             if isinstance(bbox, list) and len(bbox) == 4
-            else view_state_from_points(points or [], padding=0.18, min_zoom=4.0, max_zoom=10.5)
+            else view_state_from_points(points or [], padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
         )
 
         return make_tool_response(

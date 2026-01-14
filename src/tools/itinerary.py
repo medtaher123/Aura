@@ -244,13 +244,12 @@ def get_route_info(source: str | None = None, destination: str | None = None, qu
         f"{steps_block}"
     )
 
-    bbox = [
-        float(min(lat1, lat2)),
-        float(max(lat1, lat2)),
-        float(min(lon1, lon2)),
-        float(max(lon1, lon2)),
-    ]
-    view_state = view_state_from_bbox(bbox, padding=0.20, min_zoom=2.0, max_zoom=12.0)
+    # Calculate center coordinates from start and end points
+    coords = {
+        'lat': (float(lat1) + float(lat2)) / 2,
+        'lon': (float(lon1) + float(lon2)) / 2
+    }
+    view_state = view_state_from_bbox(coords, padding=0.20, min_zoom=2.0, max_zoom=12.0)
 
     map_spec = {
         "title": f"Route: {start} → {end}",
