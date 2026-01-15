@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
+
+from src.services.llm_service import get_chat_llm
 from ..core.prompts import get_router_prompt
 from ..tools.tools import get_all_tools
 from ..tools.contracts import make_tool_response
@@ -124,7 +125,7 @@ def create_langgraph_agent_executor() -> LangGraphAgentExecutor:
     tool_map = {t.name: t for t in tools}
     router_prompt = get_router_prompt(list(tool_map.keys()))
 
-    llm = ChatOllama(model="mistral", temperature=0.1)
+    llm = get_chat_llm()
 
     graph = StateGraph(dict)
 

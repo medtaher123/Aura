@@ -89,9 +89,7 @@ def get_all_tools():
         query_disaster_events_tool,
         estimate_surface_water_ingress_tool,
         query_hazards_tool,
-        geo_info_tool,
         get_route_info,
         weather_tool,
-        general_question_tool,
         geoserver_risk_mask_tool,
     ]

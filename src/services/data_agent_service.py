@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
 
 from src.core.prompts import get_data_agent_react_prompt
+from src.services.llm_service import get_chat_llm
 from src.tools.tools import get_all_tools
 from src.tools.contracts import ToolResponse, make_tool_response
 
@@ -34,25 +34,81 @@ def _extract_json_obj(text: str) -> Optional[dict]:
     return None
 
 
-def _pick_action(plan_text: str) -> Tuple[Optional[str], Any, str]:
-    obj = _extract_json_obj(plan_text)
-    if not isinstance(obj, dict):
-        return None, None, ""
-    action = obj.get("action")
-    action_input = obj.get("action_input")
-    commentary = obj.get("commentary")
-    if not isinstance(action, str) or not action.strip():
-        return None, None, ""
+def _pick_action(plan_payload: Any) -> Tuple[Optional[str], Any, str]:
+    def _normalize_payload(payload: Any) -> Any:
+        if isinstance(payload, (dict, list)):
+            return payload
+        if payload is None:
+            return None
 
-    if not isinstance(commentary, str):
-        commentary = ""
-    commentary = commentary.strip()
+        s = str(payload).strip()
+        if not s:
+            return None
 
-    # Preserve dict/list inputs so tools with structured args can be called directly.
-    # If it's null, keep it as empty string for backward compatibility.
-    if action_input is None:
-        return action.strip(), "", commentary
-    return action.strip(), action_input, commentary
+        # Try strict JSON first.
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+        # Fall back to Python literal evaluation for repr-style lists/dicts.
+        try:
+            import ast
+
+            return ast.literal_eval(s)
+        except Exception:
+            pass
+
+        # Last resort: extract the first JSON object embedded in the text.
+        return _extract_json_obj(s)
+
+    payload = _normalize_payload(plan_payload)
+
+    # Anthropic tool-use format: list of content blocks or a single dict.
+    def _from_tool_use(obj: Any) -> Tuple[Optional[str], Any, str]:
+        if not isinstance(obj, dict):
+            return None, None, ""
+        if obj.get("type") != "tool_use":
+            return None, None, ""
+        name = obj.get("name")
+        tool_input = obj.get("input")
+        if not isinstance(name, str) or not name.strip():
+            return None, None, ""
+        return name.strip(), tool_input, ""
+
+    if isinstance(payload, list):
+        for item in payload:
+            action, action_input, commentary = _from_tool_use(item)
+            if action:
+                return action, action_input, commentary
+        # If list contains dicts with action schema, use the first one.
+        for item in payload:
+            if isinstance(item, dict) and isinstance(item.get("action"), str):
+                payload = item
+                break
+
+    # Standard JSON action schema.
+    if isinstance(payload, dict):
+        action = payload.get("action")
+        action_input = payload.get("action_input")
+        commentary = payload.get("commentary")
+        if isinstance(action, str) and action.strip():
+            if not isinstance(commentary, str):
+                commentary = ""
+            commentary = commentary.strip()
+
+            # Preserve dict/list inputs so tools with structured args can be called directly.
+            # If it's null, keep it as empty string for backward compatibility.
+            if action_input is None:
+                return action.strip(), "", commentary
+            return action.strip(), action_input, commentary
+
+        # Tool-use dict fallback.
+        action, action_input, commentary = _from_tool_use(payload)
+        if action:
+            return action, action_input, commentary
+
+    return None, None, ""
 
 
 def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
@@ -355,7 +411,7 @@ def create_data_agent_executor(
     tool_map = {t.name: t for t in tools}
 
     if llm is None:
-        llm = ChatOllama(model="mistral", temperature=0.1)
+        llm = get_chat_llm()
     prompt = get_data_agent_react_prompt(list(tool_map.keys()))
 
     graph = StateGraph(dict)
@@ -452,9 +508,10 @@ def create_data_agent_executor(
             ]
         )
 
-        plan_text = str(msg.content)
-        print("\n[DataAgent] plan_raw:", plan_text)
-        action, action_input, commentary = _pick_action(plan_text)
+        plan_payload = msg.content
+        print("\n[DataAgent] plan_raw:", plan_payload)
+        action, action_input, commentary = _pick_action(plan_payload)
+        print(f"[DataAgent] plan_parsed: action={action} action_input={action_input} commentary={commentary}")
 
         # If we already confirmed ambiguous locations earlier in this run, apply the
         # same resolution to future tool inputs to avoid re-triggering confirmation.

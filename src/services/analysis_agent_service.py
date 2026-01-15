@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
+
+from src.services.llm_service import get_chat_llm
 
 from src.core.prompts import get_analysis_prompt
 from src.tools.contracts import ToolResponse, make_tool_response
@@ -58,5 +59,5 @@ class AnalysisAgentExecutor:
 
 
 def create_analysis_agent_executor() -> AnalysisAgentExecutor:
-    llm = ChatOllama(model="mistral", temperature=0.1)
+    llm = get_chat_llm()
     return AnalysisAgentExecutor(llm=llm)
