@@ -1,5 +1,6 @@
 # fire_detection.py
 from datetime import datetime, timedelta, date
+import io
 import os
 from pathlib import Path
 from src.services.bbox_service import LocationAmbiguousError, get_city_bbox
@@ -8,8 +9,8 @@ from langchain.tools import tool
 from .contracts import make_tool_response
 
 MAP_KEY = "f44596f0cc01c26985abd6bfff78ac92"
-_DEFAULT_ARCHIVE_DIR = "/home/inesb/Metaplanet_llm-main_v1/Data"
-ARCHIVE_DIR = os.getenv("FIRE_ARCHIVE_DIR", str(_DEFAULT_ARCHIVE_DIR))
+ARCHIVE_DIR = os.getenv("FIRE_ARCHIVE_DIR", "")
+
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -22,6 +23,39 @@ class FireArchiveMissingError(RuntimeError):
 
 class FireDataUnavailableError(RuntimeError):
     pass
+
+
+def _is_s3_path(path: str) -> bool:
+    return isinstance(path, str) and path.startswith("s3://")
+
+
+def _parse_s3_uri(uri: str) -> tuple[str, str]:
+    stripped = uri.replace("s3://", "", 1)
+    if "/" not in stripped:
+        return stripped, ""
+    bucket, prefix = stripped.split("/", 1)
+    return bucket, prefix
+
+
+def _s3_object_exists(bucket: str, key: str) -> bool:
+    import boto3
+    s3 = boto3.client("s3")
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except Exception:
+        return False
+
+
+def _read_s3_csv(s3_uri: str):
+    import boto3
+    import pandas as pd
+
+    bucket, key = _parse_s3_uri(s3_uri)
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    body = obj["Body"].read()
+    return pd.read_csv(io.BytesIO(body))
 
 
 # Calculate the great-circle distance between two points on the Earth (Haversine formula)
@@ -48,57 +82,29 @@ def haversine(lat1, lon1, lat2, lon2):
 class GeocodingError(RuntimeError):
     pass
 
-# Find the archive file that contains data for the given date
-def find_archive_file_for_range(start_date_obj, end_date_obj):
-    archive_dir = Path(ARCHIVE_DIR)
-    if not archive_dir.exists() or not archive_dir.is_dir():
+# Find the archive file(s) that contain data for the given date range
+def find_archive_files_for_range(start_date_obj, end_date_obj):
+    if not _is_s3_path(ARCHIVE_DIR):
         raise FireArchiveMissingError(
-            f"Fire archive folder not found: '{archive_dir}'. "
-            "Create it and add FIRMS CSV archives, or set FIRE_ARCHIVE_DIR to the correct path."
+            "FIRE_ARCHIVE_DIR must be set to an S3 URI (e.g., s3://bucket/prefix)."
         )
 
-    # --- SPECIAL CASE FILES (explicit date ranges) ----
-    SPECIAL_FILES = [
-        {
-            "filename": "fire_archive_SV-C2_673436.csv",
-            "start": date(2024, 11, 1),
-            "end": date(2025, 6, 30)
-        },
-        {
-            "filename": "fire_nrt_SV-C2_673436.csv",
-            "start": date(2025, 7, 1),
-            "end": date(2025, 10, 14)
-        }
-    ]
+    bucket, prefix = _parse_s3_uri(ARCHIVE_DIR)
+    prefix = prefix.rstrip("/")
 
-    for sf in SPECIAL_FILES:
-        if not (end_date_obj < sf["start"] or start_date_obj > sf["end"]):
-            full_path = archive_dir / sf["filename"]
-            print("Using special file:", full_path)
-            if full_path.exists():
-                return str(full_path)
+    start_year = start_date_obj.year
+    end_year = end_date_obj.year
 
-    # ---- DEFAULT LOGIC FOR ALL OTHER ARCHIVE FILES ----
-    for entry in sorted(archive_dir.iterdir()):
-        filename = entry.name
-        print("Checking archive file:", filename)
-        if entry.is_file() and filename.endswith(".csv") and "fire_archive_" in filename:
-            try:
-                parts = filename.replace(".csv", "").split("_")
-                start_year = int(parts[2])
-                end_year = int(parts[3])
+    s3_uris = []
+    for year in range(start_year, end_year + 1):
+        filename = f"{year}.csv"
+        key = f"{prefix}/{filename}" if prefix else filename
+        s3_uri = f"s3://{bucket}/{key}"
+        print("Checking archive file:", s3_uri)
+        if _s3_object_exists(bucket, key):
+            s3_uris.append(s3_uri)
 
-                file_start = datetime(start_year, 1, 21).date()
-                file_end = datetime(end_year, 1, 20).date()
-
-                # Check overlap
-                if not (end_date_obj < file_start or start_date_obj > file_end):
-                    return str(entry)
-
-            except Exception:
-                continue
-
-    return None
+    return s3_uris
 
 
 # Decide whether to use the API (for recent dates) or archives (for older dates)
@@ -149,15 +155,16 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
         url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
         df = pd.read_csv(url)
     else:
-        file_path = find_archive_file_for_range(start_date_obj, end_date_obj)
-        print("Using archive file for fire data:", file_path)
-        if not file_path:
+        file_paths = find_archive_files_for_range(start_date_obj, end_date_obj)
+        print("Using archive files for fire data:", file_paths)
+        if not file_paths:
             raise FireDataUnavailableError(
                 "No fire archive CSV found for the requested date range. "
-                f"Checked folder: '{Path(ARCHIVE_DIR)}'. "
+                f"Checked location: '{ARCHIVE_DIR}'. "
                 "Add the required FIRMS archive CSV files there (or set FIRE_ARCHIVE_DIR)."
             )
-        df = pd.read_csv(file_path)
+        frames = [_read_s3_csv(path) for path in file_paths]
+        df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
 
     # Ensure date column exists
     if "acq_date" not in df.columns:
