@@ -1,13 +1,11 @@
 from langchain.tools import tool
-from langchain_ollama import OllamaLLM
+from src.services.llm_service import get_chat_llm
 
 from .contracts import make_tool_response
 
-# Local LLM via Ollama
-llm = OllamaLLM(
-    model="mistral",
-    temperature=0.1,
-)
+
+# Overridable for tests; defaults to lazy Bedrock initialization.
+llm = None
 
 @tool(return_direct=True)
 def general_question_tool(query_text: str) -> dict:
@@ -17,6 +15,7 @@ def general_question_tool(query_text: str) -> dict:
     The answer must be concise and directly address the question.
     """
     try:
+        active_llm = llm if llm is not None else get_chat_llm()
         prompt = f"""
         You are a precise assistant for earth observation tasks.
 
@@ -34,10 +33,13 @@ def general_question_tool(query_text: str) -> dict:
         Answer:
         """
 
-        response = llm.invoke(prompt)
+        response = active_llm.invoke(prompt)
+        content = getattr(response, "content", None)
+        if content is None:
+            content = str(response)
         return make_tool_response(
             tool_name="general_question_tool",
-            message=str(response),
+            message=str(content),
             error=False,
         )
     except Exception as e:
