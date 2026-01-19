@@ -19,6 +19,8 @@ Data/
 # Environment files (do not commit)
 .env
 .env.*
+# keep example env files
+!.env.example
 .env/
 
 # Generated Folium maps (do not commit)
