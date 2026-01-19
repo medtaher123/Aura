@@ -11,6 +11,7 @@ from .weather import weather_tool
 from .general_chat import general_question_tool
 from .risk_geoserver import geoserver_risk_mask_tool
 from .hazard_detection import query_hazards_tool
+from .streamflow import streamflow_forecast_tool
 from .contracts import make_tool_response
 
 
@@ -92,4 +93,5 @@ def get_all_tools():
         get_route_info,
         weather_tool,
         geoserver_risk_mask_tool,
+        streamflow_forecast_tool,
     ]
