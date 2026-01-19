@@ -398,6 +398,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     )
 
                     result = coerce_tool_response(agent_output)
+                    print('Auto-confirm result:', result)
                     if not isinstance(result, dict):
                         result = make_tool_response(
                             tool_name="ui",
@@ -566,6 +567,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     )
 
                     result = coerce_tool_response(agent_output)
+                    print('Auto-confirm result in coerce_tool_response:', result)
                     if not isinstance(result, dict):
                         result = make_tool_response(
                             tool_name="ui",
@@ -637,8 +639,9 @@ if user_input:
                     chat_history=history_for_agent,
                     stream_callback=live_callback,
                 )
-
+                
                 result = coerce_tool_response(agent_output)
+                print('Auto-confirm result 3:', result)
                 if not isinstance(result, dict):
                     result = make_tool_response(
                         tool_name="ui",

@@ -71,6 +71,7 @@ def make_tool_response(
         coordinates: Optional[ToolCoordinates] = None,
         data: Optional[Dict[str, Any]] = None,
         error: bool = False,
+        
 ) -> ToolResponse:
         """Create a standardized ToolResponse dict.
 

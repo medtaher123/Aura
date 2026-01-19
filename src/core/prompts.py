@@ -30,6 +30,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- Never call disaster event tools for fires.\n"
     "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
+    "- For river discharge, streamflow, or river flood forecasts, use streamflow_forecast_tool.\n"
     "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
     "- Use ONLY the listed tools.\n"
     "- If you have enough information to answer, stop.\n"
@@ -151,7 +152,28 @@ Step 1 JSON:
 Step 2 JSON:
 {"action":"FINAL","action_input":"I checked for fire events in Fos-sur-Mer in 2024. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
 
-Example 14 (ambiguous / missing info)
+Example 14
+User: Show me streamflow forecast for the Seine River near Paris
+Step 1 JSON:
+{"action":"streamflow_forecast_tool","action_input":{"river_name":"Seine River, Paris"},"commentary":"Calling streamflow_forecast_tool to get river discharge forecast for the Seine River."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the 15-day streamflow forecast for the Seine River. See the returned discharge forecast, flood risk level, and map.","commentary":"Summarizing the streamflow forecast results."}
+
+Example 15
+User: What's the flood risk for the Nile?
+Step 1 JSON:
+{"action":"streamflow_forecast_tool","action_input":{"river_name":"Nile"},"commentary":"Calling streamflow_forecast_tool to check river discharge and flood risk for the Nile River."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved streamflow forecast and flood risk analysis for the Nile River. See the returned discharge forecast and risk assessment.","commentary":"Summarizing the river flood risk results."}
+
+Example 16
+User: Get river discharge forecast for river_id 12345678
+Step 1 JSON:
+{"action":"streamflow_forecast_tool","action_input":{"reach_id":12345678,"river_name":"Danube River, Austria"},"commentary":"Calling streamflow_forecast_tool to get forecast for specific GEOGLOWS river_id (COMID) and show a map."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the streamflow forecast for river_id 12345678. See the returned discharge forecast, flood threshold analysis, and map.","commentary":"Summarizing the streamflow forecast results."}
+
+Example 17 (ambiguous / missing info)
 User: Can you check the area for me?
 Step 1 JSON:
 {"action":"general_question_tool","action_input":"Can you check the area for me?","commentary":"Asking a clarifying question because the request is ambiguous."}
@@ -187,7 +209,7 @@ Return ONLY valid JSON with EXACT keys:
 
 Rules:
 - If the user asks to "analyze", "report", "summarize findings", "assess risk", "explain results", set needs_analysis=true.
-- If the user asks about disasters( storms, Extreme weather, Earthquakes, floods...)/events/maps/images/weather/risk mask/fires/floods/routes or anything requiring external data, set needs_data=true.
+- If the user asks about disasters( storms, Extreme weather, Earthquakes, floods...)/events/maps/images/weather/risk mask/fires/floods/routes/rivers/streamflow/discharge or anything requiring external data, set needs_data=true.
 - If needs_data=false, still set data_query to the original user request (string).
 - If needs_analysis=false, set analysis_goal to "".
 - NEVER invent tool outputs. Only plan.
@@ -228,7 +250,15 @@ Example 7
 User: Évalue le risque d’accumulation d’eau de surface à Versailles
 JSON:
 {"needs_data": true, "needs_analysis": false, "data_query": "Évalue le risque d’accumulation d’eau de surface à Versailles", "analysis_goal": ""}
-""".strip()
+Example 8
+User: Show me streamflow forecast for the Amazon River
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "Show me streamflow forecast for the Amazon River", "analysis_goal": ""}
+
+Example 9
+User: What's the discharge for the Thames?
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "What's the discharge for the Thames?", "analysis_goal": ""}""".strip()
 
 def get_orchestrator_prompt() -> str:
     return _ORCHESTRATOR_PROMPT.strip() + "\n\n" + _ORCHESTRATOR_FEW_SHOT
