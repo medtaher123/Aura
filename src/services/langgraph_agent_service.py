@@ -145,18 +145,38 @@ def create_langgraph_agent_executor() -> LangGraphAgentExecutor:
 
         tool_name, tool_input = _pick_tool_call(plan)
 
+        # If the planner didn't request a tool, answer directly (MCP-only setups
+        # may not expose a general chat tool).
         if not tool_name:
-            tool_name = "general_question_tool"
-            tool_input = user_text
-
-        tool = tool_map.get(tool_name)
-        if tool is None:
+            msg = llm.invoke(
+                [
+                    SystemMessage(content="Answer the user concisely and directly. Do not invent data."),
+                    HumanMessage(content=user_text),
+                ]
+            )
             return {
                 "output": make_tool_response(
                     tool_name="langgraph_agent",
-                    message=f"Tool '{tool_name}' not found.",
+                    message=str(getattr(msg, "content", msg)),
+                    data={"plan": plan},
+                    error=False,
+                )
+            }
+
+        tool = tool_map.get(tool_name)
+        if tool is None:
+            msg = llm.invoke(
+                [
+                    SystemMessage(content="Answer the user concisely and directly. Do not invent data."),
+                    HumanMessage(content=user_text),
+                ]
+            )
+            return {
+                "output": make_tool_response(
+                    tool_name="langgraph_agent",
+                    message=str(getattr(msg, "content", msg)),
                     data={"plan": plan, "requested_tool": tool_name},
-                    error=True,
+                    error=False,
                 )
             }
 
