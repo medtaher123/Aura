@@ -1,17 +1,6 @@
+import os
 from datetime import date, datetime
 from langchain.tools import tool
-# Local package imports (relative to src/tools)
-from .tools_stac import query_stac_catalog
-from .fire_detection import detect_fire_tool
-from .disaster_detection import query_disaster_events_tool
-from .water_ingress import estimate_surface_water_ingress_tool
-from .geographic_info import geo_info_tool
-from .itinerary import get_route_info
-from .weather import weather_tool
-from .general_chat import general_question_tool
-from .risk_geoserver import geoserver_risk_mask_tool
-from .hazard_detection import query_hazards_tool
-from .streamflow import streamflow_forecast_tool
 from .contracts import make_tool_response
 
 
@@ -81,17 +70,24 @@ def get_all_tools():
     """
     Return the list of all tools available to the agent.
     """
-    return [
-        get_date,
-        get_time,
-        calculator,
-        query_stac_catalog,
-        detect_fire_tool,
-        query_disaster_events_tool,
-        estimate_surface_water_ingress_tool,
-        query_hazards_tool,
-        get_route_info,
-        weather_tool,
-        geoserver_risk_mask_tool,
-        streamflow_forecast_tool,
-    ]
+    try:
+        from .mcp_remote_tools import get_mcp_tools
+
+        tools = get_mcp_tools()
+        print(f"Debug: Loaded {len(tools)} tools from MCP server.")
+        print('loaded tools:', [tool.name for tool in tools])
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to load tools from MCP server. "
+            "Ensure the MCP server is running and MCP_SERVER_URL is correct. "
+            f"Details: {e}"
+        )
+
+    if not tools:
+        raise RuntimeError(
+            "MCP server returned zero tools. Ensure tools are registered in services/mcp_server/tools "
+            "and the server is healthy (/health)."
+        )
+
+    return tools
+
