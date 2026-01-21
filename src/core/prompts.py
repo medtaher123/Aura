@@ -167,7 +167,7 @@ Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved streamflow forecast and flood risk analysis for the Nile River. See the returned discharge forecast and risk assessment.","commentary":"Summarizing the river flood risk results."}
 
 Example 16
-User: Get river discharge forecast for river_id 12345678
+User: Get river discharge forecast for river_id 760021611
 Step 1 JSON:
 {"action":"streamflow_forecast_tool","action_input":{"reach_id":12345678,"river_name":"Danube River, Austria"},"commentary":"Calling streamflow_forecast_tool to get forecast for specific GEOGLOWS river_id (COMID) and show a map."}
 Step 2 JSON:
