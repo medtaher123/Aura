@@ -16,7 +16,7 @@ from tools.itinerary import get_route_info
 from tools.risk_geoserver import geoserver_risk_mask_tool
 from tools.weather import weather_tool
 from tools.geographic_info import geo_info_tool
-
+from tools.streamflow import streamflow_forecast_tool
 
 __all__ = [
     "query_hazards_tool",
@@ -31,4 +31,5 @@ __all__ = [
     "get_time",
     "get_date",
     "calculator",
+    "streamflow_forecast_tool"
 ]
