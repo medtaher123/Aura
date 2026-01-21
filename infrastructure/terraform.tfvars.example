@@ -2,7 +2,7 @@
 
 # AWS Configuration
 # aws_region     = "eu-west-3"
-# aws_account_id = "637423200916"
+# aws_account_id = "963275461308"
 
 # Project Configuration
 # project_name = "mpllm"
@@ -17,12 +17,12 @@
 # mcp_server_cpu           = "256"
 # mcp_server_memory        = "512"
 # mcp_server_desired_count = 1
-# mcp_server_image         = "637423200916.dkr.ecr.eu-west-3.amazonaws.com/mpllm-mcp:latest"
+# mcp_server_image         = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/mpllm-mcp:latest"
 
 # MCP Server Environment
 # mcp_log_level = "info"
 # mcp_workers   = "1"
 
 # Secrets (ARNs from AWS Secrets Manager)
-# opentopo_api_key_arn = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/OPENTOPO_API_KEY-tQBR3M"
-# map_key_arn          = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/MAP_KEY-r2EH0R"
+# opentopo_api_key_arn = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
+# map_key_arn          = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
