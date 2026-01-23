@@ -114,5 +114,5 @@ variable "geoserver_risk_layer" {
 variable "fire_archive_dir" {
   description = "Directory for fire detection archives"
   type        = string
-  default     = "/tmp/fire_archive"
+  default     = "s3://metaplanet-fire-archive-firms/"
 }
