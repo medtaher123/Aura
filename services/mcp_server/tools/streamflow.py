@@ -29,18 +29,255 @@ from utils.map_view_service import view_state_from_points
 RETRO_RETURN_PERIODS_ZARR = "s3://geoglows-v2/retrospective/return-periods.zarr"
 FORECASTS_BUCKET = "geoglows-v2-forecasts"
 
-
-def _find_reach_for_river(lat: float, lon: float) -> Optional[int]:
-    """Placeholder reach lookup by coordinates.
-
-    The recommended GEOGLOWS method is to use river_id (COMID) directly.
-    This function currently cannot resolve river_id from coordinates without
-    loading the hydrography datasets, so it returns None.
-    """
-    return None
+# Hydroviewer uses an ArcGIS map service for interactive feature identification.
+# We can use the same service to infer a GEOGLOWS reach_id (LINKNO / river_id)
+# from a lat/lon point.
+GEOGLOWS_ARCGIS_LAYER0 = (
+    "https://livefeeds3.arcgis.com/arcgis/rest/services/GEOGLOWS/"
+    "GlobalWaterModel_Medium/MapServer/0"
+)
 
 
 @lru_cache(maxsize=1)
+def _get_arcgis_service_wkid() -> int:
+    """Best-effort: get the MapServer spatial reference WKID.
+
+    ArcGIS identify expects `mapExtent` in the service/map spatial reference.
+    If we provide a WGS84 bbox to a WebMercator service, it can identify the
+    wrong feature near dense networks.
+    """
+    try:
+        base = GEOGLOWS_ARCGIS_LAYER0.rsplit("/", 1)[0]
+        resp = requests.get(base, params={"f": "json"}, timeout=10)
+        if resp.status_code != 200:
+            return 4326
+        payload = resp.json() if resp.content else {}
+        sr = payload.get("spatialReference") if isinstance(payload, dict) else None
+        if isinstance(sr, dict):
+            wkid = sr.get("latestWkid") or sr.get("wkid")
+            if isinstance(wkid, int) and wkid > 0:
+                return wkid
+    except Exception:
+        pass
+    return 4326
+
+
+def _lonlat_to_webmercator(lon: float, lat: float) -> tuple[float, float]:
+    """Convert lon/lat WGS84 to WebMercator meters (EPSG:3857/102100)."""
+    # Clamp latitude to valid WebMercator range
+    lat = max(min(lat, 85.05112878), -85.05112878)
+    origin_shift = 20037508.342789244
+    x = (lon * origin_shift) / 180.0
+    import math
+
+    y = math.log(math.tan((90.0 + lat) * math.pi / 360.0)) / (math.pi / 180.0)
+    y = (y * origin_shift) / 180.0
+    return x, y
+
+
+def _webmercator_to_lonlat(x: float, y: float) -> tuple[float, float]:
+    """Convert WebMercator meters (EPSG:3857/102100) to lon/lat WGS84."""
+    origin_shift = 20037508.342789244
+    lon = (x / origin_shift) * 180.0
+    import math
+
+    lat = (y / origin_shift) * 180.0
+    lat = 180.0 / math.pi * (2.0 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+    return lon, lat
+
+
+def _esri_polyline_to_geojson(geom: object) -> Optional[dict]:
+    """Convert an ArcGIS polyline geometry (esriJSON) into a GeoJSON FeatureCollection."""
+    if not isinstance(geom, dict):
+        return None
+    paths = geom.get("paths")
+    if not isinstance(paths, list) or not paths:
+        return None
+
+    # Some ArcGIS services return geometry in WebMercator even if outSR is provided.
+    # Detect SR and convert to lon/lat when needed.
+    sr = geom.get("spatialReference")
+    wkid = None
+    if isinstance(sr, dict):
+        wkid = sr.get("latestWkid") or sr.get("wkid")
+    is_webmercator = wkid in {3857, 102100}
+
+    lines: list[list[list[float]]] = []
+    for path in paths:
+        if not isinstance(path, list) or len(path) < 2:
+            continue
+        coords: list[list[float]] = []
+        for pt in path:
+            if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                continue
+            try:
+                x = float(pt[0])
+                y = float(pt[1])
+            except Exception:
+                continue
+            if is_webmercator:
+                lon, lat = _webmercator_to_lonlat(x, y)
+                coords.append([lon, lat])
+            else:
+                # ArcGIS geometry is typically [x,y] = [lon,lat] in wkid=4326.
+                coords.append([x, y])
+        if len(coords) >= 2:
+            lines.append(coords)
+
+    if not lines:
+        return None
+
+    geometry: dict
+    if len(lines) == 1:
+        geometry = {"type": "LineString", "coordinates": lines[0]}
+    else:
+        geometry = {"type": "MultiLineString", "coordinates": lines}
+
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": geometry,
+            }
+        ],
+    }
+
+
+def _identify_geoglows_river_feature(
+    lat: float, lon: float, *, return_geometry: bool = False
+) -> tuple[Optional[int], Optional[dict]]:
+    """Identify nearest GEOGLOWS river feature at a point.
+
+    Returns:
+      (reach_id, geojson_feature_collection)
+    """
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return None, None
+
+    # Identify needs `mapExtent` in the MapServer spatial reference.
+    wkid = _get_arcgis_service_wkid()
+    if wkid in {3857, 102100}:
+        cx, cy = _lonlat_to_webmercator(lon_f, lat_f)
+        pad_m = 8000.0
+        map_extent = f"{cx - pad_m},{cy - pad_m},{cx + pad_m},{cy + pad_m}"
+        geometry = f"{cx},{cy}"
+        geom_sr = wkid
+    else:
+        # Small bbox around the point for identify to work without a real map view.
+        pad = 0.05
+        map_extent = f"{lon_f - pad},{lat_f - pad},{lon_f + pad},{lat_f + pad}"
+        geometry = f"{lon_f},{lat_f}"
+        geom_sr = 4326
+
+    identify_url = GEOGLOWS_ARCGIS_LAYER0.rsplit("/", 1)[0] + "/identify"
+    params = {
+        "f": "json",
+        "geometry": geometry,
+        "geometryType": "esriGeometryPoint",
+        # Spatial reference of the input geometry (lon/lat).
+        "sr": geom_sr,
+        # Force output geometry in lon/lat so the overlay aligns with the basemap.
+        "outSR": 4326,
+        "layers": "all:0",
+        "tolerance": 10,
+        "mapExtent": map_extent,
+        "imageDisplay": "800,600,96",
+        "returnGeometry": "true" if return_geometry else "false",
+    }
+
+    headers = {"User-Agent": "metaplanet-llm-streamflow"}
+    try:
+        resp = requests.get(identify_url, params=params, headers=headers, timeout=15)
+    except Exception:
+        return None, None
+    if resp.status_code != 200:
+        return None, None
+
+    payload = resp.json() if resp.content else {}
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not results:
+        return None, None
+
+    first = results[0] if isinstance(results[0], dict) else {}
+    attrs = first.get("attributes") if isinstance(first, dict) else None
+    if not isinstance(attrs, dict):
+        return None, None
+
+    def _coerce_reach_id(value: object) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            v = value.strip()
+            if not v or v.lower() in {"null", "none", "nan"}:
+                return None
+            v = v.replace(",", "")
+            try:
+                return int(v)
+            except Exception:
+                return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    candidate_keys = (
+        "Terminal TDX Hydro Link Number",
+        "TDX Hydro Link Number",
+        "LINKNO",
+        "linkno",
+        "river_id",
+        "RIVID",
+        "rivid",
+        "COMID",
+        "comid",
+        "reach_id",
+    )
+
+    reach_id: Optional[int] = None
+    for key in candidate_keys:
+        if key in attrs:
+            rid = _coerce_reach_id(attrs.get(key))
+            if rid is not None and rid > 0:
+                reach_id = rid
+                break
+    if reach_id is None:
+        return None, None
+
+    geojson = None
+    if return_geometry:
+        geojson = _esri_polyline_to_geojson(first.get("geometry"))
+        if isinstance(geojson, dict):
+            try:
+                geojson["features"][0]["properties"] = {"river_id": reach_id, "reach_id": reach_id}
+            except Exception:
+                pass
+
+    return reach_id, geojson
+
+
+def _find_reach_for_river(lat: float, lon: float) -> Optional[int]:
+    """Infer a GEOGLOWS reach_id (LINKNO / river_id) from a lat/lon point.
+
+    Strategy:
+    - Use the ArcGIS MapServer layer referenced by the GEOGLOWS Hydroviewer.
+    - Call its `/identify` endpoint around the given point and extract the
+      reach identifier from returned feature attributes.
+
+    Notes:
+    - This is a best-effort "snap to nearest river". It can be wrong near
+      confluences, deltas, or if the input point is far from the modeled river.
+    - If the service is unavailable or returns no features, returns None.
+    """
+    rid, _ = _identify_geoglows_river_feature(lat, lon, return_geometry=False)
+    return rid
+
+
+@lru_cache(maxsize=3)
 def _get_s3fs() -> s3fs.S3FileSystem:
     return s3fs.S3FileSystem(anon=True)
 
@@ -76,7 +313,7 @@ def _open_zarr(uri: str) -> xr.Dataset:
     return xr.open_dataset(uri, engine="zarr", storage_options={"anon": True})
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=3)
 def _get_return_periods_dataset() -> xr.Dataset:
     return _open_zarr(RETRO_RETURN_PERIODS_ZARR)
 
@@ -223,9 +460,11 @@ def streamflow_forecast_tool(
     """
     Get streamflow forecast and flood risk for rivers using GEOGLOWS global hydrological model.
     
-    Provide either:
-    - `river_name`: Name of the river (e.g., "Seine", "Nile", "Amazon", "Thames")
-    - `reach_id`: Specific GEOGLOWS river ID (COMID)
+        Provide either:
+        - `river_name`: Name of the river (e.g., "Seine", "Nile", "Amazon", "Thames").
+            The tool will geocode this to a point and attempt to infer the nearest
+            GEOGLOWS reach_id automatically.
+        - `reach_id`: Specific GEOGLOWS river ID (COMID / LINKNO)
     
     Returns 15-day discharge forecast, flood risk level, and return period analysis.
     
@@ -247,6 +486,7 @@ def streamflow_forecast_tool(
     lat = None
     lon = None
     river_display_name = None
+    river_geojson = None
     
     # Optional river name: used only to provide map coordinates
     if river_name:
@@ -259,6 +499,7 @@ def streamflow_forecast_tool(
 
         try:
             bbox, lat, lon, river_display_name = get_city_bbox(river_name.strip(), require_confirmation=True)
+            print(f"Geocoded river_name '{river_name}' to lat={lat}, lon={lon}, bbox={bbox}")
         except LocationAmbiguousError as e:
             candidates = e.candidates if isinstance(e.candidates, list) else []
             chosen = candidates[0] if candidates else {}
@@ -266,6 +507,7 @@ def streamflow_forecast_tool(
             lat = chosen.get("lat")
             lon = chosen.get("lon")
             bbox = chosen.get("bbox")
+            print(f"Ambiguous river_name '{river_name}'; using first candidate: lat={lat}, lon={lon}, bbox={bbox}")
 
         if lat is not None and lon is not None:
             try:
@@ -275,15 +517,31 @@ def streamflow_forecast_tool(
                 lat = None
                 lon = None
 
+    # If reach_id isn't provided, try to infer it from the geocoded point.
+    # Also capture the river geometry so we can highlight the river on the map.
+    if reach_id is None and lat is not None and lon is not None:
+        inferred_id, inferred_geojson = _identify_geoglows_river_feature(lat, lon, return_geometry=True)
+        if inferred_id is not None:
+            reach_id = inferred_id
+            river_geojson = inferred_geojson
+
+    # If reach_id is provided (or was inferred) and we have a point, try to fetch
+    # a matching river geometry for highlighting.
+    if river_geojson is None and reach_id is not None and lat is not None and lon is not None:
+        cand_id, cand_geojson = _identify_geoglows_river_feature(lat, lon, return_geometry=True)
+        if cand_id == reach_id and cand_geojson is not None:
+            river_geojson = cand_geojson
+
     if reach_id is None:
         return make_tool_response(
             tool_name="streamflow_forecast_tool",
             message=(
-                "Streamflow data access via the recommended S3 datasets requires a river_id (COMID). "
-                "Please provide a river_id. You can find river numbers here: "
+                "I couldn't infer a GEOGLOWS river_id (reach_id) from the provided river_name. "
+                "Try a more specific query (e.g., 'River Name, Country') or provide a reach_id directly. "
+                "You can also find river numbers here: "
                 "https://training.geoglows.org/rfs/accessing-data/find-river-numbers/"
             ),
-            coordinates={"lat": lat, "lon": lon} if lat and lon else None,
+            coordinates={"lat": lat, "lon": lon} if lat is not None and lon is not None else None,
             data={"river_name": river_display_name or river_name},
             error=True,
         )
@@ -373,15 +631,6 @@ def streamflow_forecast_tool(
     # Create map visualization
     maps = []
     if lat is not None and lon is not None:
-        point_data = [{
-            "lat": lat,
-            "lon": lon,
-                "river_id": reach_id,
-            "discharge": peak_discharge,
-            "risk": risk_level,
-            "return_period": return_period,
-        }]
-        
         view_state = view_state_from_points(
             [{"lat": lat, "lon": lon}],
             padding=0.1,
@@ -389,23 +638,42 @@ def streamflow_forecast_tool(
             max_zoom=12.0,
         )
         
+        layers = []
+
+        # River highlight (preferred)
+        if isinstance(river_geojson, dict):
+            # Enrich tooltip properties
+            try:
+                river_geojson["features"][0]["properties"].update(
+                    {
+                        "river_id": reach_id,
+                        "discharge": float(peak_discharge),
+                        "discharge_str": f"{float(peak_discharge):.1f}",
+                        "risk": risk_level,
+                        "return_period": return_period,
+                    }
+                )
+            except Exception:
+                pass
+
+            layers.append(
+                {
+                    "type": "GeoJsonLayer",
+                    "data": river_geojson,
+                    "stroked": True,
+                    "filled": False,
+                    "get_line_color": point_color,
+                    "line_width_min_pixels": 4,
+                    "pickable": True,
+                    "auto_highlight": True,
+                }
+            )
+
         maps.append({
             "view_state": view_state,
-            "layers": [
-                {
-                    "type": "ScatterplotLayer",
-                    "data": point_data,
-                    "get_position": "[lon, lat]",
-                    "get_radius": 500,
-                    "radius_units": "meters",
-                    "radius_min_pixels": 8,
-                    "radius_max_pixels": 30,
-                    "get_fill_color": point_color,
-                    "pickable": True,
-                }
-            ],
+            "layers": layers,
             "tooltip": {
-                "html": "<b>River ID {river_id}</b><br/>Discharge: {discharge:.1f} m³/s<br/>Risk: {risk}<br/>Return Period: {return_period}",
+                "html": "<b>River ID {river_id}</b><br/>Discharge: {discharge_str} m³/s<br/>Risk: {risk}<br/>Return Period: {return_period}",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
             "title": f"Streamflow Forecast - {river_desc}",

@@ -340,6 +340,14 @@ def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_
         # fallback: concatenate tool messages
         message = "\n\n".join([f"{r.get('tool_name')}: {r.get('message')}" for r in steps if r.get("message")])
 
+    # Overall error semantics: the DataAgent may try multiple tools (or retry the
+    # same tool with refined inputs). If at least one tool call succeeded, we
+    # should not mark the entire response as an error; the UI can still show
+    # per-step failures via `data.tool_calls`.
+    overall_error = False
+    if steps:
+        overall_error = all(bool(r.get("error")) for r in steps)
+
     return make_tool_response(
         tool_name="data_agent",
         message=message or "No data gathered.",
@@ -361,7 +369,7 @@ def _merge_steps_into_response(user_text: str, steps: list[ToolResponse], final_
                 for r in steps
             ],
         },
-        error=any(bool(r.get("error")) for r in steps),
+        error=overall_error,
     )
 
 

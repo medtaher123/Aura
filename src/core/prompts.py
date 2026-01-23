@@ -31,6 +31,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- For river discharge, streamflow, or river flood forecasts, use streamflow_forecast_tool.\n"
+    "- For climate, solar irradiance, wind resource, or hourly temperature/precipitation time series at a location, use nasa_power_hourly_tool.\n"
     "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
     "- Use ONLY the listed tools.\n"
     "- If you have enough information to answer, stop.\n"
@@ -179,6 +180,13 @@ Step 1 JSON:
 {"action":"general_question_tool","action_input":"Can you check the area for me?","commentary":"Asking a clarifying question because the request is ambiguous."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I need a location and time range (and what you want: fires, floods, imagery, risk mask, etc.) to proceed.","commentary":"Requesting missing details to proceed."}
+
+Example 18
+User: Hourly solar irradiance last week in Tunis?
+Step 1 JSON:
+{"action":"nasa_power_hourly_tool","action_input":{"location":"Tunis","start_date":"2024-05-20","end_date":"2024-05-26","parameters":["ALLSKY_SFC_SW_DWN"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_hourly_tool to fetch hourly solar irradiance (ALLSKY_SFC_SW_DWN) from NASA POWER."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved NASA POWER hourly solar irradiance data for Tunis last week. See the returned summary and time series.","commentary":"Summarizing the NASA POWER hourly solar irradiance results."}
 """.strip()
 
 
