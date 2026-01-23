@@ -11,17 +11,9 @@ from mcp_singleton import mcp
 import numpy as np
 import s3fs
 import xarray as xr
-from langchain.tools import tool
 
 
-from typing import Any, Optional
-
-import requests
-from mcp_singleton import mcp
-from core.logger import get_logger
-from config import get_config
 from utils.contracts import make_tool_response
-from shapely.geometry import shape
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox
 from utils.map_view_service import view_state_from_points
@@ -360,12 +352,18 @@ def _get_return_periods(reach_id: int) -> Optional[dict]:
 
         # Use return_period coordinate (2,5,10,25,50,100)
         rp_values = sel[rp_var].values
-        rp_coord = sel["return_period"].values if "return_period" in sel.coords else [2, 5, 10, 25, 50, 100]
+        rp_coord = (
+            sel["return_period"].values
+            if "return_period" in sel.coords
+            else [2, 5, 10, 25, 50, 100]
+        )
 
         for period in [2, 5, 10, 25, 50, 100]:
             try:
                 idx = int(np.where(np.asarray(rp_coord) == period)[0][0])
-                thresholds[f"return_period_{period}"] = float(np.asarray(rp_values)[idx])
+                thresholds[f"return_period_{period}"] = float(
+                    np.asarray(rp_values)[idx]
+                )
             except Exception:
                 thresholds[f"return_period_{period}"] = 0.0
 
@@ -426,29 +424,61 @@ def _get_forecast_stats(reach_id: int) -> Optional[dict]:
 def _assess_flood_risk(peak_discharge: float, return_periods: dict) -> dict:
     """Assess flood risk level based on discharge and return periods."""
     if not return_periods or peak_discharge <= 0:
-        return {"risk_level": "unknown", "return_period": None, "color": [128, 128, 128, 200]}
-    
-    rp_100 = return_periods.get("return_period_100", float('inf'))
-    rp_50 = return_periods.get("return_period_50", float('inf'))
-    rp_25 = return_periods.get("return_period_25", float('inf'))
-    rp_10 = return_periods.get("return_period_10", float('inf'))
-    rp_5 = return_periods.get("return_period_5", float('inf'))
-    rp_2 = return_periods.get("return_period_2", float('inf'))
-    
+        return {
+            "risk_level": "unknown",
+            "return_period": None,
+            "color": [128, 128, 128, 200],
+        }
+
+    rp_100 = return_periods.get("return_period_100", float("inf"))
+    rp_50 = return_periods.get("return_period_50", float("inf"))
+    rp_25 = return_periods.get("return_period_25", float("inf"))
+    rp_10 = return_periods.get("return_period_10", float("inf"))
+    rp_5 = return_periods.get("return_period_5", float("inf"))
+    rp_2 = return_periods.get("return_period_2", float("inf"))
+
     if peak_discharge >= rp_100:
-        return {"risk_level": "extreme", "return_period": "100-year", "color": [139, 0, 0, 220]}
+        return {
+            "risk_level": "extreme",
+            "return_period": "100-year",
+            "color": [139, 0, 0, 220],
+        }
     elif peak_discharge >= rp_50:
-        return {"risk_level": "severe", "return_period": "50-year", "color": [178, 34, 34, 200]}
+        return {
+            "risk_level": "severe",
+            "return_period": "50-year",
+            "color": [178, 34, 34, 200],
+        }
     elif peak_discharge >= rp_25:
-        return {"risk_level": "high", "return_period": "25-year", "color": [255, 69, 0, 200]}
+        return {
+            "risk_level": "high",
+            "return_period": "25-year",
+            "color": [255, 69, 0, 200],
+        }
     elif peak_discharge >= rp_10:
-        return {"risk_level": "high", "return_period": "10-year", "color": [255, 140, 0, 200]}
+        return {
+            "risk_level": "high",
+            "return_period": "10-year",
+            "color": [255, 140, 0, 200],
+        }
     elif peak_discharge >= rp_5:
-        return {"risk_level": "moderate", "return_period": "5-year", "color": [255, 215, 0, 180]}
+        return {
+            "risk_level": "moderate",
+            "return_period": "5-year",
+            "color": [255, 215, 0, 180],
+        }
     elif peak_discharge >= rp_2:
-        return {"risk_level": "low", "return_period": "2-year", "color": [173, 216, 230, 160]}
+        return {
+            "risk_level": "low",
+            "return_period": "2-year",
+            "color": [173, 216, 230, 160],
+        }
     else:
-        return {"risk_level": "normal", "return_period": "below 2-year", "color": [60, 179, 113, 140]}
+        return {
+            "risk_level": "normal",
+            "return_period": "below 2-year",
+            "color": [60, 179, 113, 140],
+        }
 
 
 @mcp.tool()
@@ -467,14 +497,14 @@ def streamflow_forecast_tool(
         - `reach_id`: Specific GEOGLOWS river ID (COMID / LINKNO)
     
     Returns 15-day discharge forecast, flood risk level, and return period analysis.
-    
+
     Examples:
     - streamflow_forecast_tool(river_name="Seine")
     - streamflow_forecast_tool(river_name="Nile River")
     - streamflow_forecast_tool(river_name="Amazon River, Brazil")
     - streamflow_forecast_tool(reach_id=12345678)
     """
-    
+
     # Validate inputs
     if not river_name and not reach_id:
         return make_tool_response(
@@ -482,7 +512,7 @@ def streamflow_forecast_tool(
             message="Please provide either 'river_name' (e.g., 'Seine', 'Nile') or 'reach_id' (GEOGLOWS river ID).",
             error=True,
         )
-    
+
     lat = None
     lon = None
     river_display_name = None
@@ -503,7 +533,9 @@ def streamflow_forecast_tool(
         except LocationAmbiguousError as e:
             candidates = e.candidates if isinstance(e.candidates, list) else []
             chosen = candidates[0] if candidates else {}
-            river_display_name = str(chosen.get("display_name") or chosen.get("name") or river_name).strip()
+            river_display_name = str(
+                chosen.get("display_name") or chosen.get("name") or river_name
+            ).strip()
             lat = chosen.get("lat")
             lon = chosen.get("lon")
             bbox = chosen.get("bbox")
@@ -545,7 +577,7 @@ def streamflow_forecast_tool(
             data={"river_name": river_display_name or river_name},
             error=True,
         )
-    
+
     # Validate reach_id
     if not isinstance(reach_id, int) or reach_id <= 0:
         return make_tool_response(
@@ -565,7 +597,7 @@ def streamflow_forecast_tool(
             data={"reach_id": reach_id, "river_id": reach_id},
             error=True,
         )
-    
+
     # Get return periods (flood thresholds)
     return_periods = _get_return_periods(reach_id)
     if not return_periods:
@@ -575,7 +607,7 @@ def streamflow_forecast_tool(
             data={"reach_id": reach_id, "river_id": reach_id},
             error=True,
         )
-    
+
     # Get forecast statistics
     forecast_stats = _get_forecast_stats(reach_id)
     if not forecast_stats:
@@ -585,49 +617,53 @@ def streamflow_forecast_tool(
             data={"reach_id": reach_id, "river_id": reach_id},
             error=True,
         )
-    
+
     peak_discharge = forecast_stats.get("peak_discharge_m3s", 0)
     peak_time = forecast_stats.get("peak_time")
-    
+
     # Assess flood risk
     risk_assessment = _assess_flood_risk(peak_discharge, return_periods)
     risk_level = risk_assessment["risk_level"]
     return_period = risk_assessment["return_period"]
     point_color = risk_assessment["color"]
-    
+
     # Build response message
     river_desc = river_display_name or f"Reach {reach_id}"
-    
+
     message_parts = [
         f"📊 **Streamflow Forecast for {river_desc}**",
         f"River ID: {reach_id}",
         f"",
         f"🌊 **Peak Forecast Discharge**: {peak_discharge:.1f} m³/s",
     ]
-    
+
     if peak_time:
         try:
             dt = datetime.fromisoformat(peak_time.replace("Z", "+00:00"))
-            message_parts.append(f"⏰ **Peak Time**: {dt.strftime('%Y-%m-%d %H:%M UTC')}")
+            message_parts.append(
+                f"⏰ **Peak Time**: {dt.strftime('%Y-%m-%d %H:%M UTC')}"
+            )
         except Exception:
             message_parts.append(f"⏰ **Peak Time**: {peak_time}")
 
-    message_parts.extend([
-        f"",
-        f"⚠️ **Flood Risk**: {risk_level.upper()}",
-        f"📈 **Return Period**: {return_period}",
-        f"",
-        f"**Flood Thresholds (m³/s):**",
-        f"• 2-year: {return_periods.get('return_period_2', 0):.1f}",
-        f"• 5-year: {return_periods.get('return_period_5', 0):.1f}",
-        f"• 10-year: {return_periods.get('return_period_10', 0):.1f}",
-        f"• 25-year: {return_periods.get('return_period_25', 0):.1f}",
-        f"• 50-year: {return_periods.get('return_period_50', 0):.1f}",
-        f"• 100-year: {return_periods.get('return_period_100', 0):.1f}",
-    ])
-    
+    message_parts.extend(
+        [
+            f"",
+            f"⚠️ **Flood Risk**: {risk_level.upper()}",
+            f"📈 **Return Period**: {return_period}",
+            f"",
+            f"**Flood Thresholds (m³/s):**",
+            f"• 2-year: {return_periods.get('return_period_2', 0):.1f}",
+            f"• 5-year: {return_periods.get('return_period_5', 0):.1f}",
+            f"• 10-year: {return_periods.get('return_period_10', 0):.1f}",
+            f"• 25-year: {return_periods.get('return_period_25', 0):.1f}",
+            f"• 50-year: {return_periods.get('return_period_50', 0):.1f}",
+            f"• 100-year: {return_periods.get('return_period_100', 0):.1f}",
+        ]
+    )
+
     message = "\n".join(message_parts)
-    
+
     # Create map visualization
     maps = []
     if lat is not None and lon is not None:
@@ -680,8 +716,10 @@ def streamflow_forecast_tool(
         })
     
     # GEOGLOWS web viewer URL
-    viewer_url = f"https://geoglows.ecmwf.int/apps/geoglows-hydroviewer/?river_id={reach_id}"
-    
+    viewer_url = (
+        f"https://geoglows.ecmwf.int/apps/geoglows-hydroviewer/?river_id={reach_id}"
+    )
+
     return make_tool_response(
         tool_name="streamflow_forecast_tool",
         message=message,
@@ -700,7 +738,6 @@ def streamflow_forecast_tool(
             "risk_level": risk_level,
             "return_period": return_period,
             "return_periods": return_periods,
-
             "geoglows_viewer_url": viewer_url,
         },
         error=False,

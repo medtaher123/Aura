@@ -19,7 +19,14 @@ variable "project_name" {
 variable "aws_account_id" {
   description = "AWS Account ID"
   type        = string
-  default     = "637423200916"
+  default     = "963275461308"
+}
+
+# GitHub Configuration
+variable "github_repository" {
+  description = "GitHub repository in format owner/repo for OIDC authentication"
+  type        = string
+  default     = "ines-besrour/MetaplanetLLM" # Update this with your actual repository
 }
 
 # VPC Configuration
@@ -63,7 +70,7 @@ variable "mcp_server_desired_count" {
 variable "mcp_server_image" {
   description = "Docker image for MCP server"
   type        = string
-  default     = "637423200916.dkr.ecr.eu-west-3.amazonaws.com/mpllm-mcp:latest"
+  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/mpllm-mcp:latest"
 }
 
 variable "mcp_log_level" {
@@ -82,11 +89,30 @@ variable "mcp_workers" {
 variable "opentopo_api_key_arn" {
   description = "ARN for OpenTopo API key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/OPENTOPO_API_KEY-tQBR3M"
+  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
 }
 
 variable "map_key_arn" {
   description = "ARN for Map key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/MAP_KEY-r2EH0R"
+  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
+}
+
+# GeoServer Configuration
+variable "geoserver_base_url" {
+  description = "GeoServer base URL"
+  type        = string
+  default     = "http://geoserver-alb-556624184.eu-west-3.elb.amazonaws.com/geoserver"
+}
+
+variable "geoserver_risk_layer" {
+  description = "GeoServer risk layer name"
+  type        = string
+  default     = "georisk:predictions"
+}
+
+variable "fire_archive_dir" {
+  description = "Directory for fire detection archives"
+  type        = string
+  default     = "s3://metaplanet-fire-archive-firms/"
 }

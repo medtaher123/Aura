@@ -62,11 +62,12 @@ env:
   APP_RUNNER_SERVICE: metaplanet-llm  # Change App Runner service name
 ```
 
-### Step 5: Deploy!
+### Step 5: Deploy
 
 The deployment happens automatically in two ways:
 
 #### Option A: Automatic (on push to main)
+
 ```bash
 git add .
 git commit -m "Deploy to AWS"
@@ -74,6 +75,7 @@ git push origin main
 ```
 
 #### Option B: Manual trigger
+
 1. Go to your GitHub repository
 2. Click **Actions** tab
 3. Select **"Deploy to AWS App Runner"** workflow
@@ -82,12 +84,15 @@ git push origin main
 ## Monitoring Deployment
 
 ### View Progress
+
 1. Go to **Actions** tab in GitHub
 2. Click on the running workflow
 3. Watch the logs in real-time
 
 ### Deployment Steps
+
 The workflow performs these steps automatically:
+
 1. ✅ Checkout code
 2. ✅ Configure AWS credentials
 3. ✅ Login to Amazon ECR
@@ -99,6 +104,7 @@ The workflow performs these steps automatically:
 9. ✅ Display service URL
 
 ### Total Time
+
 - **First deployment:** ~20-25 minutes (includes service creation)
 - **Subsequent deployments:** ~15-20 minutes
 
@@ -118,16 +124,19 @@ Once the workflow completes:
 ## Verify Deployment
 
 ### Check App Runner Service
+
 ```bash
 aws apprunner list-services --region us-east-1
 ```
 
 ### View Logs
+
 ```bash
 aws logs tail /aws/apprunner/metaplanet-llm/service --follow
 ```
 
 ### Get Service URL
+
 ```bash
 aws apprunner list-services --region us-east-1 \
   --query "ServiceSummaryList[?ServiceName=='metaplanet-llm'].ServiceUrl" \
@@ -137,29 +146,35 @@ aws apprunner list-services --region us-east-1 \
 ## Troubleshooting
 
 ### Workflow fails at "Configure AWS credentials"
+
 - ✅ Verify `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set correctly in GitHub Secrets
 - ✅ Check IAM user has required permissions
 
 ### Workflow fails at "Create ECR repository"
+
 - ℹ️ This is normal if repository already exists (step uses `continue-on-error: true`)
 
 ### Workflow fails at "Build Docker image"
+
 - ✅ Check Dockerfile syntax
 - ✅ Verify all required files exist (requirements.txt, streamlit_app.py, etc.)
 - ✅ Check GitHub Actions runner has enough disk space
 
 ### Workflow fails at "Deploy to AWS App Runner"
+
 - ✅ Verify IAM user has `AWSAppRunnerFullAccess` permission
 - ✅ Check AWS region is correct
 - ✅ Review CloudWatch logs for service errors
 
 ### App Runner service unhealthy
+
 - ✅ Verify 12 GB memory is allocated (minimum for Ollama)
 - ✅ Check health check path is `/_stcore/health`
 - ✅ Increase health check start period if model download is slow
 - ✅ Review CloudWatch logs: `aws logs tail /aws/apprunner/metaplanet-llm/service --follow`
 
 ### App is slow or times out
+
 - First LLM query takes 10-30 seconds (normal)
 - Consider increasing CPU to 8 vCPU
 - Monitor memory usage in CloudWatch
@@ -185,6 +200,7 @@ git push origin main
 ```
 
 The workflow automatically:
+
 1. Builds new Docker image
 2. Pushes to ECR with commit SHA tag
 3. Triggers App Runner deployment
@@ -194,6 +210,7 @@ The workflow automatically:
 ## Cleanup
 
 ### Delete App Runner Service
+
 ```bash
 aws apprunner delete-service \
   --service-arn $(aws apprunner list-services --region us-east-1 \
@@ -203,6 +220,7 @@ aws apprunner delete-service \
 ```
 
 ### Delete ECR Repository
+
 ```bash
 aws ecr delete-repository \
   --repository-name metaplanet-llm \
@@ -211,6 +229,7 @@ aws ecr delete-repository \
 ```
 
 ### Delete IAM User
+
 1. Go to IAM Console
 2. Select `github-actions-metaplanet` user
 3. Delete access keys first

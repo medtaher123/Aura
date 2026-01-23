@@ -12,6 +12,7 @@ venv/
 .gitignore
 .pytest_cache/
 tests/
+pytest.ini
 *.md
 .DS_Store
 *.log
