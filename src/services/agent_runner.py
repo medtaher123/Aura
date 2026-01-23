@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Callable
 
-from src.tools.contracts import ToolResponse, make_tool_response
+from src.tools import ToolResponse, make_tool_response
 
 
 def invoke_agent(
