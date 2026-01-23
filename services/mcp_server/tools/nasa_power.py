@@ -28,6 +28,7 @@ from utils.map_view_service import view_state_from_points
 logger = get_logger(__name__)
 
 POWER_HOURLY_POINT_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
+POWER_DAILY_POINT_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 PRUVE_URL = "https://power.larc.nasa.gov/parameter-uncertainty-viewer/"
 
 
@@ -119,7 +120,9 @@ def _extract_series(payload: dict[str, Any]) -> dict[str, dict[str, float]]:
     return out
 
 
-def _summarize_series(series: dict[str, dict[str, float]]) -> dict[str, Any]:
+def _summarize_series(
+    series: dict[str, dict[str, float]], *, granularity: str
+) -> dict[str, Any]:
     summary: dict[str, Any] = {}
 
     for name, ts_map in series.items():
@@ -147,19 +150,32 @@ def _summarize_series(series: dict[str, dict[str, float]]) -> dict[str, Any]:
 
         # A few high-value derived metrics for common parameters
         if name.upper() == "T2M":
-            summary[name]["hours_ge_30c"] = sum(1 for v in good if v >= 30.0)
-            summary[name]["hours_ge_35c"] = sum(1 for v in good if v >= 35.0)
-            summary[name]["hours_le_0c"] = sum(1 for v in good if v <= 0.0)
+            if granularity == "hourly":
+                summary[name]["hours_ge_30c"] = sum(1 for v in good if v >= 30.0)
+                summary[name]["hours_ge_35c"] = sum(1 for v in good if v >= 35.0)
+                summary[name]["hours_le_0c"] = sum(1 for v in good if v <= 0.0)
+            elif granularity == "daily":
+                summary[name]["days_ge_30c"] = sum(1 for v in good if v >= 30.0)
+                summary[name]["days_ge_35c"] = sum(1 for v in good if v >= 35.0)
+                summary[name]["days_le_0c"] = sum(1 for v in good if v <= 0.0)
 
         if name.upper() in {"PRECTOTCORR", "PRECTOT"}:
-            # Hourly precip accumulation (mm) often sums sensibly.
+            # For hourly/daily, precipitation values are often accumulations in mm.
             summary[name]["total"] = sum(good)
-            summary[name]["hours_ge_1mm"] = sum(1 for v in good if v >= 1.0)
-            summary[name]["hours_ge_5mm"] = sum(1 for v in good if v >= 5.0)
+            if granularity == "hourly":
+                summary[name]["hours_ge_1mm"] = sum(1 for v in good if v >= 1.0)
+                summary[name]["hours_ge_5mm"] = sum(1 for v in good if v >= 5.0)
+            elif granularity == "daily":
+                summary[name]["days_ge_10mm"] = sum(1 for v in good if v >= 10.0)
+                summary[name]["days_ge_25mm"] = sum(1 for v in good if v >= 25.0)
 
         if name.upper() in {"WS10M", "WS50M"}:
-            summary[name]["hours_ge_10ms"] = sum(1 for v in good if v >= 10.0)
-            summary[name]["hours_ge_15ms"] = sum(1 for v in good if v >= 15.0)
+            if granularity == "hourly":
+                summary[name]["hours_ge_10ms"] = sum(1 for v in good if v >= 10.0)
+                summary[name]["hours_ge_15ms"] = sum(1 for v in good if v >= 15.0)
+            elif granularity == "daily":
+                summary[name]["days_ge_10ms"] = sum(1 for v in good if v >= 10.0)
+                summary[name]["days_ge_15ms"] = sum(1 for v in good if v >= 15.0)
 
     return summary
 
@@ -226,7 +242,7 @@ def nasa_power_hourly_tool(
                     "candidates": e.candidates,
                     "resume_patch": {"field": "location"},
                 },
-                error=True,
+                error=False,
             )
         except Exception as e:
             logger.warning(f"NASA POWER geocoding failed: {e}")
@@ -363,7 +379,7 @@ def nasa_power_hourly_tool(
 
     payload = resp.json() if resp.content else {}
     series = _extract_series(payload if isinstance(payload, dict) else {})
-    summary = _summarize_series(series)
+    summary = _summarize_series(series, granularity="hourly")
 
     # Map artifact (point)
     view_state = view_state_from_points(
@@ -413,7 +429,7 @@ def nasa_power_hourly_tool(
                 msg_lines.append(f"- {p}: no valid values")
                 continue
             msg_lines.append(
-                f"- {p}: {s.get('min'):.3f} / {s.get('mean'):.3f} / {s.get('max'):.3f} (missing={s.get('missing', 0)})"
+                f"- {p}: {s.get('min'):.3f} / {s.get('mean'):.3f} / {s.get('max'):.3f}"
             )
 
     # Include PRUVE link (uncertainty viewer)
@@ -430,6 +446,262 @@ def nasa_power_hourly_tool(
             "summary": summary,
             # Keep raw series but avoid exploding payload size unnecessarily.
             # Callers that need full raw time series can still use it; cap by max_days above.
+            "series": series,
+            "pruve_url": PRUVE_URL,
+        },
+        error=False,
+    )
+
+
+@mcp.tool()
+def nasa_power_daily_tool(
+    *,
+    location: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    parameters: list[str] | str | None = None,
+    community: str = "re",
+    units: str = "metric",
+    time_standard: str = "utc",
+    max_days: int = 3650,
+) -> dict[str, Any]:
+    """Query NASA POWER daily time-series for a point.
+
+    Use this tool for trend questions over months/years (daily aggregates), such as:
+    - "Temperature trend in Paris from 2015 to 2024"
+    - "Annual precipitation totals for Tunis (2010–2020)"
+    - "How many hot days (>=35°C) per summer over the last decade?"
+
+    Args are the same as nasa_power_hourly_tool, but intended for longer time ranges.
+    """
+
+    tool_name = "nasa_power_daily_tool"
+
+    # Resolve coordinates
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    resolved_location = None
+
+    if isinstance(location, str) and location.strip():
+        try:
+            _, lat_raw, lon_raw, resolved_location = get_city_bbox(
+                location.strip(), require_confirmation=True
+            )
+            lat = float(lat_raw) if lat_raw is not None else None
+            lon = float(lon_raw) if lon_raw is not None else None
+        except LocationAmbiguousError as e:
+            return make_tool_response(
+                tool_name=tool_name,
+                message=(
+                    f"I found multiple matches for '{e.query}'. Please confirm the correct location."
+                ),
+                city=location,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": "location"},
+                },
+                error=False,
+            )
+        except Exception as e:
+            logger.warning(f"NASA POWER geocoding failed: {e}")
+    else:
+        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+            lat = float(latitude)
+            lon = float(longitude)
+
+    if lat is None or lon is None:
+        return make_tool_response(
+            tool_name=tool_name,
+            message="Provide either a valid 'location' or both 'latitude' and 'longitude'.",
+            error=True,
+        )
+
+    # Dates
+    start_i = _coerce_yyyymmdd(start_date) if start_date else None
+    end_i = _coerce_yyyymmdd(end_date) if end_date else None
+    if start_i is None or end_i is None:
+        # Default: last 30 days for daily
+        today = date.today()
+        end_d = today
+        start_d = today.fromordinal(end_d.toordinal() - 29)
+        start_i = start_i or int(start_d.strftime("%Y%m%d"))
+        end_i = end_i or int(end_d.strftime("%Y%m%d"))
+
+    if start_i > end_i:
+        return make_tool_response(
+            tool_name=tool_name,
+            message="start_date must be <= end_date.",
+            coordinates={"lat": lat, "lon": lon},
+            data={"start": start_i, "end": end_i},
+            error=True,
+        )
+
+    # Cap range
+    try:
+        ds = datetime.strptime(str(start_i), "%Y%m%d").date()
+        de = datetime.strptime(str(end_i), "%Y%m%d").date()
+        days = (de - ds).days + 1
+    except Exception:
+        days = None
+
+    if isinstance(max_days, int) and max_days > 0 and days is not None and days > max_days:
+        return make_tool_response(
+            tool_name=tool_name,
+            message=(
+                f"Requested {days} days of daily data which is too large for this tool. "
+                f"Please request <= {max_days} days (or we can add monthly/climatology helpers)."
+            ),
+            coordinates={"lat": lat, "lon": lon},
+            data={"start": start_i, "end": end_i, "requested_days": days, "max_days": max_days},
+            error=True,
+        )
+
+    params_str = _normalize_parameters(parameters)
+    if not params_str:
+        params_str = "T2M,PRECTOTCORR,WS10M,ALLSKY_SFC_SW_DWN"
+
+    community_norm = (community or "").strip().lower() or "re"
+    if community_norm not in {"re", "ag", "sb"}:
+        return make_tool_response(
+            tool_name=tool_name,
+            message="community must be one of: re, ag, sb.",
+            coordinates={"lat": lat, "lon": lon},
+            data={"community": community},
+            error=True,
+        )
+
+    units_norm = (units or "").strip().lower() or "metric"
+    if units_norm not in {"metric", "imperial"}:
+        return make_tool_response(
+            tool_name=tool_name,
+            message="units must be 'metric' or 'imperial'.",
+            coordinates={"lat": lat, "lon": lon},
+            data={"units": units},
+            error=True,
+        )
+
+    ts_norm = (time_standard or "").strip().lower() or "utc"
+    if ts_norm not in {"utc", "lst"}:
+        return make_tool_response(
+            tool_name=tool_name,
+            message="time_standard must be 'utc' or 'lst'.",
+            coordinates={"lat": lat, "lon": lon},
+            data={"time_standard": time_standard},
+            error=True,
+        )
+
+    request_params: dict[str, Any] = {
+        "start": int(start_i),
+        "end": int(end_i),
+        "latitude": float(lat),
+        "longitude": float(lon),
+        "community": community_norm,
+        "parameters": params_str,
+        "format": "json",
+        "units": units_norm,
+        "time-standard": ts_norm,
+    }
+
+    headers = {"User-Agent": "metaplanet-llm-nasa-power"}
+
+    try:
+        resp = requests.get(
+            POWER_DAILY_POINT_URL,
+            params=request_params,
+            headers=headers,
+            timeout=30,
+        )
+    except Exception as e:
+        return make_tool_response(
+            tool_name=tool_name,
+            message=f"Failed to reach NASA POWER API: {e}",
+            coordinates={"lat": lat, "lon": lon},
+            data={"request": request_params},
+            error=True,
+        )
+
+    if resp.status_code != 200:
+        try:
+            err_payload = resp.json()
+        except Exception:
+            err_payload = {"raw": resp.text[:2000]}
+
+        return make_tool_response(
+            tool_name=tool_name,
+            message=f"NASA POWER API error (HTTP {resp.status_code}).",
+            coordinates={"lat": lat, "lon": lon},
+            data={"request": request_params, "error": err_payload},
+            error=True,
+        )
+
+    payload = resp.json() if resp.content else {}
+    series = _extract_series(payload if isinstance(payload, dict) else {})
+    summary = _summarize_series(series, granularity="daily")
+
+    view_state = view_state_from_points(
+        [{"lat": lat, "lon": lon}], padding=0.15, min_zoom=4.0, max_zoom=12.0
+    )
+    map_spec = {
+        "title": "NASA POWER location",
+        "view_state": view_state,
+        "tooltip": {"text": "{label}"},
+        "layers": [
+            {
+                "type": "ScatterplotLayer",
+                "data": [
+                    {
+                        "lat": lat,
+                        "lon": lon,
+                        "label": resolved_location or location or f"{lat:.4f}, {lon:.4f}",
+                    }
+                ],
+                "get_position": "[lon, lat]",
+                "get_radius": 6,
+                "radius_units": "pixels",
+                "radius_min_pixels": 6,
+                "radius_max_pixels": 8,
+                "get_fill_color": [0, 120, 255, 200],
+                "pickable": True,
+            }
+        ],
+    }
+
+    loc_label = resolved_location or location or f"({lat:.4f}, {lon:.4f})"
+    msg_lines = [
+        f"NASA POWER daily data for {loc_label}",
+        f"Period: {start_i} → {end_i} (time_standard={ts_norm}, units={units_norm}, community={community_norm})",
+        f"Parameters: {params_str}",
+        "",
+        "Summary (min / mean / max):",
+    ]
+
+    if not summary:
+        msg_lines.append("No parameter series found in response.")
+    else:
+        for p in sorted(summary.keys()):
+            s = summary[p]
+            if not isinstance(s, dict) or "mean" not in s:
+                msg_lines.append(f"- {p}: no valid values")
+                continue
+            msg_lines.append(
+                f"- {p}: {s.get('min'):.3f} / {s.get('mean'):.3f} / {s.get('max'):.3f}"
+            )
+
+    urls = [PRUVE_URL]
+
+    return make_tool_response(
+        tool_name=tool_name,
+        message="\n".join(msg_lines),
+        city=resolved_location or location,
+        coordinates={"lat": float(lat), "lon": float(lon)},
+        artifacts={"maps": [map_spec], "thumbnails": [], "urls": urls},
+        data={
+            "request": request_params,
+            "summary": summary,
             "series": series,
             "pruve_url": PRUVE_URL,
         },

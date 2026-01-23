@@ -9,6 +9,7 @@ async def test_nasa_power_tool_exists(mcp_client):
     tools = await mcp_client.list_tools()
     tool_names = [t["name"] for t in tools]
     assert "nasa_power_hourly_tool" in tool_names
+    assert "nasa_power_daily_tool" in tool_names
 
 
 @pytest.mark.unit
@@ -40,5 +41,13 @@ async def test_nasa_power_tool_basic_call(mcp_client):
 async def test_nasa_power_tool_validation(mcp_client):
     # Missing location and coordinates
     result = await mcp_client.call_tool("nasa_power_hourly_tool", {})
+    assert isinstance(result, dict)
+    assert result.get("error") is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_nasa_power_daily_tool_validation(mcp_client):
+    result = await mcp_client.call_tool("nasa_power_daily_tool", {})
     assert isinstance(result, dict)
     assert result.get("error") is True

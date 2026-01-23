@@ -35,7 +35,7 @@ def weather_tool(city_name: str, forecast_days: int = 5) -> dict:
                 "candidates": e.candidates,
                 "resume_patch": {"field": "city_name"},
             },
-            error=True,
+            error=False,
         )
 
     if not lat or not lon:

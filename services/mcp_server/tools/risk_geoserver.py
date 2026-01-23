@@ -233,7 +233,7 @@ def geoserver_risk_mask_tool(
                     "candidates": e.candidates,
                     "resume_patch": {"field": "location"},
                 },
-                error=True,
+                error=False,
             )
         cql = _build_cql_filter(filters)
         layer_name = str(filters["layer_name"])
