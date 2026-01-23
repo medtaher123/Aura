@@ -1,0 +1,30 @@
+env/
+venv/
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.vscode/
+.idea/
+Data/
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+# Environment files (do not commit)
+.env
+.env.*
+# keep example env files
+!.env.example
+.env/
+
+# Generated Folium maps (do not commit)
+src/maps/RiskMask_*.html
+
+test.ipynb
+*.html
