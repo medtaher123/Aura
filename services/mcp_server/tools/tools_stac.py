@@ -82,7 +82,7 @@ def query_stac_catalog(
                     "candidates": e.candidates,
                     "resume_patch": {"field": "city"},
                 },
-                error=True,
+                error=False,
             )
         city_name = city_name_final or city.strip()
         if not bbox_city:

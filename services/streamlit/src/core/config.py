@@ -20,5 +20,7 @@ DEFAULT_LLM_TEMPERATURE = 0.1
 STAC_API_URL = "https://earth-search.aws.element84.com/v1"
 STAC_REQUEST_TIMEOUT = 10
 
+
+
 # Archive directory
 ARCHIVE_DIR = DATA_DIR if DATA_DIR.exists() else "./Data"

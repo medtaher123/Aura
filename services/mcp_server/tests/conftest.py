@@ -1,12 +1,22 @@
-"""
-Pytest configuration and fixtures for MCP server tests.
-"""
+"""Pytest configuration and fixtures for MCP server tests."""
+
+import os
+import asyncio
 
 import pytest
-import asyncio
+from starlette.testclient import TestClient
+
+
+# Ensure required settings are present during tests.
+# These are required in production, but unit tests should not depend on
+# external secrets or environment configuration.
+os.environ.setdefault("OPENTOPO_API_KEY", "test-opentopo-api-key")
+os.environ.setdefault("MAP_KEY", "test-map-key")
+os.environ.setdefault("GEOSERVER_BASE_URL", "https://example.invalid/geoserver")
+
+
 from mcp_singleton import mcp
 from config import get_config
-from starlette.testclient import TestClient
 
 
 # Configure pytest to handle async tests

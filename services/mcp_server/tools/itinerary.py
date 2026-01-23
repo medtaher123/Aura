@@ -213,7 +213,7 @@ def get_route_info(
                 "destination": destination,
                 "query": query,
             },
-            error=True,
+            error=False,
         )
 
     try:
@@ -231,7 +231,7 @@ def get_route_info(
                 "destination": destination,
                 "query": query,
             },
-            error=True,
+            error=False,
         )
     if not lat1 or not lon1 or not lat2 or not lon2:
         return make_tool_response(
