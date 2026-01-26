@@ -17,6 +17,7 @@ from tools.risk_geoserver import geoserver_risk_mask_tool
 from tools.weather import weather_tool
 from tools.geographic_info import geo_info_tool
 from tools.streamflow import streamflow_forecast_tool
+from tools.floods_and_droughts import drought_flood_risk_tool
 from tools.nasa_power import nasa_power_daily_tool, nasa_power_hourly_tool
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "get_date",
     "calculator",
     "streamflow_forecast_tool",
+    "drought_flood_risk_tool"
     "nasa_power_hourly_tool",
     "nasa_power_daily_tool",
 ]
