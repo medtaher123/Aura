@@ -9,12 +9,10 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel
 
-
 class RiskQuery(BaseModel):
     risk_type: str
     region: Optional[str]
     bbox: Optional[List[float]]  # [min_lon, min_lat, max_lon, max_lat]
-
 
 class GeoServerQuery(RiskQuery):
     layer_name: str  # Name of the GeoServer layer to query
@@ -37,70 +35,67 @@ class GeoServerRiskQuery(BaseModel):
 
 
 class ToolArtifacts(TypedDict):
-    # `maps` can contain either HTML filenames (legacy) or structured map specs (e.g. Pydeck).
-    maps: List[Any]
-    thumbnails: List[str]
-    urls: List[str]
+        # `maps` can contain either HTML filenames (legacy) or structured map specs (e.g. Pydeck).
+        maps: List[Any]
+        thumbnails: List[str]
+        urls: List[str]
 
 
 class ToolCoordinates(TypedDict):
-    lat: float
-    lon: float
+        lat: float
+        lon: float
 
 
 class ToolResponse(TypedDict):
-    message: str
-    artifacts: ToolArtifacts
-    tool_name: str
-    start_date: Optional[str]
-    end_date: Optional[str]
-    country: Optional[str]
-    city: Optional[str]
-    coordinates: Optional[ToolCoordinates]
-    data: Optional[Dict[str, Any]]
-    error: bool
+        message: str
+        artifacts: ToolArtifacts
+        tool_name: str
+        start_date: Optional[str]
+        end_date: Optional[str]
+        country: Optional[str]
+        city: Optional[str]
+        coordinates: Optional[ToolCoordinates]
+        data: Optional[Dict[str, Any]]
+        error: bool
 
 
 def make_tool_response(
-    *,
-    tool_name: str,
-    message: str,
-    artifacts: Optional[ToolArtifacts] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    country: Optional[str] = None,
-    city: Optional[str] = None,
-    coordinates: Optional[ToolCoordinates] = None,
-    data: Optional[Dict[str, Any]] = None,
-    error: bool = False,
+        *,
+        tool_name: str,
+        message: str,
+        artifacts: Optional[ToolArtifacts] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        country: Optional[str] = None,
+        city: Optional[str] = None,
+        coordinates: Optional[ToolCoordinates] = None,
+        data: Optional[Dict[str, Any]] = None,
+        error: bool = False,
+        
 ) -> ToolResponse:
-    """Create a standardized ToolResponse dict.
+        """Create a standardized ToolResponse dict.
 
-    Notes:
-    - Always return all keys (UI and agent logic depends on that).
-    - Put tool-specific payloads in `data`.
-    - Put any renderable assets in `artifacts`.
-    """
+        Notes:
+        - Always return all keys (UI and agent logic depends on that).
+        - Put tool-specific payloads in `data`.
+        - Put any renderable assets in `artifacts`.
+        """
 
-    normalized_artifacts: ToolArtifacts = artifacts or {
-        "maps": [],
-        "thumbnails": [],
-        "urls": [],
-    }
-    # Defensive normalization
-    normalized_artifacts.setdefault("maps", [])
-    normalized_artifacts.setdefault("thumbnails", [])
-    normalized_artifacts.setdefault("urls", [])
+        normalized_artifacts: ToolArtifacts = artifacts or {"maps": [], "thumbnails": [], "urls": []}
+        # Defensive normalization
+        normalized_artifacts.setdefault("maps", [])
+        normalized_artifacts.setdefault("thumbnails", [])
+        normalized_artifacts.setdefault("urls", [])
 
-    return {
-        "message": message,
-        "artifacts": normalized_artifacts,
-        "tool_name": tool_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "country": country,
-        "city": city,
-        "coordinates": coordinates,
-        "data": data,
-        "error": bool(error),
-    }
+        return {
+                "message": message,
+                "artifacts": normalized_artifacts,
+                "tool_name": tool_name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "country": country,
+                "city": city,
+                "coordinates": coordinates,
+                "data": data,
+                "error": bool(error),
+        }

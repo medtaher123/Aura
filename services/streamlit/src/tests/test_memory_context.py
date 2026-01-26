@@ -11,7 +11,7 @@ def test_memory_context_is_passed_between_turns():
     """
 
     from src.services.orchestrator_agent_service import OrchestratorExecutor
-    from src.tools import make_tool_response
+    from src.tools.contracts import make_tool_response
 
     class _Msg:
         def __init__(self, content: str):
@@ -63,9 +63,7 @@ def test_memory_context_is_passed_between_turns():
     data_agent = _DataAgent()
     analysis_agent = _AnalysisAgent()
 
-    executor = OrchestratorExecutor(
-        planner_llm=planner, data_agent=data_agent, analysis_agent=analysis_agent
-    )
+    executor = OrchestratorExecutor(planner_llm=planner, data_agent=data_agent, analysis_agent=analysis_agent)
 
     history: list[dict] = []
 
@@ -76,22 +74,12 @@ def test_memory_context_is_passed_between_turns():
     # Turn 1
     executor.invoke({"input": q1, "chat_history": history})
     history.append({"role": "user", "content": q1})
-    history.append(
-        {
-            "role": "assistant",
-            "content": "(assistant answered about fires in France in 2024)",
-        }
-    )
+    history.append({"role": "assistant", "content": "(assistant answered about fires in France in 2024)"})
 
     # Turn 2 (expects to inherit location+date from history)
     executor.invoke({"input": q2, "chat_history": history})
     history.append({"role": "user", "content": q2})
-    history.append(
-        {
-            "role": "assistant",
-            "content": "(assistant answered about storms in France in 2024)",
-        }
-    )
+    history.append({"role": "assistant", "content": "(assistant answered about storms in France in 2024)"})
 
     # Turn 3 (expects to inherit date from history)
     executor.invoke({"input": q3, "chat_history": history})

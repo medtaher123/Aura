@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 
 
-def extract_text_from_pdf_bytes(pdf_bytes: bytes, *, max_chars: int = 120_000) -> str:
+def extract_text_from_pdf_bytes(pdf_bytes: bytes, *, max_chars: int = 1000_000) -> str:
     """Extract plain text from a PDF byte payload.
 
     Args:

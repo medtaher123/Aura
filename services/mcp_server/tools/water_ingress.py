@@ -397,7 +397,7 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
                         "candidates": candidates,
                         "resume_patch": {"field": "location_input"},
                     },
-                    error=True,
+                    error=False,
                 )
         result = estimate_surface_water_ingress(location_input)
 

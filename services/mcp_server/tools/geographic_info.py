@@ -107,7 +107,7 @@ def geo_info_tool(name: str) -> dict:
                     "candidates": candidates,
                     "resume_patch": {"field": "name"},
                 },
-                error=True,
+                error=False,
             )
 
         if candidates:
