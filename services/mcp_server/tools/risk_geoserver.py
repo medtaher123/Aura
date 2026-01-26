@@ -30,6 +30,17 @@ def _build_cql_filter(filters: dict[str, Any]) -> str:
     if isinstance(risk_type, str) and risk_type.strip():
         clauses.append(f"risk_type = {_cql_quote(risk_type.strip())}")
 
+    # NOTE: City/location filtering disabled - using bbox filter only
+    # The location string from disambiguation often contains special characters
+    # that break CQL filters. Bbox filtering is sufficient for spatial queries.
+    # To re-enable city filtering, uncomment and adjust column name as needed:
+    # location = filters.get("location")
+    # if isinstance(location, str) and location.strip():
+    #     # Extract just the city name (first part before comma)
+    #     city_name = location.strip().split(",")[0].strip()
+    #     if city_name and not city_name.startswith("@"):
+    #         clauses.append(f"strToLowerCase(location_city) LIKE {_cql_quote('%' + city_name.lower() + '%')}")
+
     region = filters.get("region")
     if isinstance(region, str) and region.strip():
         clauses.append(f"region = {_cql_quote(region.strip())}")
@@ -69,8 +80,9 @@ def _build_cql_filter(filters: dict[str, Any]) -> str:
         and len(bbox) == 4
         and all(isinstance(x, (int, float)) for x in bbox)
     ):
-        minx, miny, maxx, maxy = bbox
-        clauses.append(f"BBOX(geom, {minx}, {miny}, {maxx}, {maxy})")
+        minx, miny, maxx, maxy = bbox  # minx=min_lon, miny=min_lat, maxx=max_lon, maxy=max_lat
+        # GeoServer EPSG:4326 expects lat/lon order: (min_lat, min_lon, max_lat, max_lon)
+        clauses.append(f"BBOX(geom, {miny}, {minx}, {maxy}, {maxx})")
 
     return " AND ".join(clauses)
 
@@ -89,6 +101,14 @@ def _ensure_bbox(filters: dict[str, Any]) -> None:
             max_lat = float(bbox_raw[1])
             min_lon = float(bbox_raw[2])
             max_lon = float(bbox_raw[3])
+            
+            # Add padding to expand bbox (0.05 degrees ≈ 5km buffer)
+            BBOX_PADDING = 0.05
+            min_lat -= BBOX_PADDING
+            max_lat += BBOX_PADDING
+            min_lon -= BBOX_PADDING
+            max_lon += BBOX_PADDING
+            
             filters["bbox"] = [min_lon, min_lat, max_lon, max_lat]
         except Exception:
             return
