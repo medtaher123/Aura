@@ -85,7 +85,7 @@ def query_hazards_tool(
                 "candidates": e.candidates,
                 "resume_patch": {"field": patch_field},
             },
-            error=True,
+            error=False,
         )
 
     try:

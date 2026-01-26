@@ -321,7 +321,7 @@ def query_disaster_events_tool(
                         "candidates": candidates,
                         "resume_patch": {"field": "location"},
                     },
-                    error=True,
+                    error=False,
                 )
 
             if not candidates or not candidates[0].get("bbox"):

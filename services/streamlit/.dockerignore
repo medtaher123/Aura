@@ -12,7 +12,6 @@ venv/
 .gitignore
 .pytest_cache/
 tests/
-pytest.ini
 *.md
 .DS_Store
 *.log
@@ -25,3 +24,6 @@ Data/
 *.swp
 *.swo
 *~
+tests/
+pytest.ini
+test_*.py

@@ -368,7 +368,7 @@ def detect_fire_tool(
                 "candidates": e.candidates,
                 "resume_patch": {"field": "location"},
             },
-            error=True,
+            error=False,
         )
     except Exception as e:
         return make_tool_response(
