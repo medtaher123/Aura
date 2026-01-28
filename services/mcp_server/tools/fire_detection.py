@@ -5,7 +5,7 @@ import io
 import os
 from core.logger import get_logger
 from config import get_config
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 
 from utils.map_view_service import (
     view_state_from_bbox,
@@ -124,37 +124,63 @@ def should_use_api(start_date, end_date):
 
 
 # Detect fires near a city for a given date and radius (km)
-def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
+def detect_fire_near_city(
+    start_date,
+    end_date,
+    city_name=None,
+    radius_km=100,
+    lat=None,
+    lon=None,
+):
     print("Detecting fires near city:", city_name)
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
-    bbox, lat_city, lon_city, city_name_final = get_city_bbox(city_name, require_confirmation=True)
-    print("City bbox:", bbox)
-    print("City coordinates:", lat_city, lon_city)
-    if lat_city is None:
-        raise GeocodingError(
-            f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
-        )
-
-    try:
-        lat_city_f = float(lat_city)
-        lon_city_f = float(lon_city)
-    except (TypeError, ValueError):
-        raise GeocodingError(
-            f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
-        )
-
-    coords = {"lat": lat_city_f, "lon": lon_city_f}
-    resolved_name = city_name_final or city_name
-
     bbox_norm = None
-    if isinstance(bbox, list) and len(bbox) == 4:
+    if lat is not None and lon is not None:
         try:
-            south, north, west, east = (float(x) for x in bbox)
-            bbox_norm = [min(south, north), max(south, north), min(west, east), max(west, east)]
-        except Exception:
-            bbox_norm = None
+            lat_city_f = float(lat)
+            lon_city_f = float(lon)
+        except (TypeError, ValueError):
+            raise GeocodingError(f"Invalid coordinates: lat={lat}, lon={lon}")
+
+        coords = {"lat": lat_city_f, "lon": lon_city_f}
+        resolved_name = None
+        if not isinstance(city_name, str) or not city_name.strip():
+            try:
+                rev = reverse_geocode(lat_city_f, lon_city_f)
+                resolved_name = rev.get("city") or rev.get("country")
+            except Exception:
+                resolved_name = None
+        resolved_name = resolved_name or city_name or f"{lat_city_f:.4f}, {lon_city_f:.4f}"
+    else:
+        bbox, lat_city, lon_city, city_name_final = get_city_bbox(
+            city_name, require_confirmation=True
+        )
+        print("City bbox:", bbox)
+        print("City coordinates:", lat_city, lon_city)
+        if lat_city is None:
+            raise GeocodingError(
+                f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
+            )
+
+        try:
+            lat_city_f = float(lat_city)
+            lon_city_f = float(lon_city)
+        except (TypeError, ValueError):
+            raise GeocodingError(
+                f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
+            )
+
+        coords = {"lat": lat_city_f, "lon": lon_city_f}
+        resolved_name = city_name_final or city_name
+
+        if isinstance(bbox, list) and len(bbox) == 4:
+            try:
+                south, north, west, east = (float(x) for x in bbox)
+                bbox_norm = [min(south, north), max(south, north), min(west, east), max(west, east)]
+            except Exception:
+                bbox_norm = None
 
     use_api = should_use_api(start_date, end_date)
 
@@ -234,11 +260,14 @@ def detect_fire_near_city(start_date, end_date, city_name, radius_km=100):
 def detect_fire_tool(
     start_date: str,
     end_date: str | None,
-    location: str,
+    location: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
     radius_km: float | None = 100,
 ) -> dict:
     """
     Tool to detect fires near a city/country for a given date range and radius.
+    Provide either a location name or lat/lon coordinates.
     """
     try:
         if end_date is None or (isinstance(end_date, str) and not end_date.strip()):
@@ -246,11 +275,14 @@ def detect_fire_tool(
 
         print("Detecting fire with params:", start_date, end_date, location, radius_km)
 
-        if not start_date or not location:
+        if not start_date or (
+            not (isinstance(location, str) and location.strip())
+            and not (lat is not None and lon is not None)
+        ):
             return make_tool_response(
                 tool_name="detect_fire_tool",
                 message=(
-                    "Please specify a city and a start_date (YYYY-MM-DD)."
+                    "Please specify a city (location) or lat/lon coordinates and a start_date (YYYY-MM-DD)."
                 ),
                 location=location,
                 start_date=start_date,
@@ -263,7 +295,14 @@ def detect_fire_tool(
         except Exception:
             radius_km_f = 100.0
 
-        result = detect_fire_near_city(start_date, end_date, location, radius_km_f)
+        result = detect_fire_near_city(
+            start_date,
+            end_date,
+            location,
+            radius_km_f,
+            lat=lat,
+            lon=lon,
+        )
         print("Detection result:", result)
         points = result.get("points") if isinstance(result, dict) else None
         print("points:", points)

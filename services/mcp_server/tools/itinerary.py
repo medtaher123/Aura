@@ -6,7 +6,7 @@ from core.logger import get_logger
 from utils.contracts import make_tool_response
 from utils.map_view_service import view_state_from_bbox
 
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 
 logger = get_logger(__name__)
 
@@ -164,13 +164,20 @@ def _build_route_path(route_data: dict) -> list[list[float]]:
 
 @mcp.tool()
 def get_route_info(
-    source: str | None = None, destination: str | None = None, query: str | None = None
+    source: str | None = None,
+    destination: str | None = None,
+    query: str | None = None,
+    source_lat: float | None = None,
+    source_lon: float | None = None,
+    destination_lat: float | None = None,
+    destination_lon: float | None = None,
 ) -> dict:
     """
     Compute a driving route between two places.
     Preferred inputs:
     - source: "Paris"
     - destination: "Lyon"
+    - source_lat/source_lon + destination_lat/destination_lon (coordinates)
 
     Backward-compatible input:
     - query: "Paris -> Lyon"
@@ -190,56 +197,125 @@ def get_route_info(
             )
         start, end = [x.strip() for x in query.split("->", 1)]
 
-    if not start or not end:
+    missing_source = not start and not (
+        source_lat is not None and source_lon is not None
+    )
+    missing_dest = not end and not (
+        destination_lat is not None and destination_lon is not None
+    )
+    if missing_source or missing_dest:
         return make_tool_response(
             tool_name="get_route_info",
-            message="Please provide both 'source' and 'destination'.",
-            data={"source": source, "destination": destination, "query": query},
-            error=True,
-        )
-
-    try:
-        lat1, lon1 = geocode_place(start)
-    except LocationAmbiguousError as e:
-        return make_tool_response(
-            tool_name="get_route_info",
-            message=f"I found multiple matches for '{e.query}'. Please confirm the correct start location.",
+            message=(
+                "Please provide both 'source' and 'destination', or provide source_lat/source_lon "
+                "and destination_lat/destination_lon."
+            ),
             data={
-                "needs_location_confirmation": True,
-                "location_query": e.query,
-                "candidates": e.candidates,
-                "resume_patch": {"field": "source"},
                 "source": source,
                 "destination": destination,
                 "query": query,
+                "source_lat": source_lat,
+                "source_lon": source_lon,
+                "destination_lat": destination_lat,
+                "destination_lon": destination_lon,
             },
-            error=False,
-        )
-
-    try:
-        lat2, lon2 = geocode_place(end)
-    except LocationAmbiguousError as e:
-        return make_tool_response(
-            tool_name="get_route_info",
-            message=f"I found multiple matches for '{e.query}'. Please confirm the correct destination location.",
-            data={
-                "needs_location_confirmation": True,
-                "location_query": e.query,
-                "candidates": e.candidates,
-                "resume_patch": {"field": "destination"},
-                "source": source,
-                "destination": destination,
-                "query": query,
-            },
-            error=False,
-        )
-    if not lat1 or not lon1 or not lat2 or not lon2:
-        return make_tool_response(
-            tool_name="get_route_info",
-            message=f"Location not found: {start} or {end}.",
-            data={"start": start, "end": end},
             error=True,
         )
+    lat1 = None
+    lon1 = None
+    lat2 = None
+    lon2 = None
+
+    if source_lat is not None and source_lon is not None:
+        try:
+            lat1 = float(source_lat)
+            lon1 = float(source_lon)
+        except Exception:
+            return make_tool_response(
+                tool_name="get_route_info",
+                message="Invalid source coordinates provided. lat/lon must be numeric.",
+                error=True,
+            )
+    else:
+        try:
+            lat1, lon1 = geocode_place(start)
+        except LocationAmbiguousError as e:
+            return make_tool_response(
+                tool_name="get_route_info",
+                message=f"I found multiple matches for '{e.query}'. Please confirm the correct start location.",
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": "source"},
+                    "source": source,
+                    "destination": destination,
+                    "query": query,
+                },
+                error=False,
+            )
+
+    if destination_lat is not None and destination_lon is not None:
+        try:
+            lat2 = float(destination_lat)
+            lon2 = float(destination_lon)
+        except Exception:
+            return make_tool_response(
+                tool_name="get_route_info",
+                message="Invalid destination coordinates provided. lat/lon must be numeric.",
+                error=True,
+            )
+    else:
+        try:
+            lat2, lon2 = geocode_place(end)
+        except LocationAmbiguousError as e:
+            return make_tool_response(
+                tool_name="get_route_info",
+                message=f"I found multiple matches for '{e.query}'. Please confirm the correct destination location.",
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": "destination"},
+                    "source": source,
+                    "destination": destination,
+                    "query": query,
+                },
+                error=False,
+            )
+
+    if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
+        return make_tool_response(
+            tool_name="get_route_info",
+            message="Location not found for start or destination.",
+            data={
+                "start": start,
+                "end": end,
+                "source_lat": source_lat,
+                "source_lon": source_lon,
+                "destination_lat": destination_lat,
+                "destination_lon": destination_lon,
+            },
+            error=True,
+        )
+
+    if not start:
+        try:
+            rev = reverse_geocode(float(lat1), float(lon1))
+            start = rev.get("city") or rev.get("country") or start
+        except Exception:
+            pass
+        if not start:
+            start = f"{float(lat1):.4f}, {float(lon1):.4f}"
+
+    if not end:
+        try:
+            rev = reverse_geocode(float(lat2), float(lon2))
+            end = rev.get("city") or rev.get("country") or end
+        except Exception:
+            pass
+        if not end:
+            end = f"{float(lat2):.4f}, {float(lon2):.4f}"
 
     try:
         data = get_route((lat1, lon1), (lat2, lon2))

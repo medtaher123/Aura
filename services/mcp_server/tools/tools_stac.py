@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import requests
 from mcp_singleton import mcp
 from requests.exceptions import RequestException, Timeout
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 
 from core.logger import get_logger
 from utils.contracts import make_tool_response
@@ -14,10 +14,21 @@ STAC_API_URL = "https://earth-search.aws.element84.com/v1"
 REQUEST_TIMEOUT = 10
 
 
+def _bbox_from_point(lat: float, lon: float, span_deg: float = 0.2) -> list[float]:
+    half = span_deg / 2
+    min_lat = max(-90.0, lat - half)
+    max_lat = min(90.0, lat + half)
+    min_lon = max(-180.0, lon - half)
+    max_lon = min(180.0, lon + half)
+    return [min_lon, min_lat, max_lon, max_lat]
+
+
 @mcp.tool()
 def query_stac_catalog(
     *,
     city: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     collection: str = "sentinel-2-l2a",
@@ -27,7 +38,8 @@ def query_stac_catalog(
     Query the STAC EarthSearch catalog to retrieve satellite images.
 
     Provide either:
-    - `city` (name).
+    - `city` (name), or
+    - `lat` + `lon` (coordinates).
     Dates are strings in YYYY-MM-DD. If end_date is omitted, it defaults to start_date.
     collection: Satellite data collection to query. Options include "sentinel-1", "sentinel-2", "modis", "viirs".
     Collection defaults to "sentinel-2-l2a".
@@ -57,59 +69,87 @@ def query_stac_catalog(
         if not end_date:
             end_date = start_date
 
-        if not isinstance(city, str) or not city.strip():
-            return make_tool_response(
-                tool_name="query_stac_catalog",
-                message="Missing required location: provide either city or bbox.",
-                start_date=start_date,
-                end_date=end_date,
-                error=True,
-            )
-        try:
-            bbox_city, lat, lon, city_name_final = get_city_bbox(
-                city.strip(), require_confirmation=True
-            )
-        except LocationAmbiguousError as e:
-            return make_tool_response(
-                tool_name="query_stac_catalog",
-                message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
-                city=city.strip(),
-                start_date=start_date,
-                end_date=end_date,
-                data={
-                    "needs_location_confirmation": True,
-                    "location_query": e.query,
-                    "candidates": e.candidates,
-                    "resume_patch": {"field": "city"},
-                },
-                error=False,
-            )
-        city_name = city_name_final or city.strip()
-        if not bbox_city:
-            return make_tool_response(
-                tool_name="query_stac_catalog",
-                message=f"Location '{city_name}' not found or bbox unavailable.",
-                city=city_name,
-                start_date=start_date,
-                end_date=end_date,
-                error=True,
-            )
-        # get_city_bbox returns [min_lat, max_lat, min_lon, max_lon]
-        try:
-            min_lat = float(bbox_city[0])
-            max_lat = float(bbox_city[1])
-            min_lon = float(bbox_city[2])
-            max_lon = float(bbox_city[3])
-            bbox_list = [min_lon, min_lat, max_lon, max_lat]
-        except Exception:
-            return make_tool_response(
-                tool_name="query_stac_catalog",
-                message=f"Invalid bbox returned for '{city_name}'.",
-                city=city_name,
-                start_date=start_date,
-                end_date=end_date,
-                error=True,
-            )
+        city_name = None
+        bbox_list = None
+
+        if lat is not None and lon is not None:
+            try:
+                lat_f = float(lat)
+                lon_f = float(lon)
+            except Exception:
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message="Invalid coordinates provided. lat/lon must be numeric.",
+                    start_date=start_date,
+                    end_date=end_date,
+                    error=True,
+                )
+
+            bbox_list = _bbox_from_point(lat_f, lon_f)
+            if isinstance(city, str) and city.strip():
+                city_name = city.strip()
+            else:
+                try:
+                    rev = reverse_geocode(lat_f, lon_f)
+                    city_name = rev.get("city") or rev.get("country")
+                except Exception:
+                    city_name = None
+            if not city_name:
+                city_name = f"{lat_f:.4f}, {lon_f:.4f}"
+        else:
+            if not isinstance(city, str) or not city.strip():
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message="Missing required location: provide either city or lat/lon.",
+                    start_date=start_date,
+                    end_date=end_date,
+                    error=True,
+                )
+            try:
+                bbox_city, lat, lon, city_name_final = get_city_bbox(
+                    city.strip(), require_confirmation=True
+                )
+            except LocationAmbiguousError as e:
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+                    city=city.strip(),
+                    start_date=start_date,
+                    end_date=end_date,
+                    data={
+                        "needs_location_confirmation": True,
+                        "location_query": e.query,
+                        "candidates": e.candidates,
+                        "resume_patch": {"field": "city"},
+                    },
+                    error=False,
+                )
+            city_name = city_name_final or city.strip()
+            if not bbox_city:
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message=f"Location '{city_name}' not found or bbox unavailable.",
+                    city=city_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    error=True,
+                )
+            # get_city_bbox returns [min_lat, max_lat, min_lon, max_lon]
+            try:
+                min_lat = float(bbox_city[0])
+                max_lat = float(bbox_city[1])
+                min_lon = float(bbox_city[2])
+                max_lon = float(bbox_city[3])
+                bbox_list = [min_lon, min_lat, max_lon, max_lat]
+            except Exception:
+                return make_tool_response(
+                    tool_name="query_stac_catalog",
+                    message=f"Invalid bbox returned for '{city_name}'.",
+                    city=city_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    error=True,
+                )
 
         bbox_str = ",".join([str(x) for x in bbox_list])
 
