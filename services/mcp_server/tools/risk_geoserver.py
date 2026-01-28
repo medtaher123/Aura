@@ -9,7 +9,7 @@ from config import get_config
 from utils.contracts import make_tool_response
 from shapely.geometry import shape
 
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.map_view_service import view_state_from_bbox
 
 logger = get_logger(__name__)
@@ -17,6 +17,15 @@ config = get_config()
 # Use centralized config for GeoServer settings
 GEOSERVER_BASE_URL = config.geoserver_base_url.rstrip("/")
 DEFAULT_LAYER_NAME = config.geoserver_risk_layer
+
+
+def _bbox_from_point(lat: float, lon: float, span_deg: float = 0.2) -> list[float]:
+    half = span_deg / 2
+    min_lat = max(-90.0, lat - half)
+    max_lat = min(90.0, lat + half)
+    min_lon = max(-180.0, lon - half)
+    max_lon = min(180.0, lon + half)
+    return [min_lon, min_lat, max_lon, max_lat]
 
 
 def _cql_quote(value: str) -> str:
@@ -93,6 +102,14 @@ def _build_cql_filter(filters: dict[str, Any]) -> str:
 def _ensure_bbox(filters: dict[str, Any]) -> None:
     if isinstance(filters.get("bbox"), list) and len(filters["bbox"]) == 4:
         return
+    lat = filters.get("lat")
+    lon = filters.get("lon")
+    if lat is not None and lon is not None:
+        try:
+            filters["bbox"] = _bbox_from_point(float(lat), float(lon))
+            return
+        except Exception:
+            pass
     location = filters.get("location")
     if not isinstance(location, str) or not location.strip():
         return
@@ -204,6 +221,8 @@ def geoserver_risk_mask_tool(
     risk_type: str | None = None,
     region: str | None = None,
     location: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
     bbox: list[float] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -219,18 +238,9 @@ def geoserver_risk_mask_tool(
     Use this tool when the user asks to show/visualize risk masks or polygons from GeoServer, especially when they mention
     filtering by risk type (water, flood), location, date range, confidence, or area.
 
-    Note: "flood" is automatically mapped to "water" in the database query.
-
-    Args:
-        risk_type: Type of risk to filter by. Use "water" or "flood" (both query water risk data)
-        location: City or place name to search
-        start_date: Start date for filtering (ISO format: "2026-01-01")
-        end_date: End date for filtering (ISO format: "2026-01-31")
-
-    Example tool calls:
-    - geoserver_risk_mask_tool(risk_type="water", location="Salignac")
-    - geoserver_risk_mask_tool(risk_type="flood", location="Paris")  # "flood" → queries "water"
-    - geoserver_risk_mask_tool(risk_type="water", location="Lyon", start_date="2025-06-01", end_date="2025-08-31")
+    Example tool call:
+    - geoserver_risk_mask_tool(risk_type="flood", location="Tunis")
+    - geoserver_risk_mask_tool(risk_type="flood", lat=36.8065, lon=10.1815)
     """
     try:
         if end_date is None and isinstance(start_date, str) and start_date.strip():
@@ -241,6 +251,8 @@ def geoserver_risk_mask_tool(
             "risk_type": risk_type,
             "region": region,
             "location": location,
+            "lat": lat,
+            "lon": lon,
             "bbox": bbox,
             "start_date": start_date,
             "end_date": end_date,
@@ -273,6 +285,13 @@ def geoserver_risk_mask_tool(
                 },
                 error=False,
             )
+
+        if not filters.get("location") and isinstance(filters.get("lat"), (int, float)) and isinstance(filters.get("lon"), (int, float)):
+            try:
+                rev = reverse_geocode(float(filters["lat"]), float(filters["lon"]))
+                filters["location"] = rev.get("city") or rev.get("country")
+            except Exception:
+                filters["location"] = f"{float(filters['lat']):.4f}, {float(filters['lon']):.4f}"
         cql = _build_cql_filter(filters)
         layer_name = str(filters["layer_name"])
         limit = int(filters.get("limit") or 500)

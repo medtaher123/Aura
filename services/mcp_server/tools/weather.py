@@ -6,45 +6,83 @@ Retrieves current weather and forecasts for a city using Open-Meteo API.
 
 import requests
 
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.contracts import make_tool_response
 from mcp_singleton import mcp
 
 
 @mcp.tool()
-def weather_tool(city_name: str, forecast_days: int = 5) -> dict:
+def weather_tool(
+    city_name: str | None = None,
+    forecast_days: int = 5,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> dict:
     """Retrieve current weather and forecasts for a city.
 
     Args:
-        city_name: Name of the city
+        city_name: Name of the city (optional if lat/lon provided)
         forecast_days: Number of days to show forecasts for (default 5)
+        lat: Latitude of the city
+        lon: Longitude of the city
     """
-    # Geocoding via Nominatim
-    try:
-        bbox, lat, lon, city_name_final = get_city_bbox(
-            city_name, require_confirmation=True
-        )
-    except LocationAmbiguousError as e:
-        return make_tool_response(
-            tool_name="weather_tool",
-            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
-            city=city_name,
-            data={
-                "needs_location_confirmation": True,
-                "location_query": e.query,
-                "candidates": e.candidates,
-                "resume_patch": {"field": "city_name"},
-            },
-            error=False,
-        )
+    resolved_city = None
+    if lat is not None and lon is not None:
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except Exception:
+            return make_tool_response(
+                tool_name="weather_tool",
+                message="Invalid coordinates provided. lat/lon must be numeric.",
+                city=city_name,
+                error=True,
+            )
 
-    if not lat or not lon:
-        return make_tool_response(
-            tool_name="weather_tool",
-            message=f"City '{city_name}' not found.",
-            city=city_name,
-            error=True,
-        )
+        if not isinstance(city_name, str) or not city_name.strip():
+            try:
+                rev = reverse_geocode(lat, lon)
+                resolved_city = rev.get("city") or rev.get("country")
+            except Exception:
+                resolved_city = None
+            city_name = resolved_city or f"{lat:.4f}, {lon:.4f}"
+    else:
+        if not isinstance(city_name, str) or not city_name.strip():
+            return make_tool_response(
+                tool_name="weather_tool",
+                message="Please provide a city name or lat/lon coordinates.",
+                error=True,
+            )
+
+        # Geocoding via Nominatim
+        try:
+            bbox, lat, lon, city_name_final = get_city_bbox(
+                city_name, require_confirmation=True
+            )
+        except LocationAmbiguousError as e:
+            return make_tool_response(
+                tool_name="weather_tool",
+                message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+                city=city_name,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": "city_name"},
+                },
+                error=False,
+            )
+
+        if lat is None or lon is None:
+            return make_tool_response(
+                tool_name="weather_tool",
+                message=f"City '{city_name}' not found.",
+                city=city_name,
+                error=True,
+            )
+
+        resolved_city = city_name_final or city_name
+        city_name = resolved_city
 
     # Call Open-Meteo API
     weather_url = "https://api.open-meteo.com/v1/forecast"

@@ -8,6 +8,7 @@ from typing import Optional
 from datetime import datetime
 from functools import lru_cache
 from mcp_singleton import mcp
+import requests
 import numpy as np
 import s3fs
 import xarray as xr
@@ -28,6 +29,55 @@ GEOGLOWS_ARCGIS_LAYER0 = (
     "https://livefeeds3.arcgis.com/arcgis/rest/services/GEOGLOWS/"
     "GlobalWaterModel_Medium/MapServer/0"
 )
+
+GEOGLOWS_ARCGIS_QUERY = (
+    "https://livefeeds3.arcgis.com/arcgis/rest/services/GEOGLOWS/"
+    "GlobalWaterModel_Medium/MapServer/0/query"
+)
+
+_REACH_ID_KEYS = (
+    "Terminal TDX Hydro Link Number",
+    "TDX Hydro Link Number",
+    "LINKNO",
+    "linkno",
+    "river_id",
+    "RIVID",
+    "rivid",
+    "COMID",
+    "comid",
+    "reach_id",
+    "outletcomid",
+    "outletCOMID",
+)
+
+
+def _coerce_reach_id(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        v = value.strip()
+        if not v or v.lower() in {"null", "none", "nan"}:
+            return None
+        v = v.replace(",", "")
+        try:
+            return int(v)
+        except Exception:
+            return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _extract_reach_id_from_attrs(attrs: object) -> Optional[int]:
+    if not isinstance(attrs, dict):
+        return None
+    for key in _REACH_ID_KEYS:
+        if key in attrs:
+            rid = _coerce_reach_id(attrs.get(key))
+            if rid is not None and rid > 0:
+                return rid
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -137,6 +187,124 @@ def _esri_polyline_to_geojson(geom: object) -> Optional[dict]:
     }
 
 
+def _point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    import math
+
+    vx = x2 - x1
+    vy = y2 - y1
+    if vx == 0 and vy == 0:
+        return math.hypot(px - x1, py - y1)
+    t = ((px - x1) * vx + (py - y1) * vy) / (vx * vx + vy * vy)
+    if t < 0:
+        t = 0.0
+    elif t > 1:
+        t = 1.0
+    projx = x1 + t * vx
+    projy = y1 + t * vy
+    return math.hypot(px - projx, py - projy)
+
+
+def _min_distance_to_paths(px: float, py: float, paths: object) -> Optional[float]:
+    import math
+
+    if not isinstance(paths, list):
+        return None
+    best = None
+    for path in paths:
+        if not isinstance(path, list) or len(path) < 2:
+            continue
+        for i in range(len(path) - 1):
+            p1 = path[i]
+            p2 = path[i + 1]
+            if not isinstance(p1, (list, tuple)) or not isinstance(p2, (list, tuple)):
+                continue
+            if len(p1) < 2 or len(p2) < 2:
+                continue
+            try:
+                x1 = float(p1[0])
+                y1 = float(p1[1])
+                x2 = float(p2[0])
+                y2 = float(p2[1])
+            except Exception:
+                continue
+            dist = _point_to_segment_distance(px, py, x1, y1, x2, y2)
+            if best is None or dist < best:
+                best = dist
+    return best
+
+
+def _query_geoglows_nearest_feature(
+    lat: float, lon: float, *, return_geometry: bool = False
+) -> tuple[Optional[int], Optional[dict]]:
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return None, None
+
+    cx, cy = _lonlat_to_webmercator(lon_f, lat_f)
+    headers = {"User-Agent": "metaplanet-llm-streamflow"}
+
+    best: tuple[float, int, Optional[dict]] | None = None
+    for dist in (1000, 2000, 5000, 10000, 20000):
+        params = {
+            "f": "json",
+            "geometry": f"{cx},{cy}",
+            "geometryType": "esriGeometryPoint",
+            "inSR": 3857,
+            "spatialRel": "esriSpatialRelIntersects",
+            "distance": dist,
+            "units": "esriSRUnit_Meter",
+            "outFields": "*",
+            "returnGeometry": "true",
+            "outSR": 3857,
+        }
+        try:
+            resp = requests.get(GEOGLOWS_ARCGIS_QUERY, params=params, headers=headers, timeout=15)
+        except Exception:
+            continue
+        if resp.status_code != 200:
+            continue
+        payload = resp.json() if resp.content else {}
+        features = payload.get("features") if isinstance(payload, dict) else None
+        if not isinstance(features, list) or not features:
+            continue
+
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            attrs = feature.get("attributes")
+            reach_id = _extract_reach_id_from_attrs(attrs)
+            if reach_id is None:
+                continue
+            geometry = feature.get("geometry") if isinstance(feature.get("geometry"), dict) else {}
+            if isinstance(geometry, dict) and "spatialReference" not in geometry:
+                geometry["spatialReference"] = {"wkid": 3857}
+            paths = geometry.get("paths") if isinstance(geometry, dict) else None
+            distance = _min_distance_to_paths(cx, cy, paths)
+            if distance is None:
+                continue
+            if best is None or distance < best[0]:
+                best = (distance, reach_id, geometry)
+
+        if best is not None:
+            break
+
+    if best is None:
+        return None, None
+
+    _, reach_id, geometry = best
+    geojson = None
+    if return_geometry and isinstance(geometry, dict):
+        geojson = _esri_polyline_to_geojson(geometry)
+        if isinstance(geojson, dict):
+            try:
+                geojson["features"][0]["properties"] = {"river_id": reach_id, "reach_id": reach_id}
+            except Exception:
+                pass
+    return reach_id, geojson
+
+
 def _identify_geoglows_river_feature(
     lat: float, lon: float, *, return_geometry: bool = False
 ) -> tuple[Optional[int], Optional[dict]]:
@@ -193,52 +361,16 @@ def _identify_geoglows_river_feature(
     payload = resp.json() if resp.content else {}
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, list) or not results:
-        return None, None
+        return _query_geoglows_nearest_feature(lat_f, lon_f, return_geometry=return_geometry)
 
     first = results[0] if isinstance(results[0], dict) else {}
     attrs = first.get("attributes") if isinstance(first, dict) else None
     if not isinstance(attrs, dict):
-        return None, None
+        return _query_geoglows_nearest_feature(lat_f, lon_f, return_geometry=return_geometry)
 
-    def _coerce_reach_id(value: object) -> Optional[int]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            v = value.strip()
-            if not v or v.lower() in {"null", "none", "nan"}:
-                return None
-            v = v.replace(",", "")
-            try:
-                return int(v)
-            except Exception:
-                return None
-        try:
-            return int(value)
-        except Exception:
-            return None
-
-    candidate_keys = (
-        "Terminal TDX Hydro Link Number",
-        "TDX Hydro Link Number",
-        "LINKNO",
-        "linkno",
-        "river_id",
-        "RIVID",
-        "rivid",
-        "COMID",
-        "comid",
-        "reach_id",
-    )
-
-    reach_id: Optional[int] = None
-    for key in candidate_keys:
-        if key in attrs:
-            rid = _coerce_reach_id(attrs.get(key))
-            if rid is not None and rid > 0:
-                reach_id = rid
-                break
+    reach_id = _extract_reach_id_from_attrs(attrs)
     if reach_id is None:
-        return None, None
+        return _query_geoglows_nearest_feature(lat_f, lon_f, return_geometry=return_geometry)
 
     geojson = None
     if return_geometry:
@@ -486,6 +618,9 @@ def streamflow_forecast_tool(
     *,
     river_name: Optional[str] = None,
     reach_id: Optional[int] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    hydroviewer_url: Optional[str] = None,
 ) -> dict:
     """
     Get streamflow forecast and flood risk for rivers using GEOGLOWS global hydrological model.
@@ -495,6 +630,8 @@ def streamflow_forecast_tool(
             The tool will geocode this to a point and attempt to infer the nearest
             GEOGLOWS reach_id automatically.
         - `reach_id`: Specific GEOGLOWS river ID (COMID / LINKNO)
+        - `lat` + `lon`: A specific point along the river to snap to a reach_id
+        - `hydroviewer_url`: A Hydroviewer URL containing #lat=...&lon=... to snap to
     
     Returns 15-day discharge forecast, flood risk level, and return period analysis.
 
@@ -503,13 +640,18 @@ def streamflow_forecast_tool(
     - streamflow_forecast_tool(river_name="Nile River")
     - streamflow_forecast_tool(river_name="Amazon River, Brazil")
     - streamflow_forecast_tool(reach_id=12345678)
+    - streamflow_forecast_tool(lat=30.0444, lon=31.2357)
+    - streamflow_forecast_tool(hydroviewer_url="https://hydroviewer.geoglows.org/#lon=9.32&lat=35.89&zoom=13.73")
     """
 
     # Validate inputs
-    if not river_name and not reach_id:
+    if not river_name and not reach_id and lat is None and lon is None and not hydroviewer_url:
         return make_tool_response(
             tool_name="streamflow_forecast_tool",
-            message="Please provide either 'river_name' (e.g., 'Seine', 'Nile') or 'reach_id' (GEOGLOWS river ID).",
+            message=(
+                "Please provide 'river_name', 'reach_id', 'lat'+'lon', or a 'hydroviewer_url' "
+                "containing #lat=...&lon=...."
+            ),
             error=True,
         )
 
@@ -518,8 +660,32 @@ def streamflow_forecast_tool(
     river_display_name = None
     river_geojson = None
     
+    # If a Hydroviewer URL is provided, parse lat/lon from the URL fragment.
+    if hydroviewer_url and (lat is None or lon is None):
+        try:
+            fragment = hydroviewer_url.split("#", 1)[-1]
+            parts = {
+                kv.split("=", 1)[0]: kv.split("=", 1)[1]
+                for kv in fragment.split("&")
+                if "=" in kv
+            }
+            if "lat" in parts and "lon" in parts:
+                lat = float(parts["lat"])
+                lon = float(parts["lon"])
+        except Exception:
+            pass
+
+    # If explicit lat/lon provided, normalize them first
+    if lat is not None and lon is not None:
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (TypeError, ValueError):
+            lat = None
+            lon = None
+
     # Optional river name: used only to provide map coordinates
-    if river_name:
+    if (lat is None or lon is None) and river_name:
         if not isinstance(river_name, str) or not river_name.strip():
             return make_tool_response(
                 tool_name="streamflow_forecast_tool",
@@ -675,35 +841,6 @@ def streamflow_forecast_tool(
         )
         
         layers = []
-
-        # River highlight (preferred)
-        if isinstance(river_geojson, dict):
-            # Enrich tooltip properties
-            try:
-                river_geojson["features"][0]["properties"].update(
-                    {
-                        "river_id": reach_id,
-                        "discharge": float(peak_discharge),
-                        "discharge_str": f"{float(peak_discharge):.1f}",
-                        "risk": risk_level,
-                        "return_period": return_period,
-                    }
-                )
-            except Exception:
-                pass
-
-            layers.append(
-                {
-                    "type": "GeoJsonLayer",
-                    "data": river_geojson,
-                    "stroked": True,
-                    "filled": False,
-                    "get_line_color": point_color,
-                    "line_width_min_pixels": 4,
-                    "pickable": True,
-                    "auto_highlight": True,
-                }
-            )
 
         maps.append({
             "view_state": view_state,

@@ -362,13 +362,17 @@ def estimate_surface_water_ingress(location_input):
 
 
 @mcp.tool()
-def estimate_surface_water_ingress_tool(location_input: str) -> dict:
+def estimate_surface_water_ingress_tool(
+    location_input: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> dict:
     """
      Full analysis of surface water ingress risk for a given area.
 
-     Input:
-     - A city name (str), e.g., "Paris", or
-     - A coordinate tuple (lat, lon), e.g., (48.8566, 2.3522).
+    Input:
+    - A city name (str), e.g., "Paris", or
+    - lat/lon coordinates, e.g., 48.8566 / 2.3522.
 
     The final output is: Final Answer: <message>
 
@@ -381,7 +385,18 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
      - Apply mitigation rules to propose actions.
     """
     try:
-        if isinstance(location_input, str) and location_input.strip():
+        input_value = location_input
+
+        if lat is not None and lon is not None:
+            try:
+                input_value = (float(lat), float(lon))
+            except Exception:
+                return make_tool_response(
+                    tool_name="estimate_surface_water_ingress_tool",
+                    message="Invalid coordinates provided. lat/lon must be numeric.",
+                    error=True,
+                )
+        elif isinstance(location_input, str) and location_input.strip():
             candidates = get_city_candidates(location_input.strip())
             if len(candidates) > 1:
                 return make_tool_response(
@@ -399,7 +414,14 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
                     },
                     error=False,
                 )
-        result = estimate_surface_water_ingress(location_input)
+        else:
+            return make_tool_response(
+                tool_name="estimate_surface_water_ingress_tool",
+                message="Please provide a location name or lat/lon coordinates.",
+                error=True,
+            )
+
+        result = estimate_surface_water_ingress(input_value)
 
         ingress = result.get("Ingress_paths_estimate", "Not available")
         mitigation = result.get("Mitigation_actions", [])
@@ -417,8 +439,19 @@ def estimate_surface_water_ingress_tool(location_input: str) -> dict:
         # -------- TEXT ASSEMBLY --------
         message_parts = []
 
+        location_label = None
+        if isinstance(location_input, str) and location_input.strip():
+            location_label = location_input
+        else:
+            loc_info = result.get("Location") if isinstance(result, dict) else None
+            if isinstance(loc_info, dict):
+                location_label = loc_info.get("city") or loc_info.get("country")
+            if not location_label and lat is not None and lon is not None:
+                location_label = f"{float(lat):.4f}, {float(lon):.4f}"
+            location_label = location_label or "the provided coordinates"
+
         message_parts.append(
-            f"📍 *Surface Water Ingress Risk Analysis for*: **{location_input}**\n"
+            f"📍 *Surface Water Ingress Risk Analysis for*: **{location_label}**\n"
         )
 
         message_parts.append("### 🌊 Estimated Water Flow Paths")

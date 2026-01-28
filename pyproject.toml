@@ -1,0 +1,31 @@
+[tool.pytest.ini_options]
+# Pytest configuration for the workspace
+# Tests are in services/mcp_server/tests and services/streamlit/src/tests
+pythonpath = [
+    ".",
+    "services/mcp_server",
+    "services/streamlit",
+    "services/streamlit/src"
+]
+testpaths = [
+    "services/mcp_server/tests",
+    "services/streamlit/src/tests"
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow tests",
+    "asyncio: Async tests"
+]
+
+[tool.pyright]
+extraPaths = [
+    "services/mcp_server",
+    "services/streamlit",
+    "services/streamlit/src"
+]

@@ -4,7 +4,7 @@ Hazard Detection Tool for MCP
 Uses Data360 hazards data and bbox_service.
 """
 
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.data360_hazards import get_hazards, normalize_location_to_iso3
 from utils.contracts import make_tool_response
 from core.logger import get_logger
@@ -33,7 +33,11 @@ def get_top_hazards_for_country(country: str, n: int = 5):
 
 @mcp.tool()
 def query_hazards_tool(
-    country: str, top_n: int = 5, location: str | None = None
+    country: str,
+    top_n: int = 5,
+    location: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
 ) -> dict:
     """
     Returns the top hazards for a country based on Data360 hazards.
@@ -42,6 +46,8 @@ def query_hazards_tool(
         country: Country name (e.g., "Japan", "France").
         top_n: Number of hazards to return.
         location: Optional location string used only to provide best-effort coordinates for UI context.
+        lat: Optional latitude for best-effort coordinates.
+        lon: Optional longitude for best-effort coordinates.
     """
     if not isinstance(country, str) or not country.strip():
         logger.error("Country parameter is missing or invalid.")
@@ -68,33 +74,52 @@ def query_hazards_tool(
         "location" if isinstance(location, str) and location.strip() else "country"
     )
 
-    try:
-        bbox, lat, lon, city_name_final = get_city_bbox(
-            location_query, require_confirmation=True
-        )
-    except LocationAmbiguousError as e:
-        logger.error(f"LocationAmbiguousError for query '{e.query}': {e.candidates}")
-        return make_tool_response(
-            tool_name="query_hazards_tool",
-            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
-            city=location_query,
-            country=country,
-            data={
-                "needs_location_confirmation": True,
-                "location_query": e.query,
-                "candidates": e.candidates,
-                "resume_patch": {"field": patch_field},
-            },
-            error=False,
-        )
-
-    try:
-        if lat is not None and lon is not None:
+    if lat is not None and lon is not None:
+        try:
             coords = {"lat": float(lat), "lon": float(lon)}
-    except Exception:
-        coords = None
+        except Exception:
+            return make_tool_response(
+                tool_name="query_hazards_tool",
+                message="Invalid coordinates provided. lat/lon must be numeric.",
+                city=location_query,
+                country=country,
+                error=True,
+            )
+        clean_address = location_query
+        if not (isinstance(location, str) and location.strip()):
+            try:
+                rev = reverse_geocode(float(lat), float(lon))
+                clean_address = rev.get("city") or rev.get("country") or clean_address
+            except Exception:
+                pass
+    else:
+        try:
+            bbox, lat, lon, city_name_final = get_city_bbox(
+                location_query, require_confirmation=True
+            )
+        except LocationAmbiguousError as e:
+            logger.error(f"LocationAmbiguousError for query '{e.query}': {e.candidates}")
+            return make_tool_response(
+                tool_name="query_hazards_tool",
+                message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+                city=location_query,
+                country=country,
+                data={
+                    "needs_location_confirmation": True,
+                    "location_query": e.query,
+                    "candidates": e.candidates,
+                    "resume_patch": {"field": patch_field},
+                },
+                error=False,
+            )
 
-    clean_address = city_name_final or (location or country)
+        try:
+            if lat is not None and lon is not None:
+                coords = {"lat": float(lat), "lon": float(lon)}
+        except Exception:
+            coords = None
+
+        clean_address = city_name_final or (location or country)
 
     # Get hazards
     hazards = get_top_hazards_for_country(country, n=n)

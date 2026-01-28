@@ -24,3 +24,6 @@ Data/
 *.swp
 *.swo
 *~
+tests/
+pytest.ini
+test_*.py

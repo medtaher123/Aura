@@ -12,7 +12,7 @@ from core.logger import get_logger
 from utils.contracts import make_tool_response
 from typing import Optional
 
-from utils.bbox_service import get_city_candidates
+from utils.bbox_service import get_city_candidates, reverse_geocode
 from utils.map_view_service import (
     view_state_from_bbox,
     view_state_from_points,
@@ -230,6 +230,8 @@ def query_disaster_events_tool(
     end_date: str | None,
     country_name: str,
     location: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
     disaster_type: str | list[str] = "flood",
 ) -> dict:
     """
@@ -239,6 +241,7 @@ def query_disaster_events_tool(
     start_date: YYYY-MM-DD
     end_date: YYYY-MM-DD (optional, if not provided, only start_date is used)
     location: Specific location within the country if available
+    lat/lon: Optional coordinates for a location filter
     country_name: Name of the country (e.g., "France", "Japan"), if available else use location to infer country
     disaster_type: Type of disaster to search for (default "flood"). Valid types:
       - flood
@@ -299,7 +302,32 @@ def query_disaster_events_tool(
     location_coordinates: dict | None = None
     radius_km = 100.0
 
-    if isinstance(location, str) and location.strip():
+    if lat is not None and lon is not None:
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except Exception:
+            return make_tool_response(
+                tool_name="query_disaster_events_tool",
+                message="Invalid coordinates provided. lat/lon must be numeric.",
+                country=country_name,
+                start_date=start_date,
+                end_date=end_date,
+                error=True,
+            )
+
+        location_bbox = [lat_f, lat_f, lon_f, lon_f]
+        location_coordinates = {"lat": lat_f, "lon": lon_f}
+        location_display = location
+        if not (isinstance(location, str) and location.strip()):
+            try:
+                rev = reverse_geocode(lat_f, lon_f)
+                location_display = rev.get("city") or rev.get("country")
+            except Exception:
+                location_display = None
+        if not location_display:
+            location_display = f"{lat_f:.4f}, {lon_f:.4f}"
+    elif isinstance(location, str) and location.strip():
         loc_norm = location.strip().lower()
         country_norm = (country_name or "").strip().lower()
         # Only activate bbox filtering if user gave a sub-location (not the country itself)
