@@ -28,18 +28,23 @@ def _build_cql_filter(filters: dict[str, Any]) -> str:
 
     risk_type = filters.get("risk_type")
     if isinstance(risk_type, str) and risk_type.strip():
-        clauses.append(f"risk_type = {_cql_quote(risk_type.strip())}")
+        # Normalize risk_type: "flood" maps to "water" in the database
+        normalized_risk = risk_type.strip().lower()
+        if normalized_risk == "flood":
+            normalized_risk = "water"
+        clauses.append(f"risk_type = {_cql_quote(normalized_risk)}")
 
-    # NOTE: City/location filtering disabled - using bbox filter only
-    # The location string from disambiguation often contains special characters
-    # that break CQL filters. Bbox filtering is sufficient for spatial queries.
-    # To re-enable city filtering, uncomment and adjust column name as needed:
-    # location = filters.get("location")
-    # if isinstance(location, str) and location.strip():
-    #     # Extract just the city name (first part before comma)
-    #     city_name = location.strip().split(",")[0].strip()
-    #     if city_name and not city_name.startswith("@"):
-    #         clauses.append(f"strToLowerCase(location_city) LIKE {_cql_quote('%' + city_name.lower() + '%')}")
+    # Filter by location_city column
+    # Use resolved_location (from OSM token lookup) if available, otherwise use location
+    location = filters.get("resolved_location") or filters.get("location")
+    if isinstance(location, str) and location.strip():
+        loc = location.strip()
+        # Skip if still an OSM ID token (shouldn't happen after resolution)
+        if not loc.startswith("@osm_id:") and not loc.startswith("@place_id:"):
+            # Extract just the city name (first part before comma)
+            city_name = loc.split(",")[0].strip()
+            if city_name:
+                clauses.append(f"strToLowerCase(location_city) LIKE {_cql_quote('%' + city_name.lower() + '%')}")
 
     region = filters.get("region")
     if isinstance(region, str) and region.strip():
@@ -61,18 +66,16 @@ def _build_cql_filter(filters: dict[str, Any]) -> str:
     if isinstance(min_area, (int, float)):
         clauses.append(f"area_m2 >= {float(min_area)}")
 
+    # Filter by observation_date (format in DB: "2024-08-26Z")
     start_date = filters.get("start_date")
     end_date = filters.get("end_date")
     if isinstance(start_date, str) and start_date.strip():
-        start_iso = start_date.strip()
-        if len(start_iso) == 10:
-            start_iso = start_iso + "T00:00:00Z"
-        clauses.append(f"inference_date >= {_cql_quote(start_iso)}")
+        # observation_date format is "YYYY-MM-DDZ", so append Z if not present
+        start_val = start_date.strip()[:10]  # Take just YYYY-MM-DD
+        clauses.append(f"observation_date >= {_cql_quote(start_val + 'Z')}")
     if isinstance(end_date, str) and end_date.strip():
-        end_iso = end_date.strip()
-        if len(end_iso) == 10:
-            end_iso = end_iso + "T23:59:59Z"
-        clauses.append(f"inference_date <= {_cql_quote(end_iso)}")
+        end_val = end_date.strip()[:10]  # Take just YYYY-MM-DD
+        clauses.append(f"observation_date <= {_cql_quote(end_val + 'Z')}")
 
     bbox = filters.get("bbox")
     if (
@@ -94,7 +97,12 @@ def _ensure_bbox(filters: dict[str, Any]) -> None:
     if not isinstance(location, str) or not location.strip():
         return
 
-    bbox_raw, lat, lon, _ = get_city_bbox(location.strip(), require_confirmation=True)
+    bbox_raw, lat, lon, resolved_name = get_city_bbox(location.strip(), require_confirmation=True)
+    
+    # Store resolved display name for city filtering (works even with OSM ID tokens)
+    if resolved_name and resolved_name != location.strip():
+        filters["resolved_location"] = resolved_name
+        logger.info(f"Resolved location '{location}' to '{resolved_name}'")
     if bbox_raw and len(bbox_raw) == 4:
         try:
             min_lat = float(bbox_raw[0])
@@ -209,10 +217,20 @@ def geoserver_risk_mask_tool(
     """Query GeoServer risk polygons with filters (WFS) and display them as a mask on a map (WMS or GeoJSON).
 
     Use this tool when the user asks to show/visualize risk masks or polygons from GeoServer, especially when they mention
-    filtering by risk type, region, confidence, inference date range, or area.
+    filtering by risk type (water, flood), location, date range, confidence, or area.
 
-    Example tool call:
-    - geoserver_risk_mask_tool(risk_type="flood", location="Tunis")
+    Note: "flood" is automatically mapped to "water" in the database query.
+
+    Args:
+        risk_type: Type of risk to filter by. Use "water" or "flood" (both query water risk data)
+        location: City or place name to search
+        start_date: Start date for filtering (ISO format: "2026-01-01")
+        end_date: End date for filtering (ISO format: "2026-01-31")
+
+    Example tool calls:
+    - geoserver_risk_mask_tool(risk_type="water", location="Salignac")
+    - geoserver_risk_mask_tool(risk_type="flood", location="Paris")  # "flood" → queries "water"
+    - geoserver_risk_mask_tool(risk_type="water", location="Lyon", start_date="2025-06-01", end_date="2025-08-31")
     """
     try:
         if end_date is None and isinstance(start_date, str) and start_date.strip():
