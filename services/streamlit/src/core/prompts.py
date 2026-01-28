@@ -190,11 +190,18 @@ Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved NASA POWER hourly solar irradiance data for Tunis last week. See the returned summary and time series.","commentary":"Summarizing the NASA POWER hourly solar irradiance results."}
 
 Example 19
-User: Show me the temperature trend in Paris from 2015 to 2024
+User: Show me the temperature trend in Paris from 2020 to 2024
 Step 1 JSON:
-{"action":"nasa_power_daily_tool","action_input":{"location":"Paris","start_date":"2015-01-01","end_date":"2024-12-31","parameters":["T2M"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_daily_tool to fetch daily temperature (T2M) from NASA POWER for a long-term trend."}
+{"action":"nasa_power_daily_tool","action_input":{"location":"Paris","start_date":"2020-01-01","end_date":"2024-12-31","parameters":["T2M"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_daily_tool to fetch daily temperature (T2M) from NASA POWER for a long-term trend."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved NASA POWER daily data for the requested location and multi-year period. See the returned summary and time series.","commentary":"Summarizing the NASA POWER daily results."}
+
+Example 20
+User: What's the weather at 48.8566, 2.3522?
+Step 1 JSON:
+{"action":"weather_tool","action_input":{"lat":48.8566,"lon":2.3522,"forecast_days":2},"commentary":"Calling weather_tool with coordinates for a short forecast."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I fetched the weather forecast for the provided coordinates. See the returned weather data.","commentary":"Summarizing the weather results."}
 """.strip()
 
 

@@ -31,7 +31,7 @@ import xarray as xr
 
 from core.logger import get_logger
 from config import get_config
-from utils.bbox_service import LocationAmbiguousError, get_city_bbox
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.map_view_service import view_state_from_bbox, view_state_from_points
 from utils.contracts import make_tool_response
 from mcp_singleton import mcp
@@ -392,7 +392,37 @@ def _historical_context_stub(hazard: str) -> Dict[str, str]:
 # Core computations
 # --------------------------------------------------------------------------------------
 
-def _resolve_location(location: str) -> Tuple[Optional[List[float]], float, float, str]:
+def _resolve_location(
+    location: str | None,
+    *,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> Tuple[Optional[List[float]], float, float, str]:
+    if lat is not None and lon is not None:
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            raise GeocodingError(
+                f"Invalid coordinates: lat={lat}, lon={lon}."
+            )
+
+        resolved_name = None
+        if not isinstance(location, str) or not location.strip():
+            try:
+                rev = reverse_geocode(lat_f, lon_f)
+                resolved_name = rev.get("city") or rev.get("country")
+            except Exception:
+                resolved_name = None
+
+        resolved_name = resolved_name or (location.strip() if isinstance(location, str) else None) or f"{lat_f:.4f}, {lon_f:.4f}"
+        return None, lat_f, lon_f, resolved_name
+
+    if not isinstance(location, str) or not location.strip():
+        raise GeocodingError(
+            "Please provide a location name or lat/lon coordinates."
+        )
+
     bbox, lat_city, lon_city, city_name_final = get_city_bbox(location, require_confirmation=True)
 
     if lat_city is None or lon_city is None:
@@ -592,23 +622,30 @@ def _compose_message(location_name: str, hazards: List[Dict[str, Any]]) -> str:
 
 @mcp.tool()
 def drought_flood_risk_tool(
-    location: str,
+    location: str | None = None,
     hazard: str | None = "both",     # expected
     risk_type: str | None = None,    # backward compat (agent sometimes sends risk_type)
+    lat: float | None = None,
+    lon: float | None = None,
 ) -> dict:
     """
     Long-term drought & flood risk assessment based on GDFC Hazard Maps (1950–2016).
 
-    Args:
-      location: place name
-      hazard: "drought" | "flood" | "both"
-      risk_type: alias of hazard (compat)
+        Args:
+            location: place name (optional if lat/lon provided)
+            hazard: "drought" | "flood" | "both"
+            risk_type: alias of hazard (compat)
+            lat: latitude
+            lon: longitude
     """
     try:
-        if not location or not isinstance(location, str) or not location.strip():
+        if (
+            (not isinstance(location, str) or not location.strip())
+            and not (lat is not None and lon is not None)
+        ):
             return make_tool_response(
                 tool_name="drought_flood_risk_tool",
-                message="Please specify a location (e.g., 'Paris, France').",
+                message="Please specify a location (e.g., 'Paris, France') or lat/lon coordinates.",
                 error=True,
             )
 
@@ -620,7 +657,7 @@ def drought_flood_risk_tool(
         if hazard not in ("drought", "flood", "both"):
             hazard = "both"
 
-        bbox, lat, lon, resolved_name = _resolve_location(location)
+        bbox, lat, lon, resolved_name = _resolve_location(location, lat=lat, lon=lon)
 
         hazards: List[Dict[str, Any]] = []
         if hazard in ("drought", "both"):

@@ -6,7 +6,7 @@ Retrieves information about countries and cities.
 
 import requests
 
-from utils.bbox_service import get_city_candidates
+from utils.bbox_service import get_city_candidates, reverse_geocode
 from utils.contracts import make_tool_response
 from mcp_singleton import mcp
 
@@ -82,16 +82,61 @@ def get_city_info(city_name: str):
 
 
 @mcp.tool()
-def geo_info_tool(name: str) -> dict:
+def geo_info_tool(
+    name: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> dict:
     """Retrieve geographic information about a country or a city.
 
     Args:
         name: The name of the location (country or city)
+        lat: Optional latitude to reverse-geocode a location
+        lon: Optional longitude to reverse-geocode a location
     """
     location_name = name
 
-    # Try country first
-    info = get_country_info(location_name)
+    if lat is not None and lon is not None:
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except Exception:
+            return make_tool_response(
+                tool_name="geo_info_tool",
+                message="Invalid coordinates provided. lat/lon must be numeric.",
+                error=True,
+            )
+
+        try:
+            rev = reverse_geocode(lat_f, lon_f)
+        except Exception:
+            rev = {}
+
+        city_name = rev.get("city")
+        country_name = rev.get("country")
+        location_name = city_name or country_name or f"{lat_f:.4f}, {lon_f:.4f}"
+
+        if city_name:
+            info = get_city_info(city_name)
+        elif country_name:
+            info = get_country_info(country_name)
+        else:
+            info = {
+                "Type": "Coordinates",
+                "Name": location_name,
+                "Latitude": lat_f,
+                "Longitude": lon_f,
+            }
+    else:
+        if not isinstance(location_name, str) or not location_name.strip():
+            return make_tool_response(
+                tool_name="geo_info_tool",
+                message="Please provide a location name or lat/lon coordinates.",
+                error=True,
+            )
+
+        # Try country first
+        info = get_country_info(location_name)
 
     # If not found, try city
     if not info:
@@ -136,6 +181,14 @@ def geo_info_tool(name: str) -> dict:
     elif info_type == "city":
         city = location_name
         country = info.get("Country")
+        try:
+            lat = info.get("Latitude")
+            lon = info.get("Longitude")
+            if lat is not None and lon is not None:
+                coordinates = {"lat": float(lat), "lon": float(lon)}
+        except Exception:
+            coordinates = None
+    elif info_type == "coordinates":
         try:
             lat = info.get("Latitude")
             lon = info.get("Longitude")
