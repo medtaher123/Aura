@@ -25,11 +25,13 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "\n"
     "CRITICAL RULES:\n"
     "- If the user asks about what tools are available, how tools work, what data sources tools use, or what questions they can ask, use tools_info_tool.\n"
-    "- If the user query is about GeoServer masks, use the geoserver_risk_mask_tool and do not call other tools.\n"
+    "- WATER/FLOOD RISK QUERIES: Use geoserver_risk_mask_tool for 'water risk', 'flood risk', 'flood mask', 'water mask', 'risk map', or 'show me risk in [city]'. This shows satellite-derived risk predictions.\n"
+    "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2025', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
+    "- SURFACE WATER INGRESS: Use estimate_surface_water_ingress_tool ONLY when user asks for 'ingress risk' or 'surface water ingress' or 'water accumulation points'. This computes terrain-based analysis.\n"
     "- You may call multiple tools over multiple steps.\n"
     "- For fires, use only the detect_fire_tool.\n"
     "- Never call disaster event tools for fires.\n"
-    "- For storms/extreme temperature/drought call only the query_disaster_events_tool there is no need to call the weather_tool.\n"
+    "- For storms/extreme temperature/drought EVENTS call only the query_disaster_events_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- For river discharge, streamflow, or river flood forecasts, use streamflow_forecast_tool.\n"
     "- For climate/energy time series at a location: if the user asks for trends over months/years or long-term daily aggregates, use nasa_power_daily_tool; if they ask for hourly profiles, peak times, or within-day extremes, use nasa_power_hourly_tool.\n"
@@ -119,6 +121,41 @@ Step 1 JSON:
 {"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"flood","location":"Casablanca","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve the flood risk mask for Casablanca."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved the flood risk mask from GeoServer for Casablanca. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer mask retrieval."}
+
+Example 8b
+User: show me water risk in Salignac
+Step 1 JSON:
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"water","location":"Salignac","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve water risk mask for Salignac."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the water risk mask from GeoServer for Salignac. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer water risk mask retrieval."}
+
+Example 8c
+User: show me water risk in Paris in January
+Step 1 JSON:
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"water","location":"Paris","start_date":"2026-01-01","end_date":"2026-01-31","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve water risk mask for Paris in January."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the water risk mask from GeoServer for Paris for January. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer water risk mask with date filter."}
+
+Example 8d
+User: show me water risk in Berlin between January and March
+Step 1 JSON:
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"water","location":"Berlin","start_date":"2026-01-01","end_date":"2026-03-31","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve water risk mask for Berlin from January to March."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the water risk mask from GeoServer for Berlin for January-March period. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer water risk mask with date range."}
+
+Example 8e
+User: show me flood risk in Lyon during summer
+Step 1 JSON:
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"flood","location":"Lyon","start_date":"2025-06-01","end_date":"2025-08-31","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve flood risk mask for Lyon during summer months (June-August)."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the flood risk mask from GeoServer for Lyon during summer. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer flood risk mask for summer period."}
+
+Example 8f
+User: show me water risk in Marseille in 2025
+Step 1 JSON:
+{"action":"geoserver_risk_mask_tool","action_input":{"risk_type":"water","location":"Marseille","start_date":"2025-01-01","end_date":"2025-12-31","render_mode":"auto"},"commentary":"Calling geoserver_risk_mask_tool to retrieve water risk mask for Marseille for the year 2025."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved the water risk mask from GeoServer for Marseille for 2025. See the returned map/artifacts if available.","commentary":"Summarizing the GeoServer water risk mask for 2025."}
 
 Example 9
 User: Compute an itinerary from Paris to Lyon
