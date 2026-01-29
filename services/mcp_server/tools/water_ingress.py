@@ -368,7 +368,7 @@ def estimate_surface_water_ingress_tool(
     lon: float | None = None,
 ) -> dict:
     """
-     Full analysis of surface water ingress risk for a given area.
+     Full analysis of surface water ingress risk / water accumulation points, for a given area.
 
     Input:
     - A city name (str), e.g., "Paris", or

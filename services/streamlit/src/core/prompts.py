@@ -24,9 +24,10 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "{tool_names}\n"
     "\n"
     "CRITICAL RULES:\n"
+    "- If the user asks about what tools are available, how tools work, what data sources tools use, or what questions they can ask, use tools_info_tool.\n"
     "- WATER/FLOOD RISK QUERIES: Use geoserver_risk_mask_tool for 'water risk', 'flood risk', 'flood mask', 'water mask', 'risk map', or 'show me risk in [city]'. This shows satellite-derived risk predictions.\n"
-    "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2020', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
-    "- SURFACE WATER INGRESS: Use estimate_surface_water_ingress_tool ONLY when user explicitly asks for 'ingress risk' or 'surface water ingress'. This computes terrain-based analysis.\n"
+    "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2025', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
+    "- SURFACE WATER INGRESS: Use estimate_surface_water_ingress_tool ONLY when user asks for 'ingress risk' or 'surface water ingress' or 'water accumulation points'. This computes terrain-based analysis.\n"
     "- You may call multiple tools over multiple steps.\n"
     "- For fires, use only the detect_fire_tool.\n"
     "- Never call disaster event tools for fires.\n"
@@ -164,81 +165,102 @@ Step 2 JSON:
 {"action":"FINAL","action_input":"I computed a driving route from Paris to Lyon. See the returned route map/artifacts and step-by-step instructions.","commentary":"Summarizing the route results."}
 
 Example 10
-User: Estimate surface water ingress risk in Paris
+User: What are the main water accumulation points in Paris?
 Step 1 JSON:
-{"action":"estimate_surface_water_ingress_tool","action_input":{"location_input":"Paris"},"commentary":"Calling estimate_surface_water_ingress_tool to estimate ingress risk for Paris."}
+{"action":"estimate_surface_water_ingress_tool","action_input":{"location_input":"Paris"},"commentary":"Calling estimate_surface_water_ingress_tool to estimate water accumulation points for Paris."}
 Step 2 JSON:
-{"action":"FINAL","action_input":"I estimated surface water ingress risk for Paris and returned risk points and mitigation recommendations. See the returned map/artifacts if available.","commentary":"Summarizing the ingress risk results."}
+{"action":"FINAL","action_input":"I estimated surface water accumulation points for Paris and returned risk points and mitigation recommendations. See the returned map/artifacts if available.","commentary":"Summarizing the ingress risk results."}
 
 Example 11
-User: What are the top 3 risks in Japan?
-Step 1 JSON:
-{"action":"query_hazards_tool","action_input":{"country":"Japan","top_n":3},"commentary":"Calling query_hazards_tool to fetch the top hazards for Japan."}
-Step 2 JSON:
-{"action":"FINAL","action_input":"I identified the top 3 hazards in Japan based on Data360 data. See the returned hazard list/artifacts if available.","commentary":"Summarizing the hazard results."}
-
-Example 12
 User: Check for fire events in Dubai (United Arab Emirates) in 2024.
 Step 1 JSON:
 {"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Dubai, United Arab Emirates","radius_km":null},"commentary":"Calling detect_fire_tool to check fire detections near Dubai in 2024."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I checked for fire events in Dubai (United Arab Emirates) in 2024. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
 
-Example 13
+Example 12
 User: How many fires were there in Fos-sur-Mer in 2024?
 Step 1 JSON:
 {"action":"detect_fire_tool","action_input":{"start_date":"2024-01-01","end_date":"2024-12-31","location":"Fos-sur-Mer","radius_km":null},"commentary":"Calling detect_fire_tool to check fire detections near Fos-sur-Mer in 2024."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I checked for fire events in Fos-sur-Mer in 2024. See the returned fire map/artifacts if available.","commentary":"Summarizing the fire detection results."}
 
-Example 14
+Example 13
 User: Show me streamflow forecast for the Seine River near Paris
 Step 1 JSON:
 {"action":"streamflow_forecast_tool","action_input":{"river_name":"Seine River, Paris"},"commentary":"Calling streamflow_forecast_tool to get river discharge forecast for the Seine River."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved the 15-day streamflow forecast for the Seine River. See the returned discharge forecast, flood risk level, and map.","commentary":"Summarizing the streamflow forecast results."}
 
-Example 15
+Example 14
 User: What's the flood risk for the Nile?
 Step 1 JSON:
 {"action":"streamflow_forecast_tool","action_input":{"river_name":"Nile"},"commentary":"Calling streamflow_forecast_tool to check river discharge and flood risk for the Nile River."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved streamflow forecast and flood risk analysis for the Nile River. See the returned discharge forecast and risk assessment.","commentary":"Summarizing the river flood risk results."}
 
-Example 16
+Example 15
 User: Get river discharge forecast for river_id 760021611
 Step 1 JSON:
 {"action":"streamflow_forecast_tool","action_input":{"reach_id":12345678,"river_name":"Danube River, Austria"},"commentary":"Calling streamflow_forecast_tool to get forecast for specific GEOGLOWS river_id (COMID) and show a map."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved the streamflow forecast for river_id 12345678. See the returned discharge forecast, flood threshold analysis, and map.","commentary":"Summarizing the streamflow forecast results."}
 
-Example 17 (ambiguous / missing info)
+Example 16 (ambiguous / missing info)
 User: Can you check the area for me?
 Step 1 JSON:
 {"action":"general_question_tool","action_input":"Can you check the area for me?","commentary":"Asking a clarifying question because the request is ambiguous."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I need a location and time range (and what you want: fires, floods, imagery, risk mask, etc.) to proceed.","commentary":"Requesting missing details to proceed."}
 
-Example 18
+Example 17
 User: Hourly solar irradiance last week in Tunis?
 Step 1 JSON:
 {"action":"nasa_power_hourly_tool","action_input":{"location":"Tunis","start_date":"2024-05-20","end_date":"2024-05-26","parameters":["ALLSKY_SFC_SW_DWN"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_hourly_tool to fetch hourly solar irradiance (ALLSKY_SFC_SW_DWN) from NASA POWER."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved NASA POWER hourly solar irradiance data for Tunis last week. See the returned summary and time series.","commentary":"Summarizing the NASA POWER hourly solar irradiance results."}
 
-Example 19
+Example 18
 User: Show me the temperature trend in Paris from 2020 to 2024
 Step 1 JSON:
 {"action":"nasa_power_daily_tool","action_input":{"location":"Paris","start_date":"2020-01-01","end_date":"2024-12-31","parameters":["T2M"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_daily_tool to fetch daily temperature (T2M) from NASA POWER for a long-term trend."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved NASA POWER daily data for the requested location and multi-year period. See the returned summary and time series.","commentary":"Summarizing the NASA POWER daily results."}
 
-Example 20
+Example 19
 User: What's the weather at 48.8566, 2.3522?
 Step 1 JSON:
 {"action":"weather_tool","action_input":{"lat":48.8566,"lon":2.3522,"forecast_days":2},"commentary":"Calling weather_tool with coordinates for a short forecast."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I fetched the weather forecast for the provided coordinates. See the returned weather data.","commentary":"Summarizing the weather results."}
+
+Example 20
+User: What tools are available for detecting fires?
+Step 1 JSON:
+{"action":"tools_info_tool","action_input":{"query":"fire detection"},"commentary":"Calling tools_info_tool to find tools related to fire detection."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I found the available tools for fire detection. The detect_fire_tool can detect and analyze fire events using NASA FIRMS data. See the returned tool information.","commentary":"Summarizing the tools information."}
+
+Example 21
+User: How does the weather tool work?
+Step 1 JSON:
+{"action":"tools_info_tool","action_input":{"tool_name":"weather_tool"},"commentary":"Calling tools_info_tool to get detailed information about the weather_tool."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved detailed information about the weather_tool, including its purpose, data sources, capabilities, and example questions. See the returned tool documentation.","commentary":"Summarizing the weather tool information."}
+
+Example 22
+User: What tools can help me with satellite imagery?
+Step 1 JSON:
+{"action":"tools_info_tool","action_input":{"category":"Satellite Imagery"},"commentary":"Calling tools_info_tool to list tools in the Satellite Imagery category."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I found the satellite imagery tools available in our system. See the returned list of tools and their capabilities.","commentary":"Summarizing the satellite imagery tools."}
+
+Example 23
+User: List all available tools
+Step 1 JSON:
+{"action":"tools_info_tool","action_input":{"list_all":true},"commentary":"Calling tools_info_tool to list all available tools."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved a complete list of all available tools organized by category. See the returned comprehensive tool catalog.","commentary":"Summarizing all available tools."}
 """.strip()
 
 
@@ -302,23 +324,28 @@ JSON:
 {"needs_data": true, "needs_analysis": false, "data_query": "Estimate surface water ingress risk in Paris", "analysis_goal": ""}
 
 Example 6
-User: Show me the top 5 hazards in Japan
-JSON:
-{"needs_data": true, "needs_analysis": false, "data_query": "Show me the top 5 hazards in Japan", "analysis_goal": ""}
-
-Example 7
 User: Évalue le risque d’accumulation d’eau de surface à Versailles
 JSON:
 {"needs_data": true, "needs_analysis": false, "data_query": "Évalue le risque d’accumulation d’eau de surface à Versailles", "analysis_goal": ""}
-Example 8
+Example 7
 User: Show me streamflow forecast for the Amazon River
 JSON:
 {"needs_data": true, "needs_analysis": false, "data_query": "Show me streamflow forecast for the Amazon River", "analysis_goal": ""}
 
-Example 9
+Example 8
 User: What's the discharge for the Thames?
 JSON:
-{"needs_data": true, "needs_analysis": false, "data_query": "What's the discharge for the Thames?", "analysis_goal": ""}""".strip()
+{"needs_data": true, "needs_analysis": false, "data_query": "What's the discharge for the Thames?", "analysis_goal": ""}
+
+Example 9
+User: What tools can help me detect fires?
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "What tools can help me detect fires?", "analysis_goal": ""}
+
+Example 10
+User: How does the weather tool work?
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "How does the weather tool work?", "analysis_goal": ""}""".strip()
 
 
 def get_orchestrator_prompt() -> str:
