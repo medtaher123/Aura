@@ -74,6 +74,14 @@ resource "aws_security_group" "services" {
     cidr_blocks = [var.vpc_cidr]
   }
 
+  ingress {
+    description = "Agent Server - internal VPC traffic (WebSocket)"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
   egress {
     description = "Allow all outbound traffic"
     from_port   = 0

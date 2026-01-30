@@ -25,35 +25,61 @@ output "ecs_cluster_arn" {
   value       = module.ecs_mcp_server.cluster_arn
 }
 
-output "mcp_service_name" {
+output "mcp_server_service_name" {
   description = "MCP server service name"
-  value       = module.ecs_mcp_server.service_name
+  value       = module.ecs_mcp_server.mcp_server_service_name
 }
 
-output "mcp_task_definition_arn" {
+output "mcp_server_task_definition_arn" {
   description = "MCP server task definition ARN"
-  value       = module.ecs_mcp_server.task_definition_arn
+  value       = module.ecs_mcp_server.mcp_server_task_definition_arn
 }
 
-output "cloudwatch_log_group" {
+output "mcp_server_cloudwatch_log_group_name" {
   description = "CloudWatch log group for MCP server"
-  value       = module.ecs_mcp_server.cloudwatch_log_group
+  value       = module.ecs_mcp_server.mcp_server_cloudwatch_log_group_name
 }
 
 # ECR Outputs
-output "ecr_repository_url" {
+output "mcp_server_ecr_repository_url" {
   description = "ECR repository URL for MCP server"
-  value       = module.ecr.repository_url
+  value       = module.ecr.mcp_server_repository_url
 }
 
-output "ecr_repository_arn" {
-  description = "ECR repository ARN"
-  value       = module.ecr.repository_arn
+output "mcp_server_ecr_repository_arn" {
+  description = "ECR repository ARN for MCP server"
+  value       = module.ecr.mcp_server_repository_arn
+}
+
+output "agent_server_ecr_repository_url" {
+  description = "ECR repository URL for Agent server"
+  value       = module.ecr.agent_server_repository_url
+}
+
+output "agent_server_ecr_repository_arn" {
+  description = "ECR repository ARN for Agent server"
+  value       = module.ecr.agent_server_repository_arn
 }
 
 output "github_actions_role_arn" {
   description = "IAM role ARN for GitHub Actions"
   value       = module.ecr.github_actions_role_arn
+}
+
+# Agent Server ECS Outputs
+output "agent_server_service_name" {
+  description = "Agent server service name"
+  value       = module.ecs_mcp_server.agent_server_service_name
+}
+
+output "agent_server_task_definition_arn" {
+  description = "Agent server task definition ARN"
+  value       = module.ecs_mcp_server.agent_server_task_definition_arn
+}
+
+output "agent_server_cloudwatch_log_group_name" {
+  description = "CloudWatch log group for Agent server"
+  value       = module.ecs_mcp_server.agent_server_cloudwatch_log_group_name
 }
 
 # IAM Outputs

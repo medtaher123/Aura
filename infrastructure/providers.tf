@@ -9,8 +9,8 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "mpllm-terraform-state-963275461308"
-    key          = "mcp-server/terraform.tfstate"
+    bucket       = "mpllm-terraform-state-637423200916"
+    key          = "mpllm/terraform.tfstate"
     region       = "eu-west-3"
     encrypt      = true
     use_lockfile = true
