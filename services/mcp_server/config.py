@@ -1,5 +1,6 @@
 """MCP Server Configuration"""
 
+from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
@@ -46,8 +47,44 @@ class MCPServerConfig(BaseSettings):
         description="Directory for fire detection archives",
     )
 
+    # Athena / OSM infrastructure queries
+    athena_db: str = Field(
+        default="default",
+        description="Athena database/schema for OSM queries",
+    )
+    athena_output: str = Field(
+        default="s3://metaplanet-athena-query-results/",
+        description="S3 URI for Athena query output results",
+    )
+
+    # GDFC drought/flood data (S3 public bucket)
+    gdfc_drought_s3: str = Field(
+        default="",
+        description="S3 URI or prefix for GDFC drought NetCDF",
+    )
+    gdfc_flood_s3: str = Field(
+        default="",
+        description="S3 URI or prefix for GDFC flood NetCDF",
+    )
+    gdfc_drought_var: str = Field(
+        default="",
+        description="Optional GDFC drought variable name override",
+    )
+    gdfc_flood_var: str = Field(
+        default="",
+        description="Optional GDFC flood variable name override",
+    )
+
+    aws_region: str = Field(
+        default="us-east-1",
+        description="Default AWS region for Athena/S3 clients",
+    )
+
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=Path(__file__).resolve().parent / ".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
 
