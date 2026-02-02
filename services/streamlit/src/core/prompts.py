@@ -29,6 +29,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2025', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
     "- SURFACE WATER INGRESS: Use estimate_surface_water_ingress_tool ONLY when user asks for 'ingress risk' or 'surface water ingress' or 'water accumulation points'. This computes terrain-based analysis.\n"
     "- You may call multiple tools over multiple steps.\n"
+    "- I the question is about 'last summer' or 'last month' or 'last year' or 'last week' or 'last day' or today' , use the get_date tool to get the date and then use the appropriate tool to get the data.\n"
     "- For fires, use only the detect_fire_tool.\n"
     "- Never call disaster event tools for fires.\n"
     "- For storms/extreme temperature/drought EVENTS call only the query_disaster_events_tool.\n"
@@ -223,8 +224,10 @@ Step 2 JSON:
 Example 18
 User: Hourly solar irradiance last week in Tunis?
 Step 1 JSON:
-{"action":"nasa_power_hourly_tool","action_input":{"location":"Tunis","start_date":"2024-05-20","end_date":"2024-05-26","parameters":["ALLSKY_SFC_SW_DWN"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_hourly_tool to fetch hourly solar irradiance (ALLSKY_SFC_SW_DWN) from NASA POWER."}
+{"action":"get_date","action_input":null,"commentary":"Calling get_date tool to get the date."}
 Step 2 JSON:
+{"action":"nasa_power_hourly_tool","action_input":{"location":"Tunis","start_date":"2026-01-26","end_date":"2026-02-02","parameters":["ALLSKY_SFC_SW_DWN"],"community":"re","units":"metric","time_standard":"utc"},"commentary":"Calling nasa_power_hourly_tool to fetch hourly solar irradiance (ALLSKY_SFC_SW_DWN) from NASA POWER."}
+Step 3 JSON:
 {"action":"FINAL","action_input":"I retrieved NASA POWER hourly solar irradiance data for Tunis last week. See the returned summary and time series.","commentary":"Summarizing the NASA POWER hourly solar irradiance results."}
 
 Example 19
