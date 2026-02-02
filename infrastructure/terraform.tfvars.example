@@ -1,0 +1,44 @@
+# Example terraform.tfvars - Copy this to terraform.tfvars and customize
+
+# AWS Configuration
+# aws_region     = "eu-west-3"
+# aws_account_id = "637423200916"
+
+# Project Configuration
+# project_name = "eo-agent"
+# environment  = "production"
+
+# GitHub Repository for OIDC
+# github_repository = "your-org/your-repo"
+
+# VPC Configuration
+# vpc_cidr             = "10.1.0.0/16"
+# availability_zones   = ["eu-west-3a", "eu-west-3b", "eu-west-3c"]
+# public_subnet_cidrs  = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
+
+# MCP Server Configuration
+# mcp_server_cpu           = "256"
+# mcp_server_memory        = "512"
+# mcp_server_desired_count = 1
+# mcp_log_level            = "info"
+# mcp_workers              = "1"
+
+# Streamlit Configuration
+# streamlit_cpu           = "512"
+# streamlit_memory        = "1024"
+# streamlit_desired_count = 1
+
+# Service Discovery
+# service_discovery_namespace = "eo-agent.local"
+
+# Secrets (ARNs from AWS Secrets Manager)
+# opentopo_api_key_arn = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
+# map_key_arn          = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
+# maptiler_api_key_arn = ""  # Optional, leave empty if not using
+
+# GeoServer Configuration
+# geoserver_base_url   = "http://geoserver-alb-556624184.eu-west-3.elb.amazonaws.com/geoserver"
+# geoserver_risk_layer = "georisk:predictions"
+
+# Fire Archive
+# fire_archive_dir = "s3://metaplanet-fire-archive-firms/"

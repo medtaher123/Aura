@@ -9,8 +9,8 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "mpllm-terraform-state-963275461308"
-    key          = "mcp-server/terraform.tfstate"
+    bucket       = "eo-agent-terraform-state-637423200916"
+    key          = "eo-agent-terraform.tfstate"
     region       = "eu-west-3"
     encrypt      = true
     use_lockfile = true
@@ -22,7 +22,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "MPLLM"
+      Project     = "EO-Agent"
       ManagedBy   = "Terraform"
       Environment = var.environment
     }
