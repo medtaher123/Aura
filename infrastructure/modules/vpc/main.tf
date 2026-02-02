@@ -6,7 +6,7 @@ resource "aws_vpc" "main" {
   tags = {
     Name        = "${var.project_name}-vpc"
     Environment = var.environment
-    Project     = "MPLLM"
+    Project     = "EO-Agent"
   }
 }
 
@@ -55,9 +55,10 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_security_group" "services" {
   name        = "${var.project_name}-services-sg"
-  description = "Security group for MPLLM services (MCP, WebApp, Agents)"
+  description = "Security group for EO-Agent services (MCP, WebApp, Agents)"
   vpc_id      = aws_vpc.main.id
 
+  # Allow MCP Server traffic within VPC
   ingress {
     description = "MCP Server - internal VPC traffic"
     from_port   = 8000
@@ -66,6 +67,7 @@ resource "aws_security_group" "services" {
     cidr_blocks = [var.vpc_cidr]
   }
 
+  # Allow Streamlit traffic from ALB and within VPC
   ingress {
     description = "Streamlit WebApp - internal VPC traffic"
     from_port   = 8501
@@ -87,3 +89,4 @@ resource "aws_security_group" "services" {
     Purpose = "Multi-service access control"
   }
 }
+

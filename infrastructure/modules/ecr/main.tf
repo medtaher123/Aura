@@ -40,6 +40,48 @@ resource "aws_ecr_lifecycle_policy" "mcp_server" {
   })
 }
 
+# ECR Repository for Streamlit
+resource "aws_ecr_repository" "streamlit" {
+  name                 = "${var.project_name}-streamlit"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  tags = {
+    Name        = "${var.project_name}-streamlit"
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+# ECR Lifecycle Policy for Streamlit - Keep last 10 images
+resource "aws_ecr_lifecycle_policy" "streamlit" {
+  repository = aws_ecr_repository.streamlit.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 10 images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 10
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
 # Retrieve GitHub OIDC provider's TLS certificate
 data "tls_certificate" "github" {
   url = "https://token.actions.githubusercontent.com"
@@ -122,7 +164,10 @@ resource "aws_iam_policy" "github_actions_ecr" {
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload"
         ]
-        Resource = aws_ecr_repository.mcp_server.arn
+        Resource = [
+          aws_ecr_repository.mcp_server.arn,
+          aws_ecr_repository.streamlit.arn
+        ]
       },
       {
         Effect = "Allow"
@@ -130,7 +175,10 @@ resource "aws_iam_policy" "github_actions_ecr" {
           "ecs:UpdateService",
           "ecs:DescribeServices"
         ]
-        Resource = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${var.project_name}-cluster/${var.project_name}-mcp-service"
+        Resource = [
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${var.project_name}-cluster/${var.project_name}-mcp-service",
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${var.project_name}-cluster/${var.project_name}-streamlit-service"
+        ]
       },
       {
         Effect = "Allow"
