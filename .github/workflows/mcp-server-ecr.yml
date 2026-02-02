@@ -65,8 +65,8 @@ jobs:
                   tags: |
                       type=ref,event=branch
                       type=ref,event=pr
-                      type=sha,prefix={{branch}}-,enable=true 
-                      type=raw,value=latest,enable=true
+                      type=sha,prefix={{branch}}-,enable=true
+                      type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
                       type=semver,pattern={{version}}
                       type=semver,pattern={{major}}.{{minor}}
                   flavor: |
@@ -97,7 +97,7 @@ jobs:
     deploy:
         name: Deploy to ECS
         needs: build-and-push
-        # if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         runs-on: ubuntu-latest
         permissions:
             id-token: write
