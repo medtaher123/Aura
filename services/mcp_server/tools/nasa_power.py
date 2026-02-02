@@ -192,7 +192,7 @@ def nasa_power_hourly_tool(
     community: str = "re",
     units: str = "metric",
     time_standard: str = "utc",
-    max_days: int = 14,
+    max_days: int = 360,
 ) -> dict[str, Any]:
     """Query NASA POWER hourly time-series for a point.
 
@@ -200,6 +200,8 @@ def nasa_power_hourly_tool(
     - "Hourly solar irradiance last week in Tunis"
     - "How many hours above 35°C in July 2023 near Rome?"
     - "Wind speed profile at a site for a given period"
+    - "Temperature in Paris in 2024"
+
 
     Args:
         location: City/place name (geocoded via Nominatim). Optional if lat/lon provided.
@@ -465,7 +467,7 @@ def nasa_power_daily_tool(
     community: str = "re",
     units: str = "metric",
     time_standard: str = "utc",
-    max_days: int = 3650,
+    max_days: int = 10000,
 ) -> dict[str, Any]:
     """Query NASA POWER daily time-series for a point.
 
