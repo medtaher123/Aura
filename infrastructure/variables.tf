@@ -52,13 +52,13 @@ variable "public_subnet_cidrs" {
 variable "mcp_server_cpu" {
   description = "CPU units for MCP server task"
   type        = string
-  default     = "256"
+  default     = "4096"
 }
 
 variable "mcp_server_memory" {
   description = "Memory for MCP server task"
   type        = string
-  default     = "512"
+  default     = "8192"
 }
 
 variable "mcp_server_desired_count" {
@@ -121,7 +121,7 @@ variable "fire_archive_dir" {
 variable "streamlit_cpu" {
   description = "CPU units for Streamlit task"
   type        = string
-  default     = "512"
+  default     = "8192"
 }
 
 variable "streamlit_memory" {
