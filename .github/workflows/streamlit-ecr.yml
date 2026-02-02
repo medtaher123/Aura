@@ -27,7 +27,7 @@ env:
     AWS_REGION: eu-west-3
     ECR_REPOSITORY: eo-agent-streamlit
     SERVICE_PATH: services/streamlit
-    ECS_CLUSTER: eo-agent-prod
+    ECS_CLUSTER: eo-agent-cluster
     ECS_SERVICE: eo-agent-streamlit-service
 
 jobs:

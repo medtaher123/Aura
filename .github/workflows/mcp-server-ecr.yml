@@ -33,7 +33,7 @@ env:
     AWS_REGION: eu-west-3
     ECR_REPOSITORY: eo-agent-mcp-server
     SERVICE_PATH: services/mcp_server
-    ECS_CLUSTER: eo-agent-prod
+    ECS_CLUSTER: eo-agent-cluster
     ECS_SERVICE: eo-agent-mcp-service
 
 jobs:
