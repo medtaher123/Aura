@@ -8,12 +8,6 @@ on:
         paths:
             - "services/mcp_server/**"
             - ".github/workflows/mcp-server-ecr.yml"
-    pull_request:
-        branches:
-            - main
-        paths:
-            - "services/mcp_server/**"
-            - ".github/workflows/mcp-server-ecr.yml"
     workflow_dispatch:
         inputs:
             environment:
