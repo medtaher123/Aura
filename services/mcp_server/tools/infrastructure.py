@@ -21,6 +21,73 @@ from utils.contracts import make_tool_response
 
 logger = get_logger(__name__)
 
+INFRASTRUCTURE_GROUPS: dict[str, list[str]] = {
+    "healthcare": [
+        "hospital",
+        "clinic",
+        "doctors",
+        "dentist",
+        "pharmacy",
+        "nursing_home",
+        "healthcare",
+    ],
+    "education": [
+        "school",
+        "college",
+        "university",
+        "kindergarten",
+        "language_school",
+        "music_school",
+        "driving_school",
+    ],
+    "emergency": [
+        "police",
+        "fire_station",
+        "ambulance_station",
+        "emergency_service",
+    ],
+    "transport": [
+        "bus_station",
+        "ferry_terminal",
+        "taxi",
+        "parking",
+        "fuel",
+        "charging_station",
+    ],
+    "industrial": [
+        "industrial",
+        "factory",
+        "warehouse",
+        "manufacture",
+        "works",
+        "depot",
+    ],
+}
+
+INFRASTRUCTURE_GROUP_ALIASES: dict[str, str] = {
+    "health": "healthcare",
+    "medical": "healthcare",
+    "education_facilities": "education",
+    "emergency_services": "emergency",
+    "transportation": "transport",
+    "industry": "industrial",
+    "manufacturing": "industrial",
+}
+
+
+def _normalize_infra_type(value: str) -> str:
+    return str(value).strip().lower()
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        if value not in seen:
+            output.append(value)
+            seen.add(value)
+    return output
+
 
 def _parse_s3_bucket(s3_uri: str) -> str | None:
     if not isinstance(s3_uri, str):
@@ -294,24 +361,45 @@ def infrastructure_query_tool(
 
         infra_filter = ""
         sanitized_types: list[str] = []
+        expanded_types: list[str] = []
+        group_expansions: dict[str, list[str]] = {}
         if infrastructure_types:
-            sanitized_types = [str(t).replace("'", "''") for t in infrastructure_types]
-            infra_filter = " AND (" + " OR ".join(
-                [
-                    (
-                        "tags['amenity'] = '{t}' OR "
-                        "tags['building'] = '{t}' OR "
-                        "tags['landuse'] = '{t}'"
-                    ).format(t=t)
-                    for t in sanitized_types
-                ]
-            ) + ")"
+            for raw_type in infrastructure_types:
+                if raw_type is None:
+                    continue
+                raw_str = str(raw_type).strip()
+                if not raw_str:
+                    continue
+                normalized = _normalize_infra_type(raw_str)
+                group_key = INFRASTRUCTURE_GROUP_ALIASES.get(normalized, normalized)
+                if group_key in INFRASTRUCTURE_GROUPS:
+                    expanded = INFRASTRUCTURE_GROUPS[group_key]
+                    group_expansions[raw_str] = expanded
+                    expanded_types.extend(expanded)
+                else:
+                    expanded_types.append(raw_str)
+
+            expanded_types = _unique_preserve_order(expanded_types)
+            sanitized_types = [str(t).replace("'", "''") for t in expanded_types]
+            if sanitized_types:
+                infra_filter = " AND (" + " OR ".join(
+                    [
+                        (
+                            "tags['amenity'] = '{t}' OR "
+                            "tags['building'] = '{t}' OR "
+                            "tags['landuse'] = '{t}' OR "
+                            "tags['industrial'] = '{t}'"
+                        ).format(t=t)
+                        for t in sanitized_types
+                    ]
+                ) + ")"
 
         query = f"""
         SELECT
             tags['amenity'] as amenity,
             tags['building'] as building,
             tags['landuse'] as landuse,
+            tags['industrial'] as industrial,
             COUNT(*) as count
         FROM {table}
         WHERE lat BETWEEN {min_lat} AND {max_lat}
@@ -320,9 +408,10 @@ def infrastructure_query_tool(
             tags['amenity'] IS NOT NULL
             OR tags['building'] IS NOT NULL
             OR tags['landuse'] IS NOT NULL
+            OR tags['industrial'] IS NOT NULL
           )
           {infra_filter}
-        GROUP BY tags['amenity'], tags['building'], tags['landuse']
+        GROUP BY tags['amenity'], tags['building'], tags['landuse'], tags['industrial']
         ORDER BY count DESC
         LIMIT 50
         """
@@ -541,19 +630,38 @@ def infrastructure_query_tool(
                 "amenity": data[0].get("VarCharValue", ""),
                 "building": data[1].get("VarCharValue", ""),
                 "landuse": data[2].get("VarCharValue", ""),
-                "count": int(data[3].get("VarCharValue", "0")),
+                "industrial": data[3].get("VarCharValue", ""),
+                "count": int(data[4].get("VarCharValue", "0")),
             }
             infra_list.append(infra)
 
         infra_counts = {}
+        group_breakdown: dict[str, dict[str, int]] = {}
         if infrastructure_types:
             for t in infrastructure_types:
-                infra_counts[str(t)] = 0
+                if t is None:
+                    continue
+                raw_str = str(t).strip()
+                if not raw_str:
+                    continue
+                infra_counts[raw_str] = 0
+                if raw_str in group_expansions:
+                    group_breakdown[raw_str] = {
+                        subtype: 0 for subtype in group_expansions[raw_str]
+                    }
             for row in infra_list:
-                for key in ("amenity", "building", "landuse"):
+                row_count = row.get("count", 0)
+                for key in ("amenity", "building", "landuse", "industrial"):
                     value = row.get(key) or ""
+                    if not value:
+                        continue
                     if value in infra_counts:
-                        infra_counts[value] += row.get("count", 0)
+                        infra_counts[value] += row_count
+                    for group_name, subtypes in group_expansions.items():
+                        if value in subtypes:
+                            infra_counts[group_name] += row_count
+                            if group_name in group_breakdown:
+                                group_breakdown[group_name][value] += row_count
 
         message_details = ""
         if infra_counts:
@@ -582,7 +690,7 @@ def infrastructure_query_tool(
             map_types = sanitized_types
         else:
             for row in infra_list:
-                for key in ("amenity", "building", "landuse"):
+                for key in ("amenity", "building", "landuse", "industrial"):
                     value = row.get(key) or ""
                     if value and value not in map_types:
                         map_types.append(value)
@@ -598,7 +706,8 @@ def infrastructure_query_tool(
                     (
                         "tags['amenity'] = '{t}' OR "
                         "tags['building'] = '{t}' OR "
-                        "tags['landuse'] = '{t}'"
+                        "tags['landuse'] = '{t}' OR "
+                        "tags['industrial'] = '{t}'"
                     ).format(t=t)
                     for t in map_types
                 ]
@@ -611,6 +720,7 @@ def infrastructure_query_tool(
                 tags['amenity'] as amenity,
                 tags['building'] as building,
                 tags['landuse'] as landuse,
+                tags['industrial'] as industrial,
                 tags['name'] as name
             FROM {table}
             WHERE lat BETWEEN {min_lat} AND {max_lat}
@@ -648,13 +758,16 @@ def infrastructure_query_tool(
                     amenity = data[2].get("VarCharValue", "")
                     building = data[3].get("VarCharValue", "")
                     landuse = data[4].get("VarCharValue", "")
-                    name = data[5].get("VarCharValue", "")
+                    industrial = data[5].get("VarCharValue", "")
+                    name = data[6].get("VarCharValue", "")
                     if amenity:
                         kind, value = "amenity", amenity
                     elif building:
                         kind, value = "building", building
-                    else:
+                    elif landuse:
                         kind, value = "landuse", landuse
+                    else:
+                        kind, value = "industrial", industrial
                     map_points.append(
                         {
                             "lat": lat_val,
@@ -698,6 +811,9 @@ def infrastructure_query_tool(
                 "infrastructure": infra_list,
                 "radius_km": radius_km_f,
                 "infrastructure_types": infrastructure_types,
+                "expanded_infrastructure_types": expanded_types,
+                "group_expansions": group_expansions,
+                "group_breakdown": group_breakdown,
                 "map_points": len(map_points),
                 "map_types": map_types,
                 "athena_db": athena_db_resolved,
