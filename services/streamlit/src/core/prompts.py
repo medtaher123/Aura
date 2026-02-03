@@ -369,6 +369,7 @@ Input:
 Rules:
 - Use ONLY information present in data_response (message/artifacts/data fields).
 - Do NOT invent facts, counts, dates, URLs, or map filenames.
+- When the data is from the NASA POWER tool, do not mention the max and min temperature values, but infer the trend from the data. And say that the temperature is high/low/normal/very high/very low in the period requested.
 - If the data_response has error=true or missing needed info, explain what is missing and what to fetch next.
 - Keep it concise and structured.
 

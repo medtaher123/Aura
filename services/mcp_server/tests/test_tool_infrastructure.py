@@ -17,12 +17,14 @@ class FakeAthenaClient:
                         {"VarCharValue": "amenity"},
                         {"VarCharValue": "building"},
                         {"VarCharValue": "landuse"},
+                        {"VarCharValue": "industrial"},
                         {"VarCharValue": "count"},
                     ]
                 },
                 {
                     "Data": [
                         {"VarCharValue": "hospital"},
+                        {"VarCharValue": ""},
                         {"VarCharValue": ""},
                         {"VarCharValue": ""},
                         {"VarCharValue": "3"},
