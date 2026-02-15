@@ -20,7 +20,7 @@ class TestInferBedrockProvider:
         assert result == "anthropic"
 
     def test_anthropic_arn(self):
-        arn = "arn:aws:bedrock:eu-west-3:123456:inference-profile/eu.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        arn = "arn:aws:bedrock:eu-west-3:963275461308:inference-profile/eu.anthropic.claude-3-sonnet-20240229-v1:0"
         result = _infer_bedrock_provider(arn)
         assert result == "anthropic"
 
