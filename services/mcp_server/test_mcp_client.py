@@ -4,6 +4,7 @@ Uses FastMCP client to connect and test available tools
 """
 
 import asyncio
+import pytest
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from config import get_config
@@ -11,6 +12,7 @@ from config import get_config
 config = get_config()
 
 
+@pytest.mark.asyncio
 async def test_mcp_server():
     """Test the MCP server connection and tools"""
 
