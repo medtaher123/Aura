@@ -53,7 +53,7 @@ class MCPServerConfig(BaseSettings):
         description="Athena database/schema for OSM queries",
     )
     athena_output: str = Field(
-        default="s3://metaplanet-athena-query-results/",
+        default="s3://metaplanet-athena-query-results-96327/",
         description="S3 URI for Athena query output results",
     )
 
