@@ -2,11 +2,15 @@
 Infrastructure Query Tool for OpenStreetMap (OSM) on AWS Athena
 
 Answers questions about types and counts of infrastructure near a location.
+Uses osm_infra_categories.json (and optional type_to_tag_keys.json) to resolve
+query types to OSM tag keys and values.
 """
 
+import json
 import os
 import math
 import time
+from pathlib import Path
 from typing import Optional, List
 
 import boto3
@@ -21,58 +25,108 @@ from utils.contracts import make_tool_response
 
 logger = get_logger(__name__)
 
+# Default tag keys when no config is loaded
+DEFAULT_INFRA_TAG_KEYS = ("amenity", "building", "landuse", "industrial")
+
+# Fallback if JSON not found (keep same behavior as before)
 INFRASTRUCTURE_GROUPS: dict[str, list[str]] = {
     "healthcare": [
-        "hospital",
-        "clinic",
-        "doctors",
-        "dentist",
-        "pharmacy",
-        "nursing_home",
-        "healthcare",
+        "hospital", "clinic", "doctors", "dentist", "pharmacy", "nursing_home", "healthcare",
     ],
     "education": [
-        "school",
-        "college",
-        "university",
-        "kindergarten",
-        "language_school",
-        "music_school",
-        "driving_school",
+        "school", "college", "university", "kindergarten", "language_school", "music_school", "driving_school",
     ],
     "emergency": [
-        "police",
-        "fire_station",
-        "ambulance_station",
-        "emergency_service",
+        "police", "fire_station", "ambulance_station", "emergency_service",
     ],
     "transport": [
-        "bus_station",
-        "ferry_terminal",
-        "taxi",
-        "parking",
-        "fuel",
-        "charging_station",
+        "bus_station", "ferry_terminal", "taxi", "parking", "fuel", "charging_station",
     ],
     "industrial": [
-        "industrial",
-        "factory",
-        "warehouse",
-        "manufacture",
-        "works",
-        "depot",
+        "industrial", "factory", "warehouse", "manufacture", "works", "depot",
     ],
 }
-
 INFRASTRUCTURE_GROUP_ALIASES: dict[str, str] = {
-    "health": "healthcare",
-    "medical": "healthcare",
-    "education_facilities": "education",
+    "health": "healthcare", "medical": "healthcare",
+    "education_facilities": "education", "educational": "education", "schools": "education",
     "emergency_services": "emergency",
     "transportation": "transport",
-    "industry": "industrial",
-    "manufacturing": "industrial",
+    "industry": "industrial", "manufacturing": "industrial",
+    "shops": "shop", "retail": "shop", "offices": "office", "religious": "religion", "worship": "religion",
 }
+
+_OSM_INFRA_CONFIG: dict | None = None
+
+
+def _load_osm_infra_config() -> dict:
+    """Load osm_infra_categories.json and optional type_to_tag_keys.json from utils. Cached."""
+    global _OSM_INFRA_CONFIG
+    if _OSM_INFRA_CONFIG is not None:
+        return _OSM_INFRA_CONFIG
+    utils_dir = Path(__file__).resolve().parent.parent / "utils"
+    categories_path = utils_dir / "osm_infra_categories.json"
+    type_to_keys_path = utils_dir / "type_to_tag_keys.json"
+    config: dict = {
+        "infra_tag_keys": list(DEFAULT_INFRA_TAG_KEYS),
+        "semantic_categories": {},
+        "aliases": dict(INFRASTRUCTURE_GROUP_ALIASES),
+        "type_to_tag_keys": {},
+    }
+    if categories_path.is_file():
+        try:
+            with open(categories_path, encoding="utf-8") as f:
+                data = json.load(f)
+            config["infra_tag_keys"] = data.get("infra_tag_keys", config["infra_tag_keys"])
+            config["semantic_categories"] = data.get("semantic_categories", {})
+            config["aliases"] = {k.lower(): v.lower() for k, v in data.get("aliases", config["aliases"]).items()}
+        except Exception as e:
+            logger.warning("Could not load osm_infra_categories.json: %s", e)
+    if type_to_keys_path.is_file():
+        try:
+            with open(type_to_keys_path, encoding="utf-8") as f:
+                config["type_to_tag_keys"] = json.load(f)
+        except Exception as e:
+            logger.warning("Could not load type_to_tag_keys.json: %s", e)
+    _OSM_INFRA_CONFIG = config
+    return config
+
+
+def _resolve_type_to_tag_filters(
+    normalized_type: str,
+    config: dict,
+) -> list[tuple[str, list[str] | None]]:
+    """
+    Resolve a requested type (e.g. 'healthcare', 'shop') to (tag_key, values).
+    values is a list of values to match, or None for 'any non-null'.
+    """
+    aliases = config.get("aliases", {})
+    semantic = config.get("semantic_categories", {})
+    type_to_keys = config.get("type_to_tag_keys", {})
+    infra_keys = set(config.get("infra_tag_keys", DEFAULT_INFRA_TAG_KEYS))
+
+    resolved = aliases.get(normalized_type, normalized_type)
+
+    # Semantic category: e.g. healthcare -> { amenity: [hospital, clinic, ...] }
+    if resolved in semantic:
+        out: list[tuple[str, list[str] | None]] = []
+        for tag_key, values in semantic[resolved].items():
+            if tag_key not in infra_keys:
+                continue
+            out.append((tag_key, values if values else None))
+        if out:
+            return out
+
+    # Type is a tag key name: e.g. shop -> (shop, any)
+    if resolved in infra_keys:
+        return [(resolved, None)]
+
+    # Type from type_to_tag_keys: e.g. "address" -> [addr:city, addr:street, ...]
+    if resolved in type_to_keys:
+        keys = type_to_keys[resolved]
+        return [(k, None) for k in keys if k in infra_keys]
+
+    # Single value type (legacy): treat as value to search in default keys
+    return [(k, [resolved]) for k in DEFAULT_INFRA_TAG_KEYS]
 
 
 def _normalize_infra_type(value: str) -> str:
@@ -359,8 +413,12 @@ def infrastructure_query_tool(
         min_lon = lon_f - delta_lon
         max_lon = lon_f + delta_lon
 
-        infra_filter = ""
-        sanitized_types: list[str] = []
+        config = _load_osm_infra_config()
+        infra_tag_keys = config.get("infra_tag_keys", list(DEFAULT_INFRA_TAG_KEYS))
+        default_keys = list(DEFAULT_INFRA_TAG_KEYS)
+
+        # Resolve each requested type to (tag_key, values or None for any)
+        tag_filters: list[tuple[str, list[str] | None]] = []
         expanded_types: list[str] = []
         group_expansions: dict[str, list[str]] = {}
         if infrastructure_types:
@@ -371,47 +429,58 @@ def infrastructure_query_tool(
                 if not raw_str:
                     continue
                 normalized = _normalize_infra_type(raw_str)
-                group_key = INFRASTRUCTURE_GROUP_ALIASES.get(normalized, normalized)
-                if group_key in INFRASTRUCTURE_GROUPS:
-                    expanded = INFRASTRUCTURE_GROUPS[group_key]
-                    group_expansions[raw_str] = expanded
-                    expanded_types.extend(expanded)
-                else:
-                    expanded_types.append(raw_str)
-
+                resolved = _resolve_type_to_tag_filters(normalized, config)
+                for tag_key, values in resolved:
+                    tag_filters.append((tag_key, values))
+                    if values:
+                        expanded_types.extend(values)
+                        group_expansions.setdefault(raw_str, []).extend(values)
+                    else:
+                        expanded_types.append(raw_str)
             expanded_types = _unique_preserve_order(expanded_types)
-            sanitized_types = [str(t).replace("'", "''") for t in expanded_types]
-            if sanitized_types:
-                infra_filter = " AND (" + " OR ".join(
-                    [
-                        (
-                            "tags['amenity'] = '{t}' OR "
-                            "tags['building'] = '{t}' OR "
-                            "tags['landuse'] = '{t}' OR "
-                            "tags['industrial'] = '{t}'"
-                        ).format(t=t)
-                        for t in sanitized_types
-                    ]
-                ) + ")"
+            for k in group_expansions:
+                group_expansions[k] = _unique_preserve_order(group_expansions[k])
+
+        # Tag keys to use in SELECT/GROUP BY: default 4 + any key that appears in filters
+        keys_in_filters = {k for k, _ in tag_filters}
+        query_tag_keys = _unique_preserve_order(
+            [k for k in default_keys if k in infra_tag_keys]
+            + [k for k in infra_tag_keys if k in keys_in_filters and k not in default_keys]
+        )
+        if not query_tag_keys:
+            query_tag_keys = list(default_keys)
+
+        # WHERE: (tags[key] IN (...) OR tags[key] IS NOT NULL OR ...)
+        filter_parts: list[str] = []
+        for tag_key, values in tag_filters:
+            safe_key = str(tag_key).replace("'", "''").replace("\\", "\\\\")
+            if values:
+                safe_vals = [str(v).replace("'", "''") for v in values]
+                filter_parts.append(f"tags['{safe_key}'] IN (" + ", ".join(f"'{v}'" for v in safe_vals) + ")")
+            else:
+                filter_parts.append(f"tags['{safe_key}'] IS NOT NULL")
+        if filter_parts:
+            infra_filter = " AND (" + " OR ".join(filter_parts) + ")"
+        else:
+            default_key_conds = " OR ".join(
+                f"tags['{k}'] IS NOT NULL" for k in default_keys if k in infra_tag_keys
+            )
+            infra_filter = f" AND ({default_key_conds})" if default_key_conds else ""
+
+        select_cols = ", ".join(f"tags['{k}'] as {k}" for k in query_tag_keys)
+        group_by_cols = ", ".join(f"tags['{k}']" for k in query_tag_keys)
 
         query = f"""
         SELECT
-            tags['amenity'] as amenity,
-            tags['building'] as building,
-            tags['landuse'] as landuse,
-            tags['industrial'] as industrial,
+            {select_cols},
             COUNT(*) as count
         FROM {table}
         WHERE lat BETWEEN {min_lat} AND {max_lat}
           AND lon BETWEEN {min_lon} AND {max_lon}
-          AND (
-            tags['amenity'] IS NOT NULL
-            OR tags['building'] IS NOT NULL
-            OR tags['landuse'] IS NOT NULL
-            OR tags['industrial'] IS NOT NULL
-          )
+          AND tags IS NOT NULL
+          AND cardinality(tags) > 0
           {infra_filter}
-        GROUP BY tags['amenity'], tags['building'], tags['landuse'], tags['industrial']
+        GROUP BY {group_by_cols}
         ORDER BY count DESC
         LIMIT 50
         """
@@ -623,17 +692,23 @@ def infrastructure_query_tool(
                 )
 
         results = client.get_query_results(QueryExecutionId=query_execution_id)
+        rows = results["ResultSet"]["Rows"]
         infra_list = []
-        for row in results["ResultSet"]["Rows"][1:]:
-            data = row["Data"]
-            infra = {
-                "amenity": data[0].get("VarCharValue", ""),
-                "building": data[1].get("VarCharValue", ""),
-                "landuse": data[2].get("VarCharValue", ""),
-                "industrial": data[3].get("VarCharValue", ""),
-                "count": int(data[4].get("VarCharValue", "0")),
-            }
-            infra_list.append(infra)
+        if rows:
+            header = rows[0]["Data"]
+            col_names = [c.get("VarCharValue", "").strip() for c in header]
+            for row in rows[1:]:
+                data = row["Data"]
+                infra = {
+                    col_names[i]: data[i].get("VarCharValue", "") if i < len(data) else ""
+                    for i in range(len(col_names))
+                }
+                raw_count = infra.get("count", "1")
+                try:
+                    infra["count"] = int(float(raw_count)) if raw_count else 1
+                except (TypeError, ValueError):
+                    infra["count"] = 1
+                infra_list.append(infra)
 
         infra_counts = {}
         group_breakdown: dict[str, dict[str, int]] = {}
@@ -649,9 +724,10 @@ def infrastructure_query_tool(
                     group_breakdown[raw_str] = {
                         subtype: 0 for subtype in group_expansions[raw_str]
                     }
+            tag_keys_for_counts = query_tag_keys
             for row in infra_list:
                 row_count = row.get("count", 0)
-                for key in ("amenity", "building", "landuse", "industrial"):
+                for key in tag_keys_for_counts:
                     value = row.get(key) or ""
                     if not value:
                         continue
@@ -663,20 +739,53 @@ def infrastructure_query_tool(
                             if group_name in group_breakdown:
                                 group_breakdown[group_name][value] += row_count
 
+        def _fmt(n: int) -> str:
+            return f"{n:,}" if n >= 0 else str(n)
+
         message_details = ""
         if infra_counts:
             detail_parts = [
-                f"{infra_type}: {infra_counts[infra_type]}"
+                f"{infra_type}: {_fmt(infra_counts[infra_type])}"
                 for infra_type in infra_counts
             ]
             message_details = " " + ", ".join(detail_parts) + "."
 
+        # Build subcategory breakdown (e.g. hospital: 120, clinic: 250, ...) for each requested type
+        breakdown_parts: list[str] = []
+        if infrastructure_types and group_breakdown:
+            for req_type in infrastructure_types:
+                if req_type is None:
+                    continue
+                raw_str = str(req_type).strip()
+                if raw_str not in group_breakdown:
+                    continue
+                subcounts = group_breakdown[raw_str]
+                # Only include subtypes with count > 0, sorted by count descending
+                sub_items = [
+                    (st, c) for st, c in subcounts.items() if c > 0
+                ]
+                sub_items.sort(key=lambda x: -x[1])
+                if sub_items:
+                    sub_str = ", ".join(
+                        f"{st}: {_fmt(c)}" for st, c in sub_items
+                    )
+                    breakdown_parts.append(
+                        f"Breakdown for {raw_str}: {sub_str}."
+                    )
+        breakdown_text = " ".join(breakdown_parts)
+
         if infra_list:
             if infrastructure_types:
+                total_count = sum(infra_counts.values())
+                total_str = _fmt(total_count)
+                type_label = infrastructure_types[0] if len(infrastructure_types) == 1 else "infrastructure"
                 message = (
-                    f"Found {len(infra_counts)} types of infrastructure within {radius_km_f} km of "
-                    f"{resolved_name}.{message_details}"
+                    f"Found {total_str} {type_label} facilities within {radius_km_f} km of {resolved_name}."
                 )
+                if breakdown_text:
+                    message += " " + breakdown_text
+                elif message_details:
+                    message += message_details
             else:
                 message = (
                     f"Found {len(infra_list)} types of infrastructure within {radius_km_f} km of "
@@ -686,32 +795,28 @@ def infrastructure_query_tool(
             message = f"No infrastructure found within {radius_km_f} km of {resolved_name}."
 
         map_types: list[str] = []
-        if sanitized_types:
-            map_types = sanitized_types
+        if expanded_types:
+            map_types = expanded_types[:10]
         else:
             for row in infra_list:
-                for key in ("amenity", "building", "landuse", "industrial"):
+                for key in query_tag_keys:
                     value = row.get(key) or ""
                     if value and value not in map_types:
                         map_types.append(value)
-                    if len(map_types) >= 3:
+                    if len(map_types) >= 10:
                         break
-                if len(map_types) >= 3:
+                if len(map_types) >= 10:
                     break
 
         map_points: list[dict] = []
         if map_types:
-            map_filter = " AND (" + " OR ".join(
-                [
-                    (
-                        "tags['amenity'] = '{t}' OR "
-                        "tags['building'] = '{t}' OR "
-                        "tags['landuse'] = '{t}' OR "
-                        "tags['industrial'] = '{t}'"
-                    ).format(t=t)
-                    for t in map_types
-                ]
-            ) + ")"
+            map_filter_parts = [
+                " OR ".join(
+                    f"tags['{k}'] = '{str(t).replace(chr(39), chr(39)+chr(39))}'" for k in query_tag_keys
+                )
+                for t in map_types
+            ]
+            map_filter = " AND (" + " OR ".join(f"({p})" for p in map_filter_parts) + ")"
 
             points_query = f"""
             SELECT

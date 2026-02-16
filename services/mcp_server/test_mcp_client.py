@@ -12,7 +12,6 @@ from config import get_config
 config = get_config()
 
 
-@pytest.mark.skip(reason="Integration test - requires running server. Use manually: python test_mcp_client.py")
 @pytest.mark.asyncio
 async def test_mcp_server():
     """Test the MCP server connection and tools"""

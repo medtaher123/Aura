@@ -264,6 +264,13 @@ Step 1 JSON:
 {"action":"tools_info_tool","action_input":{"list_all":true},"commentary":"Calling tools_info_tool to list all available tools."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved a complete list of all available tools organized by category. See the returned comprehensive tool catalog.","commentary":"Summarizing all available tools."}
+
+Example 24
+User: Estimate flood damage for residential buildings in Kenya at 0.8 m depth
+Step 1 JSON:
+{"action":"flood_depth_damage_tool","action_input":{"country":"Kenya","asset_class":"residential","depth_m":0.8,"continent":"Africa","basis":"building"},"commentary":"Calling flood_depth_damage_tool to estimate depth-damage for residential assets in Kenya."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I estimated flood damage for residential buildings in Kenya at 0.8 m depth using the depth-damage curves and country max damage values. See the returned estimates.","commentary":"Summarizing the flood depth-damage results."}
 """.strip()
 
 
@@ -370,6 +377,7 @@ Rules:
 - Use ONLY information present in data_response (message/artifacts/data fields).
 - Do NOT invent facts, counts, dates, URLs, or map filenames.
 - When the data is from the NASA POWER tool, do not mention the max and min temperature values, but infer the trend from the data. And say that the temperature is high/low/normal/very high/very low in the period requested.
+- If the user ask to analyse flood damage for a specific country only include the current year or the year specified by the user. Do not say based on 2010 data. Use only the data of thet year not the 2010 data.
 - If the data_response has error=true or missing needed info, explain what is missing and what to fetch next.
 - Keep it concise and structured.
 
