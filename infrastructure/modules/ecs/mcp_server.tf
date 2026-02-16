@@ -114,11 +114,13 @@ resource "aws_ecs_service" "mcp_server" {
     assign_public_ip = true
   }
 
-
+  # Service Discovery configuration
+  service_registries {
+    registry_arn = var.service_discovery_registry_arn
+  }
 
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100
-
 
   deployment_circuit_breaker {
     enable   = true

@@ -98,7 +98,9 @@ resource "aws_iam_role_policy" "ecs_task_role_policy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # CloudWatch Logs
       {
+        Sid    = "CloudWatchLogs"
         Effect = "Allow"
         Action = [
           "logs:CreateLogGroup",
@@ -107,13 +109,82 @@ resource "aws_iam_role_policy" "ecs_task_role_policy" {
         ]
         Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/${var.project_name}-*:*"
       },
+      # EC2/ECS describe operations
       {
+        Sid    = "ECSDescribe"
         Effect = "Allow"
         Action = [
           "ec2:DescribeNetworkInterfaces",
           "ecs:DescribeTasks"
         ]
         Resource = "*"
+      },
+      # AWS Bedrock - for Streamlit LLM service
+      {
+        Sid    = "BedrockInvoke"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:${var.aws_account_id}:inference-profile/*"
+        ]
+      },
+      # S3 - for fire archive and Athena results
+      {
+        Sid    = "S3Access"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket",
+          "s3:HeadObject",
+          "s3:GetBucketLocation"
+        ]
+        Resource = [
+          "arn:aws:s3:::metaplanet-*",
+          "arn:aws:s3:::metaplanet-*/*",
+          "arn:aws:s3:::${var.project_name}-*",
+          "arn:aws:s3:::${var.project_name}-*/*"
+        ]
+      },
+      # AWS Athena - for OSM infrastructure queries
+      {
+        Sid    = "AthenaAccess"
+        Effect = "Allow"
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:StopQueryExecution",
+          "athena:ListDatabases",
+          "athena:ListDataCatalogs",
+          "athena:ListTableMetadata",
+          "athena:GetDatabase",
+          "athena:GetTableMetadata"
+        ]
+        Resource = "*"
+      },
+      # AWS Glue - for Athena catalog access
+      {
+        Sid    = "GlueAccess"
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:CreateDatabase",
+          "glue:CreateTable",
+          "glue:GetPartitions"
+        ]
+        Resource = [
+          "arn:aws:glue:${var.aws_region}:${var.aws_account_id}:catalog",
+          "arn:aws:glue:${var.aws_region}:${var.aws_account_id}:database/*",
+          "arn:aws:glue:${var.aws_region}:${var.aws_account_id}:table/*"
+        ]
       }
     ]
   })

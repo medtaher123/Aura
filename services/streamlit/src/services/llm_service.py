@@ -16,9 +16,11 @@ from src.core.config import DEFAULT_LLM_TEMPERATURE
 
 DEFAULT_BEDROCK_MODEL_ID = os.getenv(
     "BEDROCK_MODEL_ID",
-    "arn:aws:bedrock:eu-west-3:637423200916:inference-profile/eu.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "arn:aws:bedrock:eu-west-3:963275461308:inference-profile/eu.anthropic.claude-3-7-sonnet-20250219-v1:0",
 )
-DEFAULT_BEDROCK_REGION = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or "eu-west-3"
+DEFAULT_BEDROCK_REGION = (
+    os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or "eu-west-3"
+)
 
 
 def _infer_bedrock_provider(model_id: str) -> Optional[str]:

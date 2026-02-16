@@ -8,12 +8,6 @@ on:
         paths:
             - "services/mcp_server/**"
             - ".github/workflows/mcp-server-ecr.yml"
-    pull_request:
-        branches:
-            - main
-        paths:
-            - "services/mcp_server/**"
-            - ".github/workflows/mcp-server-ecr.yml"
     workflow_dispatch:
         inputs:
             environment:
@@ -31,10 +25,10 @@ concurrency:
 
 env:
     AWS_REGION: eu-west-3
-    ECR_REPOSITORY: mpllm-mcp
+    ECR_REPOSITORY: eo-agent-mcp-server
     SERVICE_PATH: services/mcp_server
-    ECS_CLUSTER: mpllm-cluster
-    ECS_SERVICE: mpllm-mcp-service
+    ECS_CLUSTER: eo-agent-cluster
+    ECS_SERVICE: eo-agent-mcp-service
 
 jobs:
     build-and-push:
@@ -71,7 +65,7 @@ jobs:
                   tags: |
                       type=ref,event=branch
                       type=ref,event=pr
-                      type=sha,prefix={{branch}}-,enable=${{ github.event_name == 'push' }}
+                      type=sha,prefix={{branch}}-,enable=true
                       type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
                       type=semver,pattern={{version}}
                       type=semver,pattern={{major}}.{{minor}}
