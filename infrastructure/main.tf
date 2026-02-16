@@ -1,4 +1,4 @@
-# Main Terraform configuration for MPLLM MCP Server
+# Main Terraform configuration for EO-Agent Services
 
 # VPC Module
 module "vpc" {
@@ -34,8 +34,28 @@ module "ecr" {
   github_repository = var.github_repository
 }
 
-# ECS Module
-module "ecs_mcp_server" {
+# Service Discovery Module
+module "service_discovery" {
+  source = "./modules/service_discovery"
+
+  project_name = var.project_name
+  environment  = var.environment
+  vpc_id       = module.vpc.vpc_id
+  namespace    = var.service_discovery_namespace
+}
+
+# ALB Module for Streamlit
+module "alb" {
+  source = "./modules/alb"
+
+  project_name = var.project_name
+  environment  = var.environment
+  vpc_id       = module.vpc.vpc_id
+  subnet_ids   = module.vpc.public_subnet_ids
+}
+
+# ECS Module with both MCP and Streamlit services
+module "ecs" {
   source = "./modules/ecs"
 
   project_name       = var.project_name
@@ -45,10 +65,11 @@ module "ecs_mcp_server" {
   subnet_ids         = module.vpc.public_subnet_ids
   security_group_ids = [module.vpc.security_group_id]
 
+  # MCP Server configuration
   task_cpu        = var.mcp_server_cpu
   task_memory     = var.mcp_server_memory
   desired_count   = var.mcp_server_desired_count
-  container_image = "${module.ecr.repository_url}:latest"
+  container_image = "${module.ecr.mcp_repository_url}:latest"
   container_port  = 8000
 
   log_level = var.mcp_log_level
@@ -64,5 +85,17 @@ module "ecs_mcp_server" {
   geoserver_risk_layer = var.geoserver_risk_layer
   fire_archive_dir     = var.fire_archive_dir
 
-  depends_on = [module.ecr]
+  # Service Discovery
+  service_discovery_registry_arn = module.service_discovery.mcp_server_service_arn
+
+  # Streamlit configuration
+  streamlit_container_image = "${module.ecr.streamlit_repository_url}:latest"
+  streamlit_cpu             = var.streamlit_cpu
+  streamlit_memory          = var.streamlit_memory
+  streamlit_desired_count   = var.streamlit_desired_count
+  target_group_arn          = module.alb.target_group_arn
+  mcp_server_url            = "http://${module.service_discovery.mcp_server_dns_name}:8000"
+  maptiler_api_key_arn      = var.maptiler_api_key_arn
+
+  depends_on = [module.ecr, module.service_discovery, module.alb]
 }

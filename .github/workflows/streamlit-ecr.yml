@@ -1,4 +1,4 @@
-name: Build and Push MCP Server to ECR
+name: Build and Push Streamlit to ECR
 
 on:
     push:
@@ -6,8 +6,8 @@ on:
             - main
             - develop
         paths:
-            - "services/mcp_server/**"
-            - ".github/workflows/mcp-server-ecr.yml"
+            - "services/streamlit/**"
+            - ".github/workflows/streamlit-ecr.yml"
     workflow_dispatch:
         inputs:
             environment:
@@ -25,10 +25,10 @@ concurrency:
 
 env:
     AWS_REGION: eu-west-3
-    ECR_REPOSITORY: eo-agent-mcp-server
-    SERVICE_PATH: services/mcp_server
+    ECR_REPOSITORY: eo-agent-streamlit
+    SERVICE_PATH: services/streamlit
     ECS_CLUSTER: eo-agent-cluster
-    ECS_SERVICE: eo-agent-mcp-service
+    ECS_SERVICE: eo-agent-streamlit-service
 
 jobs:
     build-and-push:

@@ -13,7 +13,7 @@ variable "environment" {
 variable "project_name" {
   description = "Project name prefix"
   type        = string
-  default     = "mpllm"
+  default     = "eo-agent"
 }
 
 variable "aws_account_id" {
@@ -33,7 +33,7 @@ variable "github_repository" {
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string
-  default     = "10.0.0.0/16"
+  default     = "10.1.0.0/16"
 }
 
 variable "availability_zones" {
@@ -45,20 +45,20 @@ variable "availability_zones" {
 variable "public_subnet_cidrs" {
   description = "CIDR blocks for public subnets"
   type        = list(string)
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  default     = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
 }
 
 # ECS Configuration
 variable "mcp_server_cpu" {
   description = "CPU units for MCP server task"
   type        = string
-  default     = "256"
+  default     = "4096"
 }
 
 variable "mcp_server_memory" {
   description = "Memory for MCP server task"
   type        = string
-  default     = "512"
+  default     = "8192"
 }
 
 variable "mcp_server_desired_count" {
@@ -70,7 +70,7 @@ variable "mcp_server_desired_count" {
 variable "mcp_server_image" {
   description = "Docker image for MCP server"
   type        = string
-  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/mpllm-mcp:latest"
+  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/eo-agent-mcp:latest"
 }
 
 variable "mcp_log_level" {
@@ -115,4 +115,36 @@ variable "fire_archive_dir" {
   description = "Directory for fire detection archives"
   type        = string
   default     = "s3://metaplanet-fire-archive-firms/"
+}
+
+# Streamlit Configuration
+variable "streamlit_cpu" {
+  description = "CPU units for Streamlit task"
+  type        = string
+  default     = "4096"
+}
+
+variable "streamlit_memory" {
+  description = "Memory for Streamlit task"
+  type        = string
+  default     = "8192"
+}
+
+variable "streamlit_desired_count" {
+  description = "Desired number of Streamlit tasks"
+  type        = number
+  default     = 2
+}
+
+variable "maptiler_api_key_arn" {
+  description = "ARN for Maptiler API key secret"
+  type        = string
+  default     = ""
+}
+
+# Service Discovery
+variable "service_discovery_namespace" {
+  description = "Service discovery namespace"
+  type        = string
+  default     = "eo-agent.local"
 }
