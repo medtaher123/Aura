@@ -176,6 +176,8 @@ resource "aws_iam_role_policy" "ecs_task_role_policy" {
           "glue:GetDatabases",
           "glue:GetTable",
           "glue:GetTables",
+          "glue:CreateDatabase",
+          "glue:CreateTable",
           "glue:GetPartitions"
         ]
         Resource = [

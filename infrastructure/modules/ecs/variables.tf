@@ -112,13 +112,13 @@ variable "streamlit_container_image" {
 variable "streamlit_cpu" {
   description = "CPU units for Streamlit task"
   type        = string
-  default     = "1024"
+  default     = "4096"
 }
 
 variable "streamlit_memory" {
   description = "Memory for Streamlit task"
   type        = string
-  default     = "2048"
+  default     = "8192"
 }
 
 variable "streamlit_desired_count" {
@@ -142,7 +142,7 @@ variable "mcp_server_url" {
 variable "maptiler_api_key_arn" {
   description = "ARN for Maptiler API key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/MAPTILER_API_KEY-Fw8wYK"
+  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAPTILER_API_KEY-cfpZua"
 }
 
 # Service Discovery

@@ -2,7 +2,7 @@
 
 # AWS Configuration
 # aws_region     = "eu-west-3"
-# aws_account_id = "637423200916"
+# aws_account_id = "963275461308"
 
 # Project Configuration
 # project_name = "eo-agent"
@@ -24,16 +24,16 @@
 # mcp_workers              = "1"
 
 # Streamlit Configuration
-# streamlit_cpu           = "8192"
-# streamlit_memory        = "1024"
+# streamlit_cpu           = "4096"
+# streamlit_memory        = "8192"
 # streamlit_desired_count = 1
 
 # Service Discovery
 # service_discovery_namespace = "eo-agent.local"
 
 # Secrets (ARNs from AWS Secrets Manager)
-# opentopo_api_key_arn = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
-# map_key_arn          = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
+# opentopo_api_key_arn = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
+# map_key_arn          = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
 # maptiler_api_key_arn = ""  # Optional, leave empty if not using
 
 # GeoServer Configuration

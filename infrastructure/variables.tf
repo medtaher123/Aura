@@ -19,7 +19,7 @@ variable "project_name" {
 variable "aws_account_id" {
   description = "AWS Account ID"
   type        = string
-  default     = "637423200916"
+  default     = "963275461308"
 }
 
 # GitHub Configuration
@@ -70,7 +70,7 @@ variable "mcp_server_desired_count" {
 variable "mcp_server_image" {
   description = "Docker image for MCP server"
   type        = string
-  default     = "637423200916.dkr.ecr.eu-west-3.amazonaws.com/eo-agent-mcp:latest"
+  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/eo-agent-mcp:latest"
 }
 
 variable "mcp_log_level" {
@@ -89,13 +89,13 @@ variable "mcp_workers" {
 variable "opentopo_api_key_arn" {
   description = "ARN for OpenTopo API key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
+  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
 }
 
 variable "map_key_arn" {
   description = "ARN for Map key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:637423200916:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
+  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
 }
 
 # GeoServer Configuration
@@ -121,19 +121,19 @@ variable "fire_archive_dir" {
 variable "streamlit_cpu" {
   description = "CPU units for Streamlit task"
   type        = string
-  default     = "8192"
+  default     = "4096"
 }
 
 variable "streamlit_memory" {
   description = "Memory for Streamlit task"
   type        = string
-  default     = "1024"
+  default     = "8192"
 }
 
 variable "streamlit_desired_count" {
   description = "Desired number of Streamlit tasks"
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "maptiler_api_key_arn" {

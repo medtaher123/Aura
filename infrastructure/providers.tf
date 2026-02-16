@@ -9,7 +9,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "eo-agent-terraform-state-637423200916"
+    bucket       = "eo-agent-terraform-state-963275461308"
     key          = "eo-agent-terraform.tfstate"
     region       = "eu-west-3"
     encrypt      = true
