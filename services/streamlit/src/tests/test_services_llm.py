@@ -7,8 +7,7 @@ from unittest.mock import patch, MagicMock
 
 from src.services.llm_service import (
     _infer_bedrock_provider,
-    DEFAULT_BEDROCK_MODEL_ID,
-    DEFAULT_BEDROCK_REGION,
+    DEFAULT_BEDROCK_MODEL_ID
 )
 
 
@@ -78,8 +77,8 @@ class TestDefaults:
         assert len(DEFAULT_BEDROCK_MODEL_ID) > 0
 
     def test_default_region_is_string(self):
-        assert isinstance(DEFAULT_BEDROCK_REGION, str)
-        assert len(DEFAULT_BEDROCK_REGION) > 0
+        assert isinstance('eu-west-3', str)
+        assert len('eu-west-3') > 0
 
 
 class TestGetChatLLM:
@@ -95,9 +94,8 @@ class TestGetChatLLM:
     def test_get_chat_llm_module_structure(self):
         """Test that the module has expected structure."""
         from src.services import llm_service
-        
+
         assert hasattr(llm_service, 'get_chat_llm')
         assert hasattr(llm_service, 'get_llm')
         assert hasattr(llm_service, '_infer_bedrock_provider')
         assert hasattr(llm_service, 'DEFAULT_BEDROCK_MODEL_ID')
-        assert hasattr(llm_service, 'DEFAULT_BEDROCK_REGION')

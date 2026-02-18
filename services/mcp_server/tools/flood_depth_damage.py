@@ -78,6 +78,7 @@ BASIS_ALIASES = {
 AG_BASIS_OPTIONS = {"per_hectare", "per_ha", "hectare"}
 AREA_BASIS_OPTIONS = {"per_m2", "m2", "sqm"}
 
+#change this to be outside the code
 GLOBAL_MULTIPLIER = {
     2010: 1.000,
     2011: 1.045,
@@ -333,7 +334,7 @@ def flood_depth_damage_tool(
         building_type: Alias for asset_class (legacy input).
         continent: Optional continent to select the curve (e.g., "Europe", "Asia").
         basis: Optional basis for max damage (building, structure, content, land_use, object).
-        year: Year used to apply global multiplier (defaults to current year).
+        year: Year used to apply global multiplier (defaults to current year if not provided).
     """
     if not isinstance(country, str) or not country.strip():
         return make_tool_response(

@@ -94,3 +94,46 @@ async def test_flood_depth_damage_tool_missing_asset_class(mcp_client):
     assert isinstance(result, dict)
     assert result.get("tool_name") == "flood_depth_damage_tool"
     assert result.get("error") is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_flood_depth_damage_tool_france_3m_2025(mcp_client):
+    """
+    Test 3-meter flood depth damage for France (2025).
+    Verifies output correctness: estimated damage ~1,133 EUR/m², max damage ~1,511 EUR/m².
+    """
+    result = await mcp_client.call_tool(
+        "flood_depth_damage_tool",
+        {
+            "country": "France",
+            "asset_class": "residential",
+            "depth_m": 3.0,
+            "continent": "Europe",
+            "basis": "building",
+            "year": 2025,
+        },
+    )
+
+    assert isinstance(result, dict)
+    assert result.get("tool_name") == "flood_depth_damage_tool"
+    assert result.get("error") is False
+    assert result.get("country", "").upper() == "FRANCE"
+
+    data = result.get("data") or {}
+    assert data.get("asset_class") == "residential"
+    assert data.get("depth_m") == 3.0
+    assert data.get("unit") == "EUR/m2"
+
+    estimated = data.get("estimated_damage")
+    max_damage = data.get("adjusted_max_damage_value")
+
+    assert estimated is not None, "response must include estimated_damage"
+    assert max_damage is not None, "response must include adjusted_max_damage_value"
+
+    assert estimated == pytest.approx(1133, rel=0.02), (
+        f"estimated damage should be ~1,133 EUR/m², got {estimated}"
+    )
+    assert max_damage == pytest.approx(1511, rel=0.02), (
+        f"maximum damage should be ~1,511 EUR/m², got {max_damage}"
+    )
