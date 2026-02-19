@@ -70,7 +70,7 @@ variable "mcp_server_desired_count" {
 variable "mcp_server_image" {
   description = "Docker image for MCP server"
   type        = string
-  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/eo-agent-mcp:latest"
+  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/eo-agent-mcp-server:latest"
 }
 
 variable "mcp_log_level" {
