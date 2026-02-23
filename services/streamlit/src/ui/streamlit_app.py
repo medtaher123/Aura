@@ -6,12 +6,14 @@ Renders assistant responses, including map artifacts (HTML or Pydeck specs).
 import sys
 import os
 from pathlib import Path
-import traceback
+from typing import Literal
+from typing_extensions import TypedDict
 
 import streamlit as st
 import pydeck as pdk
 from PIL import Image
 from dotenv import load_dotenv
+from streamlit.delta_generator import DeltaGenerator
 
 # Ensure project root is on sys.path so absolute imports work when running via
 # `streamlit run src/ui/streamlit_app.py`
@@ -22,15 +24,71 @@ if str(PROJECT_ROOT) not in sys.path:
 # Load local env vars (e.g., MAPTILER_API_KEY) from repo `.env`.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from src.services.agent_runner import invoke_agent, coerce_tool_response
-from src.tools.contracts import make_tool_response
-from src.services.document_service import extract_text_from_pdf_bytes
+from src.clients.agent_ws_client import LocationOption, get_osm_type_prefix  # noqa: E402
+from src.clients.agent_adapter import (  # noqa: E402
+    get_shared_agent_adapter,
+    AgentResponse,
+    ToolArtifacts,
+)
+from src.core.logger import get_logger  # noqa: E402
+from src.services.document_service import extract_text_from_pdf_bytes  # noqa: E402
+
+logger = get_logger(__name__)
 
 MAPS_DIR = PROJECT_ROOT / "src" / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
-from src.services.orchestrator_agent_service import create_orchestrator_executor
-from src.services import detect_and_translate_to_english, translate_from_english
+from src.services import detect_and_translate_to_english, translate_from_english  # noqa: E402
+
+logger.info("Streamlit app starting...")
+
+
+# Type definitions for chat messages
+class UserMessage(TypedDict):
+    """User message in chat history."""
+
+    role: Literal["user"]
+    content: str
+
+
+class AssistantMessage(TypedDict):
+    """Assistant message in chat history."""
+
+    role: Literal["assistant"]
+    content: str
+    artifacts: ToolArtifacts
+    error: bool
+
+
+# Union type for all message types
+Message = UserMessage | AssistantMessage
+
+
+def _invoke_agent_unified(
+    executor,
+    english_query: str,
+    chat_history=None,
+    resume=None,
+    confirmed_location=None,
+    stream_callback=None,
+    language=None,
+    document_context=None,
+) -> AgentResponse:
+    """
+    Invoke the remote agent via WebSocket.
+
+    Returns AgentResponse with: message, artifacts, error, needs_location_confirmation,
+    location_options, pause_state, raw_data
+    """
+    return executor.invoke(
+        message=english_query,
+        chat_history=chat_history,
+        document_context=document_context,
+        resume=resume,
+        confirmed_location=confirmed_location,
+        stream_callback=stream_callback,
+        language=language,
+    )
 
 
 def _default_pydeck_map_style() -> str:
@@ -115,7 +173,7 @@ def _render_pydeck_map_spec(item: dict) -> None:
         layers=layers,
         initial_view_state=_coerce_view_state(view_state_raw),
         map_style=item.get("map_style") or _default_pydeck_map_style(),
-        tooltip=tooltip,
+        tooltip=tooltip,  # type: ignore
     )
     st.pydeck_chart(deck, use_container_width=True, height=item.get("height", 450))
 
@@ -129,7 +187,7 @@ def _shorten(text: str, *, max_len: int = 220) -> str:
     return s[: max_len - 1].rstrip() + "…"
 
 
-def _make_live_trace_updater(trace_placeholder: st.delta_generator.DeltaGenerator):
+def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
     lines: list[str] = []
 
     def push(line: str) -> None:
@@ -141,8 +199,8 @@ def _make_live_trace_updater(trace_placeholder: st.delta_generator.DeltaGenerato
         tail = lines[-12:]
         trace_placeholder.empty()
         with trace_placeholder.container():
-            for l in tail:
-                st.caption(l)
+            for line in tail:
+                st.caption(line)
 
     def callback(evt: dict) -> None:
         if not isinstance(evt, dict):
@@ -194,7 +252,9 @@ def _make_live_trace_updater(trace_placeholder: st.delta_generator.DeltaGenerato
 # ---------------------------------------------------
 st.set_page_config(page_title="STAC & Fire Chatbot", layout="wide")
 
-logo = Image.open(Path(__file__).resolve().parent / "assets" / "metaplanet_sas_logo.jpeg")
+logo = Image.open(
+    Path(__file__).resolve().parent / "assets" / "metaplanet_sas_logo.jpeg"
+)
 st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
 st.image(logo, width=150)
 st.markdown("</div>", unsafe_allow_html=True)
@@ -213,15 +273,20 @@ def _augment_with_document(english_query: str) -> str:
 # ---------------------------------------------------
 # SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
+# Type: list[Message] - chat history with user and assistant messages
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    messages: list[Message] = []
+    st.session_state.messages = messages
 
 # Store an English-only chat history for the agent context.
+# Type: list[dict] - simple dict format for API calls
 if "messages_en" not in st.session_state:
-    st.session_state.messages_en = []
+    messages_en: list[dict] = []
+    st.session_state.messages_en = messages_en
 
 if "agent_executor" not in st.session_state:
-    st.session_state.agent_executor = create_orchestrator_executor()
+    # Use remote Agent Server via WebSocket
+    st.session_state.agent_executor = get_shared_agent_adapter()
 
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
@@ -250,11 +315,19 @@ agent_executor = st.session_state.agent_executor
 
 
 # ---------------------------------------------------
-# DOCUMENT UPLOAD (PDF)
+# DOCUMENT UPLOAD (PDF) & AGENT MODE
 # ---------------------------------------------------
 with st.sidebar:
+    # Show agent server connection
+    st.success("Agent Mode: Remote (Agent Server)")
+    agent_url = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
+    st.caption(f"Connected to: {agent_url}")
+
+    st.divider()
     st.subheader("Document (PDF)")
-    uploaded = st.file_uploader("Upload a PDF", type=["pdf"], accept_multiple_files=False)
+    uploaded = st.file_uploader(
+        "Upload a PDF", type=["pdf"], accept_multiple_files=False
+    )
     st.session_state.use_document = st.checkbox(
         "Use document in prompt",
         value=bool(st.session_state.use_document),
@@ -262,19 +335,29 @@ with st.sidebar:
 
     if uploaded is not None:
         try:
+            logger.info(f"Processing uploaded PDF: {uploaded.name}")
             pdf_bytes = uploaded.getvalue()
             # Hard cap: avoid gigantic uploads impacting memory/prompt.
-            if isinstance(pdf_bytes, (bytes, bytearray)) and len(pdf_bytes) > 10 * 1024 * 1024:
+            if (
+                isinstance(pdf_bytes, (bytes, bytearray))
+                and len(pdf_bytes) > 10 * 1024 * 1024
+            ):
+                logger.warning(f"PDF too large: {len(pdf_bytes)} bytes (max 10MB)")
                 st.error("PDF too large (max 10MB).")
             else:
                 text = extract_text_from_pdf_bytes(pdf_bytes, max_chars=120_000)
                 st.session_state.document_text = text
                 st.session_state.document_name = uploaded.name or ""
                 if text:
+                    logger.info(f"PDF loaded successfully: {len(text)} chars extracted")
                     st.caption(f"Loaded {uploaded.name} ({len(text)} chars extracted)")
                 else:
+                    logger.warning("No extractable text found in PDF")
                     st.warning("No extractable text found in this PDF.")
         except Exception as e:
+            logger.error(
+                f"PDF extraction failed: {type(e).__name__}: {str(e)}", exc_info=True
+            )
             st.error(f"PDF extraction failed: {e}")
 
     if st.session_state.document_text:
@@ -282,6 +365,7 @@ with st.sidebar:
             st.text(st.session_state.document_text[:4000])
 
     if st.button("Clear document"):
+        logger.info("Clearing document context")
         st.session_state.document_text = ""
         st.session_state.document_name = ""
 
@@ -290,12 +374,22 @@ with st.sidebar:
 # DISPLAY CHAT HISTORY
 # ---------------------------------------------------
 for msg in st.session_state.messages:
-    role = msg.get("role", "assistant")
-    content = msg.get("content", "")
-    artifacts = msg.get("artifacts") or {}
-    maps = artifacts.get("maps") or []
-    thumbnails = artifacts.get("thumbnails") or []
-    is_error = bool(msg.get("error"))
+    role = msg["role"]
+    content = msg["content"]
+
+    # Extract artifacts for assistant messages using type narrowing
+    artifacts = ToolArtifacts()
+    is_error = False
+    maps: list = []
+    thumbnails: list = []
+
+    if role == "assistant":
+        # Type narrowing: msg is AssistantMessage here
+        assistant_msg: AssistantMessage = msg  # type: ignore
+        artifacts = assistant_msg["artifacts"]
+        is_error = assistant_msg["error"]
+        maps = artifacts.maps if hasattr(artifacts, "maps") else []
+        thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
 
     with st.chat_message(role):
         if role == "assistant" and is_error:
@@ -309,7 +403,10 @@ for msg in st.session_state.messages:
                 or (
                     isinstance(x, dict)
                     and isinstance(x.get("view_state"), dict)
-                    and (isinstance(x.get("points"), list) or isinstance(x.get("layers"), list))
+                    and (
+                        isinstance(x.get("points"), list)
+                        or isinstance(x.get("layers"), list)
+                    )
                 )
                 for x in maps
             )
@@ -321,7 +418,9 @@ for msg in st.session_state.messages:
 
                 with col_map:
                     for item in maps:
-                        if isinstance(item, dict) and isinstance(item.get("view_state"), dict):
+                        if isinstance(item, dict) and isinstance(
+                            item.get("view_state"), dict
+                        ):
                             _render_pydeck_map_spec(item)
 
                     if thumbnails:
@@ -335,30 +434,51 @@ for msg in st.session_state.messages:
                     st.write("### Satellite Images:")
                     for url in thumbnails:
                         if isinstance(url, str) and url:
-                            st.image(url, width=300)    
+                            st.image(url, width=300)
 
 
 # ---------------------------------------------------
 # CHAT INPUT
 # ---------------------------------------------------
 pending = st.session_state.pending_location_confirmation
-
 if isinstance(pending, dict) and pending.get("candidates"):
     st.info("Please confirm the intended location to continue.")
-    location_query = pending.get("location_query") if isinstance(pending.get("location_query"), str) else None
-    norm_key = " ".join(location_query.lower().split()) if isinstance(location_query, str) else None
+    location_query = (
+        pending.get("location_query")
+        if isinstance(pending.get("location_query"), str)
+        else None
+    )
+    norm_key = (
+        " ".join(location_query.lower().split())
+        if isinstance(location_query, str)
+        else None
+    )
 
     # If we've already confirmed this exact ambiguous query earlier in the session,
     # auto-apply the same choice to avoid asking repeatedly (common when multiple
     # tools need the same city).
     cached = st.session_state.confirmed_locations.get(norm_key) if norm_key else None
-    attempts = st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
-    if isinstance(cached, dict) and isinstance(cached.get("token"), str) and norm_key and attempts < 1:
-        resume = pending.get("pause") if isinstance(pending.get("pause"), dict) else {}
-        resume_state = resume.get("resume_state") if isinstance(resume.get("resume_state"), dict) else None
-        resume_patch = pending.get("resume_patch") if isinstance(pending.get("resume_patch"), dict) else {}
-        field = resume_patch.get("field")
-        patched_value = cached.get("token")
+    attempts = (
+        st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
+    )
+    if (
+        isinstance(cached, dict)
+        and isinstance(cached.get("token"), str)
+        and norm_key
+        and attempts < 1
+    ):
+        pause_value = pending.get("pause")
+        resume = pause_value if isinstance(pause_value, dict) else {}
+        resume_state_value = resume.get("resume_state")
+        resume_state = (
+            resume_state_value if isinstance(resume_state_value, dict) else None
+        )
+        resume_patch_value = pending.get("resume_patch")
+        resume_patch = (
+            resume_patch_value if isinstance(resume_patch_value, dict) else {}
+        )
+        field = resume_patch.get("field") if resume_patch else None
+        patched_value = cached.get("token") if cached else None
 
         if isinstance(resume_state, dict):
             next_input = resume_state.get("next_input")
@@ -386,128 +506,142 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 live_callback = _make_live_trace_updater(trace_placeholder)
                 try:
                     english_query = resume.get("user_text") or ""
-                    english_query = _augment_with_document(english_query)
-                    print('english_query:', english_query)
+                    english_query_augmented = _augment_with_document(english_query)
+                    logger.debug(
+                        f"Auto-confirming location, resuming with query: {english_query_augmented[:100]}..."
+                    )
                     history_for_agent = st.session_state.messages_en
-                    agent_output = invoke_agent(
+                    auto_loc = {
+                        "name": cached.get("display", ""),
+                        "coordinates": [0, 0],
+                    }
+                    result = _invoke_agent_unified(
                         agent_executor,
-                        english_query,
+                        english_query_augmented,
                         chat_history=history_for_agent,
                         resume=resume,
+                        confirmed_location=auto_loc,
                         stream_callback=live_callback,
                     )
+                    logger.info("Auto-confirm completed successfully")
+                    logger.debug(
+                        f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                    )
 
-                    result = coerce_tool_response(agent_output)
-                    print('Auto-confirm result:', result)
-                    if not isinstance(result, dict):
-                        result = make_tool_response(
-                            tool_name="ui",
-                            message=str(result),
-                            artifacts={"maps": [], "thumbnails": [], "urls": []},
-                            error=True,
-                        )
-
-                    data = result.get("data") if isinstance(result.get("data"), dict) else {}
-                    if bool(data.get("needs_location_confirmation")) is True:
-                        st.session_state.pending_location_confirmation = data
+                    # Check if location confirmation is needed
+                    if result.needs_location_confirmation:
+                        logger.info("Another location confirmation needed")
+                        st.session_state.pending_location_confirmation = {
+                            "needs_location_confirmation": True,
+                            "candidates": result.location_options,
+                            "pause": result.pause_state,
+                        }
 
                     detected_lang = st.session_state.last_lang or "en"
-                    assistant_message_en = result.get("message") or ""
+                    assistant_message_en = result.message or ""
                     if not isinstance(assistant_message_en, str):
                         assistant_message_en = str(assistant_message_en)
 
-                    ui_message = result.get("message") or ""
+                    ui_message = assistant_message_en
                     if isinstance(ui_message, str):
                         ui_message = translate_from_english(ui_message, detected_lang)
 
-                    st.session_state.messages_en.append({"role": "assistant", "content": assistant_message_en})
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": assistant_message_en}
+                    )
                     st.session_state.messages.append(
-                        {
-                            "role": "assistant",
-                            "content": ui_message,
-                            "artifacts": (result.get("artifacts") or {}),
-                            "error": bool(result.get("error")),
-                        }
+                        AssistantMessage(
+                            role="assistant",
+                            content=ui_message,
+                            artifacts=result.artifacts,
+                            error=result.error,
+                        )
                     )
                 except Exception as e:
                     error_msg = f"❌ Error: {str(e)}"
                     st.session_state.messages.append(
-                        {"role": "assistant", "content": error_msg, "artifacts": {}, "error": True}
+                        AssistantMessage(
+                            role="assistant",
+                            content=error_msg,
+                            artifacts=ToolArtifacts(),
+                            error=True,
+                        )
                     )
-                    st.session_state.messages_en.append({"role": "assistant", "content": error_msg})
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": error_msg}
+                    )
                 finally:
                     trace_placeholder.empty()
 
         st.rerun()
 
-    candidates = pending.get("candidates") or []
-    if not isinstance(candidates, list):
-        candidates = []
+    candidates: list[LocationOption] = [
+        LocationOption(
+            name=c.name,
+            coordinates=c.coordinates,
+            place_id=c.place_id,
+            osm_id=c.osm_id,
+            osm_type=c.osm_type,
+            osm_type_prefix=c.osm_type_prefix,
+        )
+        for c in pending.get("candidates") or []
+    ]
 
-    def _candidate_label(c: dict) -> str:
-        display = str(c.get("display_name") or c.get("name") or "(unknown)")
-        lat = c.get("lat")
-        lon = c.get("lon")
-        pid = c.get("place_id")
-        suffix_parts: list[str] = []
-        try:
-            if lat is not None and lon is not None:
-                suffix_parts.append(f"{float(lat):.4f}, {float(lon):.4f}")
-        except Exception:
-            pass
-        if pid is not None:
-            suffix_parts.append(f"place_id={pid}")
-        if suffix_parts:
-            return f"{display} ({' | '.join(suffix_parts)})"
-        return display
-
-    option_indices = list(range(len(candidates)))
+    def _candidate_label(candidate: LocationOption) -> str:
+        display = str(candidate.name)
+        lat = candidate.coordinates[0]
+        lon = candidate.coordinates[1]
+        place_id = candidate.place_id
+        return f"{display} ({float(lat):.4f}, {float(lon):.4f}) place_id={place_id}"
 
     with st.form("location_confirmation_form"):
-        choice_idx = st.radio(
+        choice = st.selectbox(
             "Select a location",
-            options=option_indices,
-            index=0,
-            format_func=lambda i: _candidate_label(candidates[i]) if 0 <= i < len(candidates) and isinstance(candidates[i], dict) else str(i),
+            options=candidates,
+            format_func=_candidate_label,
         )
         submitted = st.form_submit_button("Confirm location")
 
     if submitted:
-        chosen = candidates[choice_idx] if isinstance(choice_idx, int) and 0 <= choice_idx < len(candidates) else None
-        chosen_display = None
-        chosen_token = None
-        if isinstance(chosen, dict):
-            chosen_display = str(chosen.get("display_name") or chosen.get("name") or "")
-            osm_type = chosen.get("osm_type")
-            osm_id = chosen.get("osm_id")
-            if osm_type in {"relation", "way", "node"} and osm_id is not None:
-                prefix = {"relation": "R", "way": "W", "node": "N"}.get(osm_type)
-                if prefix:
-                    chosen_token = f"@osm_id:{prefix}{int(osm_id)}"
-            if not chosen_token:
-                pid = chosen.get("place_id")
-                if pid is not None:
-                    chosen_token = f"@place_id:{pid}"
+        logger.info(f"User confirmed location choice: {choice.name}")
 
-        resume = pending.get("pause") if isinstance(pending.get("pause"), dict) else {}
-        resume_state = resume.get("resume_state") if isinstance(resume.get("resume_state"), dict) else None
-        resume_patch = pending.get("resume_patch") if isinstance(pending.get("resume_patch"), dict) else {}
-        field = resume_patch.get("field")
+        patched_value = None
+        chosen_display = choice.name
+        if choice.osm_id is not None and choice.osm_type is not None:
+            prefix = get_osm_type_prefix(choice.osm_type)
+            patched_value = f"@osm_id:{prefix}{choice.osm_id}"
+        elif choice.place_id is not None:
+            patched_value = f"@place_id:{choice.place_id}"
+        else:
+            logger.warning("No OSM ID or place ID found for chosen location")
+            patched_value = chosen_display or ""
+
+        pause_value = pending.get("pause")
+        resume = pause_value if isinstance(pause_value, dict) else {}
+        resume_state_value = resume.get("resume_state")
+        resume_state = (
+            resume_state_value if isinstance(resume_state_value, dict) else None
+        )
+        resume_patch_value = pending.get("resume_patch")
+        resume_patch = (
+            resume_patch_value if isinstance(resume_patch_value, dict) else {}
+        )
+        field = resume_patch.get("field") if resume_patch else None
 
         # Prefer a stable token that resolves to the exact chosen place.
-        patched_value = chosen_token or chosen_display or ""
 
         # Cache confirmation for this query so other tools can reuse it.
         if norm_key:
-            display_val = chosen_display or patched_value
             # Store under both the full query and its base token (before comma)
             # to handle cases like "Paris" vs "Paris, France".
-            base_key = norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+            base_key = (
+                norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+            )
             for k in {norm_key, base_key}:
                 if k:
                     st.session_state.confirmed_locations[k] = {
                         "token": patched_value,
-                        "display": display_val,
+                        "display": chosen_display or "",
                     }
             # Reset auto-confirm attempts after an explicit choice.
             st.session_state.auto_confirm_attempts[norm_key] = 0
@@ -532,7 +666,9 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 if not isinstance(confirmed, dict):
                     confirmed = {}
                 confirmed[norm_key] = patched_value
-                base_key = norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+                base_key = (
+                    norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+                )
                 if base_key and base_key != norm_key:
                     confirmed[base_key] = patched_value
                 resume_state["confirmed_locations"] = confirmed
@@ -542,8 +678,12 @@ if isinstance(pending, dict) and pending.get("candidates"):
         # Append a short confirmation message to chat history for user visibility.
         detected_lang = st.session_state.last_lang or "en"
         confirm_en = f"Confirmed location: {chosen_display or patched_value}"
-        confirm_ui = translate_from_english(confirm_en, detected_lang) if detected_lang != "en" else confirm_en
-        st.session_state.messages.append({"role": "user", "content": confirm_ui})
+        confirm_ui = (
+            translate_from_english(confirm_en, detected_lang)
+            if detected_lang != "en"
+            else confirm_en
+        )
+        st.session_state.messages.append(UserMessage(role="user", content=confirm_ui))
         st.session_state.messages_en.append({"role": "user", "content": confirm_en})
 
         # Clear pending state before resuming.
@@ -555,55 +695,83 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 live_callback = _make_live_trace_updater(trace_placeholder)
                 try:
                     english_query = resume.get("user_text") or ""
-                    english_query = _augment_with_document(english_query)
-                    print('english_query:', english_query)
+                    english_query_augmented = _augment_with_document(english_query)
+                    logger.debug(
+                        f"Resuming after location confirmation: {english_query_augmented[:100]}..."
+                    )
+                    logger.debug(f"Resume state: {resume_state}")
+                    logger.debug(f"Resume patch: {resume_patch}")
+                    logger.debug(f"Field: {field}")
+                    logger.debug(f"Patched value: {patched_value}")
                     history_for_agent = st.session_state.messages_en[:-1]
-                    agent_output = invoke_agent(
+                    confirmed_loc = {
+                        "name": choice.name,
+                        "coordinates": choice.coordinates,
+                        "place_id": choice.place_id,
+                        "osm_id": choice.osm_id,
+                        "osm_type": choice.osm_type,
+                        "osm_type_prefix": choice.osm_type_prefix,
+                    }
+                    result = _invoke_agent_unified(
                         agent_executor,
-                        english_query,
+                        english_query_augmented,
                         chat_history=history_for_agent,
                         resume=resume,
+                        confirmed_location=confirmed_loc,
                         stream_callback=live_callback,
                     )
+                    logger.info(
+                        "Resume after location confirmation completed successfully"
+                    )
+                    logger.debug(
+                        f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                    )
 
-                    result = coerce_tool_response(agent_output)
-                    print('Auto-confirm result in coerce_tool_response:', result)
-                    if not isinstance(result, dict):
-                        result = make_tool_response(
-                            tool_name="ui",
-                            message=str(result),
-                            artifacts={"maps": [], "thumbnails": [], "urls": []},
-                            error=True,
-                        )
+                    # Check if location confirmation is needed
+                    if result.needs_location_confirmation:
+                        logger.info("Another location confirmation needed")
+                        st.session_state.pending_location_confirmation = {
+                            "needs_location_confirmation": True,
+                            "candidates": result.location_options,
+                            "pause": result.pause_state,
+                        }
 
-                    # If we paused again, store pending and show the prompt.
-                    data = result.get("data") if isinstance(result.get("data"), dict) else {}
-                    if bool(data.get("needs_location_confirmation")) is True:
-                        st.session_state.pending_location_confirmation = data
-
-                    assistant_message_en = result.get("message") or ""
+                    assistant_message_en = result.message or ""
                     if not isinstance(assistant_message_en, str):
                         assistant_message_en = str(assistant_message_en)
 
-                    ui_message = result.get("message") or ""
+                    ui_message = assistant_message_en
                     if isinstance(ui_message, str):
                         ui_message = translate_from_english(ui_message, detected_lang)
 
-                    st.session_state.messages_en.append({"role": "assistant", "content": assistant_message_en})
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": assistant_message_en}
+                    )
                     st.session_state.messages.append(
-                        {
-                            "role": "assistant",
-                            "content": ui_message,
-                            "artifacts": (result.get("artifacts") or {}),
-                            "error": bool(result.get("error")),
-                        }
+                        AssistantMessage(
+                            role="assistant",
+                            content=ui_message,
+                            artifacts=result.artifacts,
+                            error=result.error,
+                        )
                     )
                 except Exception as e:
+                    logger.error(
+                        f"Error during resume: {type(e).__name__}: {str(e)}",
+                        exc_info=True,
+                    )
                     error_msg = f"❌ Error: {str(e)}"
                     st.session_state.messages.append(
-                        {"role": "assistant", "content": error_msg, "artifacts": {}, "error": True}
+                        AssistantMessage(
+                            role="assistant",
+                            content=error_msg,
+                            artifacts=ToolArtifacts(),
+                            error=True,
+                        )
                     )
-                    st.session_state.messages_en.append({"role": "assistant", "content": error_msg})
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": error_msg}
+                    )
                 finally:
                     trace_placeholder.empty()
 
@@ -616,7 +784,8 @@ user_input = st.chat_input(
 )
 
 if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    logger.info(f"New user input received: {user_input[:100]}...")
+    st.session_state.messages.append(UserMessage(role="user", content=user_input))
     with st.chat_message("user"):
         st.write(user_input)
 
@@ -626,58 +795,76 @@ if user_input:
             live_callback = _make_live_trace_updater(trace_placeholder)
 
             try:
-                english_query, detected_lang = detect_and_translate_to_english(user_input)
+                english_query, detected_lang = detect_and_translate_to_english(
+                    user_input
+                )
                 st.session_state.last_lang = detected_lang
-                st.session_state.messages_en.append({"role": "user", "content": english_query})
+                st.session_state.messages_en.append(
+                    {"role": "user", "content": english_query}
+                )
 
-                english_query = _augment_with_document(english_query)
-                print('english_query:', english_query)
+                english_query_augmented = _augment_with_document(english_query)
+                logger.debug(
+                    f"Invoking agent with query: {english_query_augmented[:100]}..."
+                )
                 history_for_agent = st.session_state.messages_en[:-1]
-                agent_output = invoke_agent(
+                result = _invoke_agent_unified(
                     agent_executor,
-                    english_query,
+                    english_query_augmented,
                     chat_history=history_for_agent,
                     stream_callback=live_callback,
                 )
-                
-                result = coerce_tool_response(agent_output)
-                print('Auto-confirm result 3:', result)
-                if not isinstance(result, dict):
-                    result = make_tool_response(
-                        tool_name="ui",
-                        message=str(result),
-                        artifacts={"maps": [], "thumbnails": [], "urls": []},
-                        error=True,
-                    )
+                logger.info("Agent response received successfully")
+                logger.debug(
+                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                )
 
-                data = result.get("data") if isinstance(result.get("data"), dict) else {}
-                if bool(data.get("needs_location_confirmation")) is True:
-                    st.session_state.pending_location_confirmation = data
+                # Check if location confirmation is needed
+                if result.needs_location_confirmation:
+                    logger.info("Location confirmation required")
 
-                assistant_message_en = result.get("message") or ""
+                    st.session_state.pending_location_confirmation = {
+                        "needs_location_confirmation": True,
+                        "candidates": result.location_options,
+                        "pause": result.pause_state,
+                    }
+
+                assistant_message_en = result.message or ""
                 if not isinstance(assistant_message_en, str):
                     assistant_message_en = str(assistant_message_en)
 
-                ui_message = result.get("message") or ""
+                ui_message = assistant_message_en
                 if isinstance(ui_message, str):
                     ui_message = translate_from_english(ui_message, detected_lang)
 
-                st.session_state.messages_en.append({"role": "assistant", "content": assistant_message_en})
+                st.session_state.messages_en.append(
+                    {"role": "assistant", "content": assistant_message_en}
+                )
                 st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": ui_message,
-                        "artifacts": (result.get("artifacts") or {}),
-                        "error": bool(result.get("error")),
-                    }
+                    AssistantMessage(
+                        role="assistant",
+                        content=ui_message,
+                        artifacts=result.artifacts,
+                        error=result.error,
+                    )
                 )
 
             except Exception as e:
-                error_msg = f"❌ Error: {str(e)}"
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": error_msg, "artifacts": {}, "error": True}
+                logger.error(
+                    f"Error during chat: {type(e).__name__}: {str(e)}"
                 )
-                st.session_state.messages_en.append({"role": "assistant", "content": error_msg})
+                error_msg = f"Error: {str(e)}"
+                st.session_state.messages.append(
+                    AssistantMessage(
+                        role="assistant",
+                        content=error_msg,
+                        artifacts=ToolArtifacts(),
+                        error=True,
+                    )
+                )
+                st.session_state.messages_en.append(
+                    {"role": "assistant", "content": error_msg}
+                )
 
             finally:
                 trace_placeholder.empty()

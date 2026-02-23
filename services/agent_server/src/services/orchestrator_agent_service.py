@@ -343,7 +343,7 @@ class OrchestratorExecutor:
                     "stream_callback": stream_callback,
                 }
             )
-            print(f"OrchestratorAgentService invoke: raw={raw}")
+            logger.debug(f"OrchestratorAgentService invoke: raw type={type(raw)}")
             data_response = raw.get("output")
 
             logger.debug(f"DataAgent completed - response type: {type(data_response)}")

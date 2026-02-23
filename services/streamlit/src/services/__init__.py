@@ -33,16 +33,9 @@ def detect_and_translate_to_english(text: str):
     return _impl(text)
 
 
-def get_llm(*args, **kwargs):
-    from .llm_service import get_llm as _impl
-
-    return _impl(*args, **kwargs)
-
-
 __all__ = [
     "detect_language",
     "translate_to_english",
     "translate_from_english",
     "detect_and_translate_to_english",
-    "get_llm",
 ]

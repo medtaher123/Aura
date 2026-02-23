@@ -49,7 +49,10 @@ def invoke_agent(
 
 
 def coerce_tool_response(obj: Any) -> ToolResponse:
-    """Normalize agent outputs into the standardized ToolResponse dict shape."""
+    """Normalize agent outputs into the standardized ToolResponse."""
+
+    if isinstance(obj, ToolResponse):
+        return obj
 
     if (
         isinstance(obj, dict)
@@ -58,17 +61,35 @@ def coerce_tool_response(obj: Any) -> ToolResponse:
         and "tool_name" in obj
         and "error" in obj
     ):
-        # Best-effort normalization of artifacts keys
-        artifacts = obj.get("artifacts") or {"maps": [], "thumbnails": [], "urls": []}
-        if isinstance(artifacts, dict):
-            artifacts.setdefault("maps", [])
-            artifacts.setdefault("thumbnails", [])
-            artifacts.setdefault("urls", [])
-        obj["artifacts"] = artifacts
-        logger.debug(f"Coerced standard tool response - tool: {obj.get('tool_name')}, error: {obj.get('error')}")
-        return obj  # type: ignore[return-value]
+        from ..tools.contracts import ToolArtifacts
 
-    # Legacy tool outputs (string or partial dict)
+        artifacts_raw = obj.get("artifacts") or {}
+        if isinstance(artifacts_raw, dict):
+            artifacts_raw.setdefault("maps", [])
+            artifacts_raw.setdefault("thumbnails", [])
+            artifacts_raw.setdefault("urls", [])
+        artifacts = (
+            artifacts_raw
+            if isinstance(artifacts_raw, ToolArtifacts)
+            else ToolArtifacts(**artifacts_raw)
+        )
+
+        logger.debug(
+            f"Coerced dict tool response - tool: {obj.get('tool_name')}, error: {obj.get('error')}"
+        )
+        return ToolResponse(
+            tool_name=obj.get("tool_name", "unknown"),
+            message=obj.get("message", ""),
+            artifacts=artifacts,
+            error=obj.get("error", False),
+            data=obj.get("data", {}),
+            start_date=obj.get("start_date"),
+            end_date=obj.get("end_date"),
+            country=obj.get("country"),
+            city=obj.get("city"),
+            coordinates=obj.get("coordinates"),
+        )
+
     logger.debug(f"Coercing non-standard response - type: {type(obj)}")
     if isinstance(obj, dict):
         message = obj.get("message")

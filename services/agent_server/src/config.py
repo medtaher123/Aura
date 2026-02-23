@@ -46,6 +46,10 @@ class AgentServerConfig(BaseSettings):
         default=0.9,
         description="Top-p sampling parameter",
     )
+    default_llm_temperature: float = Field(
+        default=0.1,
+        description="Default LLM temperature",
+    )
 
     # WebSocket settings
     ws_heartbeat_interval: int = Field(

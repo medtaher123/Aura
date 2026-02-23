@@ -102,7 +102,7 @@ OSMType = Literal["relation", "way", "node"]
 OSMPrefixType = Literal["R", "W", "N"]
 
 
-def get_osm_type_prefix(osm_type: OSMType) -> OSMPrefixType:
+def get_osm_type_prefix(osm_type: OSMType) -> Optional[OSMPrefixType]:
     match osm_type:
         case "relation":
             return "R"
@@ -110,6 +110,8 @@ def get_osm_type_prefix(osm_type: OSMType) -> OSMPrefixType:
             return "W"
         case "node":
             return "N"
+        case _:
+            return None
 
 
 class LocationOption(BaseModel):

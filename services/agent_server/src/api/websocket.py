@@ -260,15 +260,16 @@ async def handle_chat_request(
                 LocationOption(
                     name=opt.get("display_name", opt.get("name", "Unknown")),
                     coordinates=[opt.get("lat", 0), opt.get("lon", 0)],
-                    place_id=opt.get("place_id", ""),
-                    osm_id=opt.get("osm_id", ""),
-                    osm_type=opt.get("osm_type", None),
+                    place_id=opt.get("place_id") or None,
+                    osm_id=opt.get("osm_id") or None,
+                    osm_type=opt.get("osm_type") or None,
                     osm_type_prefix=get_osm_type_prefix(opt.get("osm_type", "")),
                 )
                 for opt in options_raw
                 if isinstance(opt, dict)
             ]
             pause_state = data.get("pause", {})
+            pause_state["detected_lang"] = detected_lang
             logger.info(
                 f"Location confirmation required - {len(options)} options provided"
             )
@@ -350,11 +351,37 @@ async def handle_chat_resume(
                 )
 
             resume_payload["resume_state"]["confirmed_locations"] = confirmed_locations
-            resume_payload["resume_state"]["next_input"]["location"] = (
-                confirmed_locations[location_key]
+
+            # Use resume_patch from the tool response to know which field
+            # in next_input to patch (e.g. "city_name"), instead of a
+            # hardcoded "location" key that the tool may not accept.
+            resume_patch = pause_state.get("resume_patch", {})
+            patch_field = (
+                resume_patch.get("field")
+                if isinstance(resume_patch, dict)
+                else None
             )
+
+            confirmed_value = confirmed_locations.get(location_key, "")
+            next_input = resume_payload["resume_state"].get("next_input")
+
+            if patch_field:
+                if isinstance(next_input, dict):
+                    next_input[patch_field] = confirmed_value
+                else:
+                    resume_payload["resume_state"]["next_input"] = {
+                        patch_field: confirmed_value
+                    }
+            elif isinstance(next_input, dict):
+                # No resume_patch available; leave next_input as-is and
+                # rely on confirmed_locations + _apply_confirmed_locations
+                # in the DataAgent to perform substitution at plan time.
+                pass
+            else:
+                resume_payload["resume_state"]["next_input"] = next_input
+
             logger.debug(
-                f"Added confirmed location to resume state: {confirmed_locations}"
+                f"Added confirmed location to resume state: {confirmed_locations}, patch_field={patch_field}"
             )
         else:
             logger.warning(
@@ -431,6 +458,9 @@ async def handle_chat_resume(
         # Process result
         tool_response = coerce_tool_response(result)
 
+        # Retrieve language from pause state before branching
+        detected_lang = pause_state.get("detected_lang", "en")
+
         # Check if another location confirmation is needed
         data = tool_response.data or {}
         if data.get("needs_location_confirmation"):
@@ -440,15 +470,16 @@ async def handle_chat_resume(
                 LocationOption(
                     name=opt.get("display_name", opt.get("name", "Unknown")),
                     coordinates=[opt.get("lat", 0), opt.get("lon", 0)],
-                    place_id=opt.get("place_id", ""),
-                    osm_id=opt.get("osm_id", ""),
-                    osm_type=opt.get("osm_type", None),
+                    place_id=opt.get("place_id") or None,
+                    osm_id=opt.get("osm_id") or None,
+                    osm_type=opt.get("osm_type") or None,
                     osm_type_prefix=get_osm_type_prefix(opt.get("osm_type", "")),
                 )
                 for opt in options_raw
                 if isinstance(opt, dict)
             ]
             new_pause_state = data.get("pause", {})
+            new_pause_state["detected_lang"] = detected_lang
             logger.info(
                 f"Another location confirmation required during resume - {len(options)} options provided"
             )
@@ -456,13 +487,10 @@ async def handle_chat_resume(
             await conn.send_location_confirmation(options, new_pause_state)
             return
 
-        # Get response message
-        response_message = tool_response.message
+        response_message = translate_from_english(tool_response.message, detected_lang)
 
-        # Extract artifacts
         artifacts = tool_response.artifacts
 
-        # Send completion
         logger.info(
             f"Chat resume completed - error: {tool_response.error}, artifacts: {len(artifacts.maps)} maps, {len(artifacts.urls)} urls"
         )
@@ -524,6 +552,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
             elif msg_type == ClientMessageType.CHAT_RESUME.value:
                 try:
+                    logger.debug(
+                        f"Processing chat_resume: data: {json.dumps(data, indent=2)}"
+                    )
                     message = ChatResumeMessage(**data)
                     logger.debug(
                         f"Processing chat_resume: location={message.confirmed_location.name}"
