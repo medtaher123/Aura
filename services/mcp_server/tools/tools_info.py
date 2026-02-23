@@ -6,9 +6,8 @@ This tool helps users understand what tools are available and how to use them.
 """
 
 from mcp_singleton import mcp
-from utils.contracts import make_tool_response
+from utils.contracts import ToolResponse
 from core.logger import get_logger
-import os
 
 logger = get_logger(__name__)
 
@@ -370,7 +369,7 @@ def tools_info_tool(
     tool_name: str | None = None,
     category: str | None = None,
     list_all: bool = False
-) -> dict:
+) -> ToolResponse:
     """
     Get information about available tools, their capabilities, data sources, and example use cases.
     
@@ -404,7 +403,7 @@ def tools_info_tool(
             
             output_lines.append("\n\n💡 **Tip:** Ask for details about a specific tool using its name!")
             
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="tools_info_tool",
                 message="\n".join(output_lines),
                 data={
@@ -428,7 +427,7 @@ def tools_info_tool(
                     break
             
             if not matched_tool:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="tools_info_tool",
                     message=f"❌ Tool '{tool_name}' not found. Use `list_all=True` to see all available tools.",
                     data={"available_tools": list(TOOLS_CATALOG.keys())},
@@ -440,7 +439,7 @@ def tools_info_tool(
             output_lines = [
                 f"🔧 **{tool_info['name']}** (`{matched_tool}`)\n",
                 f"**Purpose:** {tool_info['purpose']}\n",
-                f"**Data Sources:**"
+                "**Data Sources:**"
             ]
             for source in tool_info['data_sources']:
                 output_lines.append(f"  • {source}")
@@ -458,7 +457,7 @@ def tools_info_tool(
             for example in tool_info['example_questions']:
                 output_lines.append(f"  • \"{example}\"")
             
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="tools_info_tool",
                 message="\n".join(output_lines),
                 data={
@@ -480,7 +479,7 @@ def tools_info_tool(
                     break
             
             if not matched_category:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="tools_info_tool",
                     message=f"❌ Category '{category}' not found. Available categories: {', '.join(TOOL_CATEGORIES.keys())}",
                     data={"available_categories": list(TOOL_CATEGORIES.keys())},
@@ -496,7 +495,7 @@ def tools_info_tool(
                     output_lines.append(f"  {tool_info['purpose']}")
                     output_lines.append(f"  Example: \"{tool_info['example_questions'][0]}\"")
             
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="tools_info_tool",
                 message="\n".join(output_lines),
                 data={
@@ -534,7 +533,7 @@ def tools_info_tool(
             relevant_tools.sort(key=lambda x: x[2], reverse=True)
             
             if not relevant_tools:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="tools_info_tool",
                     message=f"❓ No tools found matching '{query}'. Try asking about specific capabilities like 'fire detection', 'weather', 'satellite images', etc.",
                     data={"query": query, "available_categories": list(TOOL_CATEGORIES.keys())},
@@ -552,7 +551,7 @@ def tools_info_tool(
             if len(relevant_tools) > 5:
                 output_lines.append(f"\n\n... and {len(relevant_tools) - 5} more tools. Use `list_all=True` to see all.")
             
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="tools_info_tool",
                 message="\n".join(output_lines),
                 data={
@@ -564,7 +563,7 @@ def tools_info_tool(
             )
         
         # Default: Show help message
-        return make_tool_response(
+        return ToolResponse(
             tool_name="tools_info_tool",
             message=(
                 "🤖 **Tools Information Assistant**\n\n"
@@ -587,7 +586,7 @@ def tools_info_tool(
     
     except Exception as e:
         logger.error(f"Error in tools_info_tool: {str(e)}")
-        return make_tool_response(
+        return ToolResponse(
             tool_name="tools_info_tool",
             message=f"❌ An error occurred: {str(e)}",
             data={"error_details": str(e)},

@@ -5,84 +5,36 @@ Shared utilities for MCP tools to maintain consistent response format.
 """
 
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, TypedDict
-import json
+from typing_extensions import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 
-class ToolArtifacts(TypedDict):
+class ToolArtifacts(BaseModel):
     """Artifacts that can be rendered in UI"""
 
-    maps: List[Any]
-    thumbnails: List[str]
-    urls: List[str]
+    maps: List[Any] = []
+    thumbnails: List[str] = []
+    urls: List[str] = []
 
 
-class ToolCoordinates(TypedDict):
+class ToolCoordinates(BaseModel):
     """Geographic coordinates"""
 
-    lat: float
-    lon: float
+    lat: float = Field(..., description="Latitude")
+    lon: float = Field(..., description="Longitude")
 
 
-class ToolResponse(TypedDict):
-    """Standardized tool response format"""
-
+class ToolResponse(BaseModel):
     message: str
-    artifacts: ToolArtifacts
-    tool_name: str
-    start_date: Optional[str]
-    end_date: Optional[str]
-    country: Optional[str]
-    city: Optional[str]
-    coordinates: Optional[ToolCoordinates]
-    data: Optional[Dict[str, Any]]
-    error: bool
-
-
-def make_tool_response(
-    *,
-    tool_name: str,
-    message: str,
-    artifacts: Optional[ToolArtifacts] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    country: Optional[str] = None,
-    city: Optional[str] = None,
-    coordinates: Optional[ToolCoordinates] = None,
-    data: Optional[Dict[str, Any]] = None,
-    error: bool = False,
-) -> ToolResponse:
-    """Create a standardized ToolResponse dict.
-
-    Notes:
-    - Always return all keys (UI and agent logic depends on that).
-    - Put tool-specific payloads in `data`.
-    - Put any renderable assets in `artifacts`.
-    """
-    normalized_artifacts: ToolArtifacts = artifacts or {
-        "maps": [],
-        "thumbnails": [],
-        "urls": [],
-    }
-    # Defensive normalization
-    normalized_artifacts.setdefault("maps", [])
-    normalized_artifacts.setdefault("thumbnails", [])
-    normalized_artifacts.setdefault("urls", [])
-
-    return {
-        "message": message,
-        "artifacts": normalized_artifacts,
-        "tool_name": tool_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "country": country,
-        "city": city,
-        "coordinates": coordinates,
-        "data": data,
-        "error": bool(error),
-    }
-
-
-def format_mcp_response(tool_response: ToolResponse) -> str:
-    """Format tool response as JSON for MCP"""
-    return json.dumps(tool_response, indent=2, default=str)
+    tool_name: str = Field(..., description="Name of the tool that was called")
+    artifacts: ToolArtifacts = Field(default=ToolArtifacts(), description="Artifacts")
+    start_date: Optional[str] = Field(default=None, description="Start date")
+    end_date: Optional[str] = Field(default=None, description="End date")
+    country: Optional[str] = Field(default=None, description="Country")
+    city: Optional[str] = Field(default=None, description="City")
+    coordinates: Optional[ToolCoordinates] = Field(
+        default=None, description="Coordinates"
+    )
+    data: Dict[str, Any] = Field(default={}, description="Data")
+    error: bool = Field(default=False, description="Whether an error occurred")

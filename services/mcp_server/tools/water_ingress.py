@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from mcp_singleton import mcp
 
 from core.logger import get_logger
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from config import get_config
 
 from rasterio.features import geometry_mask
@@ -366,7 +366,7 @@ def estimate_surface_water_ingress_tool(
     location_input: str | None = None,
     lat: float | None = None,
     lon: float | None = None,
-) -> dict:
+) -> ToolResponse:
     """
      Full analysis of surface water ingress risk / water accumulation points, for a given area.
 
@@ -391,7 +391,7 @@ def estimate_surface_water_ingress_tool(
             try:
                 input_value = (float(lat), float(lon))
             except Exception:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="estimate_surface_water_ingress_tool",
                     message="Invalid coordinates provided. lat/lon must be numeric.",
                     error=True,
@@ -399,7 +399,7 @@ def estimate_surface_water_ingress_tool(
         elif isinstance(location_input, str) and location_input.strip():
             candidates = get_city_candidates(location_input.strip())
             if len(candidates) > 1:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="estimate_surface_water_ingress_tool",
                     message=(
                         f"I found multiple matches for '{location_input}'. "
@@ -415,7 +415,7 @@ def estimate_surface_water_ingress_tool(
                     error=False,
                 )
         else:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="estimate_surface_water_ingress_tool",
                 message="Please provide a location name or lat/lon coordinates.",
                 error=True,
@@ -489,7 +489,7 @@ def estimate_surface_water_ingress_tool(
         # Join message
         message = "\n".join(message_parts)
 
-        artifacts = {"maps": [], "thumbnails": [], "urls": []}
+        artifacts = ToolArtifacts(maps=[], thumbnails=[], urls=[])
         if isinstance(maps, dict):
             risk_points = maps.get("Risk_points")
             coords = result.get("Coordinates")
@@ -505,7 +505,7 @@ def estimate_surface_water_ingress_tool(
                         risk_points, padding=0.20, min_zoom=2.0, max_zoom=12.0
                     )
                 )
-                artifacts["maps"].append(
+                artifacts.maps.append(
                     {
                         "title": "Surface water ingress risk",
                         "points": risk_points,
@@ -527,7 +527,7 @@ def estimate_surface_water_ingress_tool(
                 and c.get("lat") is not None
                 and c.get("lon") is not None
             ):
-                coords = {"lat": float(c["lat"]), "lon": float(c["lon"])}
+                coords = ToolCoordinates(lat=float(c["lat"]), lon=float(c["lon"]))
         except Exception:
             coords = None
 
@@ -539,7 +539,7 @@ def estimate_surface_water_ingress_tool(
             country = location_info.get("country")
             city = location_info.get("city")
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="estimate_surface_water_ingress_tool",
             message=message,
             artifacts=artifacts,
@@ -555,7 +555,7 @@ def estimate_surface_water_ingress_tool(
             f"Error in estimate_surface_water_ingress_tool: {e}", exc_info=True
         )
         error_message = f"An error occurred while processing the request: {str(e)}"
-        return make_tool_response(
+        return ToolResponse(
             tool_name="estimate_surface_water_ingress_tool",
             message=error_message,
             error=True,

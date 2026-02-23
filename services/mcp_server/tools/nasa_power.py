@@ -22,7 +22,7 @@ import requests
 from core.logger import get_logger
 from mcp_singleton import mcp
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from utils.map_view_service import view_state_from_points
 
 logger = get_logger(__name__)
@@ -193,7 +193,7 @@ def nasa_power_hourly_tool(
     units: str = "metric",
     time_standard: str = "utc",
     max_days: int = 14,
-) -> dict[str, Any]:
+) -> ToolResponse:
     """Query NASA POWER hourly time-series for a point.
 
     Use this tool for climate/energy/agro-meteorology questions such as:
@@ -230,7 +230,7 @@ def nasa_power_hourly_tool(
             lat = float(lat_raw) if lat_raw is not None else None
             lon = float(lon_raw) if lon_raw is not None else None
         except LocationAmbiguousError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name=tool_name,
                 message=(
                     f"I found multiple matches for '{e.query}'. Please confirm the correct location."
@@ -253,7 +253,7 @@ def nasa_power_hourly_tool(
             lon = float(longitude)
 
     if lat is None or lon is None:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="Provide either a valid 'location' or both 'latitude' and 'longitude'.",
             error=True,
@@ -268,10 +268,10 @@ def nasa_power_hourly_tool(
         end_i = end_i or default_end
 
     if start_i > end_i:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="start_date must be <= end_date.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"start": start_i, "end": end_i},
             error=True,
         )
@@ -285,13 +285,13 @@ def nasa_power_hourly_tool(
         days = None
 
     if isinstance(max_days, int) and max_days > 0 and days is not None and days > max_days:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=(
                 f"Requested {days} days of hourly data which is too large for this tool. "
                 f"Please request <= {max_days} days, or we can add a daily/monthly POWER tool."
             ),
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"start": start_i, "end": end_i, "requested_days": days, "max_days": max_days},
             error=True,
         )
@@ -303,30 +303,30 @@ def nasa_power_hourly_tool(
 
     community_norm = (community or "").strip().lower() or "re"
     if community_norm not in {"re", "ag", "sb"}:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="community must be one of: re, ag, sb.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"community": community},
             error=True,
         )
 
     units_norm = (units or "").strip().lower() or "metric"
     if units_norm not in {"metric", "imperial"}:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="units must be 'metric' or 'imperial'.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"units": units},
             error=True,
         )
 
     ts_norm = (time_standard or "").strip().lower() or "utc"
     if ts_norm not in {"utc", "lst"}:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="time_standard must be 'utc' or 'lst'.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"time_standard": time_standard},
             error=True,
         )
@@ -354,10 +354,10 @@ def nasa_power_hourly_tool(
             timeout=30,
         )
     except Exception as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=f"Failed to reach NASA POWER API: {e}",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"request": request_params},
             error=True,
         )
@@ -369,10 +369,10 @@ def nasa_power_hourly_tool(
         except Exception:
             err_payload = {"raw": resp.text[:2000]}
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=f"NASA POWER API error (HTTP {resp.status_code}).",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"request": request_params, "error": err_payload},
             error=True,
         )
@@ -435,12 +435,12 @@ def nasa_power_hourly_tool(
     # Include PRUVE link (uncertainty viewer)
     urls = [PRUVE_URL]
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name=tool_name,
         message="\n".join(msg_lines),
         city=resolved_location or location,
-        coordinates={"lat": float(lat), "lon": float(lon)},
-        artifacts={"maps": [map_spec], "thumbnails": [], "urls": urls},
+        coordinates=ToolCoordinates(lat=float(lat), lon=float(lon)),
+        artifacts=ToolArtifacts(maps=[map_spec], thumbnails=[], urls=urls),
         data={
             "request": request_params,
             "summary": summary,
@@ -466,7 +466,7 @@ def nasa_power_daily_tool(
     units: str = "metric",
     time_standard: str = "utc",
     max_days: int = 3650,
-) -> dict[str, Any]:
+) -> ToolResponse:
     """Query NASA POWER daily time-series for a point.
 
     Use this tool for trend questions over months/years (daily aggregates), such as:
@@ -492,7 +492,7 @@ def nasa_power_daily_tool(
             lat = float(lat_raw) if lat_raw is not None else None
             lon = float(lon_raw) if lon_raw is not None else None
         except LocationAmbiguousError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name=tool_name,
                 message=(
                     f"I found multiple matches for '{e.query}'. Please confirm the correct location."
@@ -514,7 +514,7 @@ def nasa_power_daily_tool(
             lon = float(longitude)
 
     if lat is None or lon is None:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="Provide either a valid 'location' or both 'latitude' and 'longitude'.",
             error=True,
@@ -532,10 +532,10 @@ def nasa_power_daily_tool(
         end_i = end_i or int(end_d.strftime("%Y%m%d"))
 
     if start_i > end_i:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="start_date must be <= end_date.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"start": start_i, "end": end_i},
             error=True,
         )
@@ -549,13 +549,13 @@ def nasa_power_daily_tool(
         days = None
 
     if isinstance(max_days, int) and max_days > 0 and days is not None and days > max_days:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=(
                 f"Requested {days} days of daily data which is too large for this tool. "
                 f"Please request <= {max_days} days (or we can add monthly/climatology helpers)."
             ),
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"start": start_i, "end": end_i, "requested_days": days, "max_days": max_days},
             error=True,
         )
@@ -566,30 +566,30 @@ def nasa_power_daily_tool(
 
     community_norm = (community or "").strip().lower() or "re"
     if community_norm not in {"re", "ag", "sb"}:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="community must be one of: re, ag, sb.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"community": community},
             error=True,
         )
 
     units_norm = (units or "").strip().lower() or "metric"
     if units_norm not in {"metric", "imperial"}:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="units must be 'metric' or 'imperial'.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"units": units},
             error=True,
         )
 
     ts_norm = (time_standard or "").strip().lower() or "utc"
     if ts_norm not in {"utc", "lst"}:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message="time_standard must be 'utc' or 'lst'.",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"time_standard": time_standard},
             error=True,
         )
@@ -616,10 +616,10 @@ def nasa_power_daily_tool(
             timeout=30,
         )
     except Exception as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=f"Failed to reach NASA POWER API: {e}",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"request": request_params},
             error=True,
         )
@@ -630,10 +630,10 @@ def nasa_power_daily_tool(
         except Exception:
             err_payload = {"raw": resp.text[:2000]}
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=f"NASA POWER API error (HTTP {resp.status_code}).",
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={"request": request_params, "error": err_payload},
             error=True,
         )
@@ -693,12 +693,12 @@ def nasa_power_daily_tool(
 
     urls = [PRUVE_URL]
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name=tool_name,
         message="\n".join(msg_lines),
         city=resolved_location or location,
-        coordinates={"lat": float(lat), "lon": float(lon)},
-        artifacts={"maps": [map_spec], "thumbnails": [], "urls": urls},
+        coordinates=ToolCoordinates(lat=float(lat), lon=float(lon)),
+        artifacts=ToolArtifacts(maps=[map_spec], thumbnails=[], urls=urls),
         data={
             "request": request_params,
             "summary": summary,

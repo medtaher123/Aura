@@ -5,7 +5,7 @@ from requests.exceptions import RequestException, Timeout
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 
 from core.logger import get_logger
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolResponse
 
 logger = get_logger(__name__)
 
@@ -33,7 +33,7 @@ def query_stac_catalog(
     end_date: str | None = None,
     collection: str = "sentinel-2-l2a",
     limit_per_day: int = 3,
-) -> dict:
+) -> ToolResponse:
     """
     Query the STAC EarthSearch catalog to retrieve satellite images.
 
@@ -77,7 +77,7 @@ def query_stac_catalog(
                 lat_f = float(lat)
                 lon_f = float(lon)
             except Exception:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message="Invalid coordinates provided. lat/lon must be numeric.",
                     start_date=start_date,
@@ -98,7 +98,7 @@ def query_stac_catalog(
                 city_name = f"{lat_f:.4f}, {lon_f:.4f}"
         else:
             if not isinstance(city, str) or not city.strip():
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message="Missing required location: provide either city or lat/lon.",
                     start_date=start_date,
@@ -110,7 +110,7 @@ def query_stac_catalog(
                     city.strip(), require_confirmation=True
                 )
             except LocationAmbiguousError as e:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
                     city=city.strip(),
@@ -126,7 +126,7 @@ def query_stac_catalog(
                 )
             city_name = city_name_final or city.strip()
             if not bbox_city:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message=f"Location '{city_name}' not found or bbox unavailable.",
                     city=city_name,
@@ -142,7 +142,7 @@ def query_stac_catalog(
                 max_lon = float(bbox_city[3])
                 bbox_list = [min_lon, min_lat, max_lon, max_lat]
             except Exception:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message=f"Invalid bbox returned for '{city_name}'.",
                     city=city_name,
@@ -179,7 +179,7 @@ def query_stac_catalog(
                 response.raise_for_status()
             except Timeout:
                 logger.error(f"STAC API timeout for collection {collection_norm}")
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message="Timeout while calling STAC API.",
                     city=city_name,
@@ -190,7 +190,7 @@ def query_stac_catalog(
                 )
             except RequestException as exc:
                 logger.error(f"STAC API request failed: {exc}")
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message=f"STAC network error: {exc}",
                     city=city_name,
@@ -204,7 +204,7 @@ def query_stac_catalog(
                 items = response.json().get("features", [])
             except ValueError as exc:
                 logger.error(f"STAC JSON parsing error: {exc}")
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_stac_catalog",
                     message=f"Invalid STAC response: {exc}",
                     city=city_name,
@@ -230,7 +230,7 @@ def query_stac_catalog(
             current += timedelta(days=1)
 
         if not all_images:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="query_stac_catalog",
                 message=(
                     f"No images found for {collection_norm} between {start_date} and {end_date} "
@@ -255,13 +255,13 @@ def query_stac_catalog(
             ]
         )
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="query_stac_catalog",
             message=(
                 f"Found {len(all_images)} images for {collection_norm} between {start_date} and {end_date} "
                 f"for bbox {bbox_str}.\n{details}"
             ),
-            artifacts={"maps": [], "thumbnails": urls, "urls": urls},
+            artifacts=ToolArtifacts(maps=[], thumbnails=urls, urls=urls),
             start_date=start_date,
             end_date=end_date,
             city=city_name,
@@ -275,7 +275,7 @@ def query_stac_catalog(
 
     except Exception as exc:
         logger.error(f"STAC catalog error: {exc}", exc_info=True)
-        return make_tool_response(
+        return ToolResponse(
             tool_name="query_stac_catalog",
             message=f"Unexpected STAC error: {exc}",
             error=True,

@@ -7,7 +7,7 @@ Retrieves current weather and forecasts for a city using Open-Meteo API.
 import requests
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
-from utils.contracts import make_tool_response
+from utils.contracts import ToolCoordinates, ToolResponse
 from mcp_singleton import mcp
 
 
@@ -17,7 +17,7 @@ def weather_tool(
     forecast_days: int = 5,
     lat: float | None = None,
     lon: float | None = None,
-) -> dict:
+) -> ToolResponse:
     """Retrieve current weather and forecasts for a city.
 
     Args:
@@ -32,7 +32,7 @@ def weather_tool(
             lat = float(lat)
             lon = float(lon)
         except Exception:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="weather_tool",
                 message="Invalid coordinates provided. lat/lon must be numeric.",
                 city=city_name,
@@ -48,7 +48,7 @@ def weather_tool(
             city_name = resolved_city or f"{lat:.4f}, {lon:.4f}"
     else:
         if not isinstance(city_name, str) or not city_name.strip():
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="weather_tool",
                 message="Please provide a city name or lat/lon coordinates.",
                 error=True,
@@ -60,7 +60,7 @@ def weather_tool(
                 city_name, require_confirmation=True
             )
         except LocationAmbiguousError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="weather_tool",
                 message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
                 city=city_name,
@@ -74,7 +74,7 @@ def weather_tool(
             )
 
         if lat is None or lon is None:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="weather_tool",
                 message=f"City '{city_name}' not found.",
                 city=city_name,
@@ -99,11 +99,11 @@ def weather_tool(
     }
     weather_resp = requests.get(weather_url, params=weather_params)
     if weather_resp.status_code != 200:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="weather_tool",
             message=f"Unable to fetch weather data. Status: {weather_resp.status_code}",
             city=city_name,
-            coordinates={"lat": float(lat), "lon": float(lon)},
+            coordinates=ToolCoordinates(lat=float(lat), lon=float(lon)),
             error=True,
         )
 
@@ -130,11 +130,11 @@ def weather_tool(
         if days_left == 0:
             break
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="weather_tool",
         message=message,
         city=city_name,
-        coordinates={"lat": float(lat), "lon": float(lon)},
+        coordinates=ToolCoordinates(lat=float(lat), lon=float(lon)),
         data={
             "current": current,
             "daily": daily,

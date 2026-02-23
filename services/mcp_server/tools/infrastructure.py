@@ -11,18 +11,19 @@ from typing import Optional, List
 import boto3
 from mcp_singleton import mcp
 from core.logger import get_logger
-from utils.contracts import make_tool_response
+from utils.contracts import ToolCoordinates, ToolResponse
 
 logger = get_logger(__name__)
 
-@ mcp.tool()
+
+@mcp.tool()
 def infrastructure_query_tool(
     *,
     lat: float,
     lon: float,
     radius_km: float = 1.0,
-    infrastructure_types: Optional[List[str]] = None
-) -> dict:
+    infrastructure_types: Optional[List[str]] = None,
+) -> ToolResponse:
     """
     Query OSM data on Athena to find infrastructure near a location.
     Args:
@@ -35,7 +36,9 @@ def infrastructure_query_tool(
     """
     try:
         athena_db = os.environ.get("ATHENA_DB", "osm")
-        athena_output = os.environ.get("ATHENA_OUTPUT", "s3://your-athena-query-results/")
+        athena_output = os.environ.get(
+            "ATHENA_OUTPUT", "s3://your-athena-query-results/"
+        )
         region = os.environ.get("AWS_REGION", "us-east-1")
         table = os.environ.get("ATHENA_OSM_TABLE", "planet_osm_point")
 
@@ -48,9 +51,16 @@ def infrastructure_query_tool(
 
         infra_filter = ""
         if infrastructure_types:
-            infra_filter = " AND (" + " OR ".join(
-                [f"tags['amenity'] = '{t}' OR tags['building'] = '{t}' OR tags['landuse'] = '{t}'" for t in infrastructure_types]
-            ) + ")"
+            infra_filter = (
+                " AND ("
+                + " OR ".join(
+                    [
+                        f"tags['amenity'] = '{t}' OR tags['building'] = '{t}' OR tags['landuse'] = '{t}'"
+                        for t in infrastructure_types
+                    ]
+                )
+                + ")"
+            )
 
         query = f"""
         SELECT
@@ -85,7 +95,7 @@ def infrastructure_query_tool(
 
         if state != "SUCCEEDED":
             logger.error(f"Athena query failed: {state}")
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message="Athena query failed.",
                 data={},
@@ -106,19 +116,20 @@ def infrastructure_query_tool(
 
         message = (
             f"Found {len(infra_list)} types of infrastructure within {radius_km} km of ({lat}, {lon})."
-            if infra_list else "No infrastructure found in the specified area."
+            if infra_list
+            else "No infrastructure found in the specified area."
         )
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="infrastructure_query_tool",
             message=message,
             data={"infrastructure": infra_list},
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             error=False,
         )
     except Exception as e:
         logger.error(f"Error in infrastructure_query_tool: {e}")
-        return make_tool_response(
+        return ToolResponse(
             tool_name="infrastructure_query_tool",
             message=f"Error: {str(e)}",
             data={},
