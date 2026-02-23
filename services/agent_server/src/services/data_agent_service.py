@@ -270,6 +270,7 @@ def _merge_steps_into_response(
 
     start_date = end_date = country = city = None
     coordinates = None
+    logger.debug("Merging steps into response")
 
     for r in steps:
         artifacts = r.artifacts
@@ -500,9 +501,16 @@ def create_data_agent_executor(
         if not confirmed:
             return obj
         if isinstance(obj, str):
+            if obj.startswith("@"):
+                return obj
             k = _norm_key(obj)
-            if k in confirmed and not obj.startswith("@"):
+            if k in confirmed:
                 return confirmed[k]
+            # Partial match: "paris" should match the confirmed key
+            # "paris, île-de-france, france métropolitaine, france".
+            for conf_key, conf_val in confirmed.items():
+                if conf_key.startswith(k + ",") or conf_key.startswith(k + " "):
+                    return conf_val
             return obj
         if isinstance(obj, list):
             return [_apply_confirmed_locations(x, confirmed) for x in obj]
@@ -602,6 +610,7 @@ def create_data_agent_executor(
         )
 
         plan_payload = msg.content
+        logger.debug(f"DataAgent plan payload: {json.dumps(plan_payload, indent=2)}")
         action, action_input, commentary = _pick_action(plan_payload)
         logger.debug(
             f"DataAgent plan parsed - action={action}, action_input={action_input}, commentary={commentary}, step_count={step_count}/{max_steps}"
@@ -816,11 +825,16 @@ def create_data_agent_executor(
                 paused_state["final_message"] = ""
                 paused_state["resume_from_pause"] = True
 
+                resume_patch = (
+                    meta.get("resume_patch") if isinstance(meta, dict) else None
+                )
                 pause_payload = {
                     "resume_state": paused_state,
                     "tool_name": tool_name,
                     "tool_input": tool_input,
                 }
+                if isinstance(resume_patch, dict):
+                    pause_payload["resume_patch"] = resume_patch
 
                 next_state["pause"] = {"tool_response": coerced, "pause": pause_payload}
                 next_state["done"] = True
@@ -830,7 +844,6 @@ def create_data_agent_executor(
                     logger.info(
                         "Streaming data agent finalizing with message: Waiting for location confirmation…"
                     )
-                    logger.debug(f"DataAgent finalizing state: {next_state}")
                     try:
                         stream_callback(
                             {
@@ -909,7 +922,6 @@ def create_data_agent_executor(
         if isinstance(pause.get("pause"), dict):
             tool_resp: ToolResponse = pause.get("tool_response")
             tool_resp.data["pause"] = pause["pause"]
-
             next_state = dict(state)
             next_state["output"] = tool_resp
             return next_state

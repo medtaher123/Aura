@@ -70,7 +70,7 @@ async def _call_tool_async(tool_name: str, arguments: dict) -> Any:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(tool_name, arguments)
-                logger.debug(f"MCP tool result: {result.content[0]}")
+                logger.debug(f"MCP tool {tool_name} executed successfully")
                 return result
     except Exception as e:
         import traceback
