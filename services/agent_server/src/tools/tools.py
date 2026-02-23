@@ -7,20 +7,20 @@ from datetime import date, datetime
 from langchain.tools import tool
 
 from .mcp_remote_tools import MCPRemoteTool
-from .contracts import make_tool_response
 
 from ..core.logger import get_logger
+from ..tools.contracts import ToolResponse
 
 logger = get_logger("tools")
 
 
 @tool
-def get_time() -> dict:
+def get_time() -> ToolResponse:
     """
     Get the current time in a human-readable string format.
     """
     current_time = datetime.now().strftime("%Hh%M")
-    return make_tool_response(
+    return ToolResponse(
         tool_name="get_time",
         message=f"The current time is {current_time}.",
         data={"time": current_time},
@@ -29,12 +29,12 @@ def get_time() -> dict:
 
 
 @tool
-def get_date() -> dict:
+def get_date() -> ToolResponse:
     """
     Get the current date in a human-readable string format.
     """
     current_date = date.today().strftime("%d/%m/%Y")
-    return make_tool_response(
+    return ToolResponse(
         tool_name="get_date",
         message=f"Today's date is {current_date}.",
         data={"date": current_date},
@@ -43,7 +43,7 @@ def get_date() -> dict:
 
 
 @tool
-def calculator(expression: str) -> dict:
+def calculator(expression: str) -> ToolResponse:
     """
     Evaluate a simple arithmetic expression (e.g., '23 * 7').
     Expected format: 'number operator number'
@@ -52,21 +52,21 @@ def calculator(expression: str) -> dict:
         cleaned = expression.strip().replace(" ", "")
         allowed_chars = set("0123456789+-*/.() ")
         if not all(c in allowed_chars for c in cleaned):
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="calculator",
                 message="Error: Disallowed characters in expression",
                 data={"expression": expression},
                 error=True,
             )
         result = str(eval(cleaned))
-        return make_tool_response(
+        return ToolResponse(
             tool_name="calculator",
             message=result,
             data={"expression": expression, "result": result},
             error=False,
         )
     except Exception:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="calculator",
             message="Error: Invalid arithmetic expression",
             data={"expression": expression},

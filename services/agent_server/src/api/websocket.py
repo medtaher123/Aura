@@ -23,7 +23,7 @@ from ..services.translate_service import (
 )
 from .models import (
     AgentStage,
-    Artifacts,
+    ToolArtifacts,
     ChatRequestMessage,
     ChatResumeMessage,
     ClientMessageType,
@@ -41,10 +41,6 @@ from .models import (
 
 logger = get_logger("websocket")
 router = APIRouter()
-
-
-def get_pid(opt: dict) -> str:
-    return str(opt.get("osm_id")) or str(opt.get("place_id"))
 
 
 class WebSocketConnection:
@@ -88,14 +84,17 @@ class WebSocketConnection:
         await self.send(ToolStartMessage(tool_name=tool_name, tool_input=tool_input))
 
     async def send_tool_result(
-        self, tool_name: str, result: dict, artifacts: Optional[Artifacts] = None
+        self,
+        tool_name: str,
+        result: dict,
+        artifacts: ToolArtifacts = ToolArtifacts(),
     ) -> None:
         """Send tool execution result."""
         await self.send(
             ToolResultMessage(
                 tool_name=tool_name,
                 result=result,
-                artifacts=artifacts or Artifacts(),
+                artifacts=artifacts,
             )
         )
 
@@ -108,13 +107,16 @@ class WebSocketConnection:
         )
 
     async def send_complete(
-        self, response: str, artifacts: Optional[Artifacts] = None, error: bool = False
+        self,
+        response: str,
+        artifacts: ToolArtifacts = ToolArtifacts(),
+        error: bool = False,
     ) -> None:
         """Send completion message."""
         await self.send(
             CompleteMessage(
                 response=response,
-                artifacts=artifacts or Artifacts(),
+                artifacts=artifacts,
                 error=error,
             )
         )
@@ -207,7 +209,6 @@ async def handle_chat_request(
                     await conn.send_tool_result(
                         tool_name=tool_name,
                         result={"observation": observation, "error": error},
-                        artifacts=Artifacts(),
                     )
 
         # Capture the current event loop for use in thread
@@ -243,16 +244,14 @@ async def handle_chat_request(
 
         # Check for cancellation
         if conn.is_cancelled():
-            await conn.send_complete(
-                response="Request cancelled.", artifacts=Artifacts(), error=False
-            )
+            await conn.send_complete(response="Request cancelled.", error=False)
             return
 
         # Process result
         tool_response = coerce_tool_response(result)
 
         # Check if location confirmation is needed
-        data = tool_response.get("data") or {}
+        data = tool_response.data or {}
         if data.get("needs_location_confirmation"):
             # Tools return 'candidates', not 'location_options'
             options_raw = data.get("candidates", data.get("location_options", []))
@@ -279,28 +278,18 @@ async def handle_chat_request(
             await conn.send_location_confirmation(options, pause_state)
             return
 
-        # Get response message and translate back if needed
-        response_message = tool_response.get("message", "")
-        if detected_lang and detected_lang != "en":
-            response_message = translate_from_english(response_message, detected_lang)
-            logger.debug(f"Translated response back to {detected_lang}")
-
-        # Extract artifacts
-        artifacts_raw = tool_response.get("artifacts", {})
-        artifacts = Artifacts(
-            maps=artifacts_raw.get("maps", []),
-            thumbnails=artifacts_raw.get("thumbnails", []),
-            urls=artifacts_raw.get("urls", []),
-        )
+        # translate response message if needed
+        response_message = translate_from_english(tool_response.message, detected_lang)
+        logger.debug(f"Translated response to {detected_lang}")
 
         # Send completion
         logger.info(
-            f"Chat request completed - error: {bool(tool_response.get('error', False))}, artifacts: {len(artifacts_raw.get('maps', []))} maps, {len(artifacts_raw.get('urls', []))} urls"
+            f"Chat request completed - error: {tool_response.error}, artifacts: {len(tool_response.artifacts.maps)} maps, {len(tool_response.artifacts.urls)} urls"
         )
         await conn.send_complete(
             response=response_message,
-            artifacts=artifacts,
-            error=bool(tool_response.get("error", False)),
+            artifacts=tool_response.artifacts,
+            error=tool_response.error,
         )
 
     except Exception as e:
@@ -402,12 +391,12 @@ async def handle_chat_resume(
                     await conn.send_tool_result(
                         tool_name=tool_name,
                         result={"observation": observation, "error": error},
-                        artifacts=Artifacts(),
                     )
 
         # Capture the current event loop for use in thread
         event_loop = asyncio.get_running_loop()
 
+        # wrap the stream callback in a thread safe way
         def stream_callback(event: dict):
             try:
                 # Use the captured event loop from the async context
@@ -436,16 +425,14 @@ async def handle_chat_resume(
 
         # Check for cancellation
         if conn.is_cancelled():
-            await conn.send_complete(
-                response="Request cancelled.", artifacts=Artifacts(), error=False
-            )
+            await conn.send_complete(response="Request cancelled.", error=False)
             return
 
         # Process result
         tool_response = coerce_tool_response(result)
 
         # Check if another location confirmation is needed
-        data = tool_response.get("data") or {}
+        data = tool_response.data or {}
         if data.get("needs_location_confirmation"):
             # Tools return 'candidates', not 'location_options'
             options_raw = data.get("candidates", data.get("location_options", []))
@@ -470,24 +457,19 @@ async def handle_chat_resume(
             return
 
         # Get response message
-        response_message = tool_response.get("message", "")
+        response_message = tool_response.message
 
         # Extract artifacts
-        artifacts_raw = tool_response.get("artifacts", {})
-        artifacts = Artifacts(
-            maps=artifacts_raw.get("maps", []),
-            thumbnails=artifacts_raw.get("thumbnails", []),
-            urls=artifacts_raw.get("urls", []),
-        )
+        artifacts = tool_response.artifacts
 
         # Send completion
         logger.info(
-            f"Chat resume completed - error: {bool(tool_response.get('error', False))}, artifacts: {len(artifacts_raw.get('maps', []))} maps, {len(artifacts_raw.get('urls', []))} urls"
+            f"Chat resume completed - error: {tool_response.error}, artifacts: {len(artifacts.maps)} maps, {len(artifacts.urls)} urls"
         )
         await conn.send_complete(
             response=response_message,
             artifacts=artifacts,
-            error=bool(tool_response.get("error", False)),
+            error=tool_response.error,
         )
 
     except Exception as e:

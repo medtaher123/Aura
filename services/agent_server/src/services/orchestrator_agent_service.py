@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from .llm_service import get_chat_llm
@@ -16,7 +16,8 @@ from .llm_service import get_chat_llm
 from ..core.logger import get_logger
 from ..core.prompts import get_orchestrator_prompt
 from ..core.memory import format_chat_history
-from ..tools.contracts import ToolResponse, make_tool_response
+from ..tools.contracts import ToolResponse
+from ..api.models import OrchestratorInputs, OrchestratorTrace, ResumeState
 from .data_agent_service import create_data_agent_executor
 from .analysis_agent_service import create_analysis_agent_executor
 
@@ -62,7 +63,7 @@ class OrchestratorExecutor:
     data_agent: Any
     analysis_agent: Any
 
-    def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def invoke(self, inputs: OrchestratorInputs) -> Dict[str, Any]:
         """Invoke the orchestrator.
 
         Args:
@@ -85,16 +86,21 @@ class OrchestratorExecutor:
         )
 
         # Resume path: continue from a paused DataAgent state without replanning.
-        resume = inputs.get("resume") if isinstance(inputs, dict) else None
+        resume: Optional[ResumeState] = (
+            inputs.get("resume") if isinstance(inputs, dict) else None
+        )
         if isinstance(resume, dict) and isinstance(resume.get("resume_state"), dict):
             logger.info("Orchestrator resuming from pause state")
-            resume_state = resume.get("resume_state")
+            resume_state: Dict[str, Any] = cast(
+                Dict[str, Any], resume.get("resume_state")
+            )
             # debug resume_state
             logger.debug(f"Resume state: {json.dumps(resume_state, indent=2)}")
-            orchestrator_trace = (
+            orchestrator_trace: OrchestratorTrace = cast(
+                OrchestratorTrace,
                 resume.get("orchestrator_trace")
                 if isinstance(resume.get("orchestrator_trace"), dict)
-                else {}
+                else {},
             )
             needs_analysis = bool(
                 resume.get("needs_analysis") or orchestrator_trace.get("needs_analysis")
@@ -126,24 +132,11 @@ class OrchestratorExecutor:
             raw = self.data_agent.invoke(
                 {"resume_state": resume_state, "stream_callback": stream_callback}
             )
-            data_response = (
-                raw.get("output", raw)
-                if isinstance(raw, dict)
-                else make_tool_response(
-                    tool_name="data_agent",
-                    message=str(raw),
-                    error=False,
-                )
-            )
+            data_response: ToolResponse = raw.get("output")
 
             # If we paused again (multiple ambiguous locations), return immediately.
-            if isinstance(data_response, dict):
-                data_data = (
-                    data_response.get("data")
-                    if isinstance(data_response.get("data"), dict)
-                    else {}
-                )
-                if bool(data_data.get("needs_location_confirmation")) is True:
+            if data_response.data:
+                if data_response.data.get("needs_location_confirmation", False):
                     # check if we have confirmed locations in the resume state
                     confirmed_locations = resume_state.get("confirmed_locations")
                     if confirmed_locations:
@@ -155,25 +148,19 @@ class OrchestratorExecutor:
                     logger.info(
                         "DataAgent paused again during resume - another location confirmation needed"
                     )
-                    pause = (
-                        data_data.get("pause")
-                        if isinstance(data_data.get("pause"), dict)
-                        else {}
-                    )
-                    logger.debug(f"Pause payload keys: {list(pause.keys())}")
-                    data_response["data"] = {
-                        **dict(data_data),
-                        "orchestrator_trace": orchestrator_trace,
-                        "pause": {
-                            **dict(pause),
-                            "orchestrator_trace": orchestrator_trace,
-                            "needs_analysis": needs_analysis,
-                            "analysis_goal": analysis_goal,
-                            "user_text": original_user_text,
-                        },
-                    }
+                    pause_raw = data_response.data.get("pause", {})
+                    logger.debug(f"Pause payload keys: {list(pause_raw.keys())}")
+                    data_response.data["orchestrator_trace"] = orchestrator_trace
+
+                    pause_raw["orchestrator_trace"] = orchestrator_trace
+                    pause_raw["needs_analysis"] = needs_analysis
+                    pause_raw["analysis_goal"] = analysis_goal
+                    pause_raw["user_text"] = original_user_text
+
+                    data_response.data["pause"] = pause_raw
+
                     logger.debug(
-                        f"Enriched pause state with orchestrator context - has_resume_state: {'resume_state' in pause}"
+                        f"Enriched pause state with orchestrator context - has_resume_state: {'resume_state' in pause_raw}"
                     )
                     return {"output": data_response}
 
@@ -204,7 +191,7 @@ class OrchestratorExecutor:
                 analysis_resp = (
                     analysis_raw.get("output", analysis_raw)
                     if isinstance(analysis_raw, dict)
-                    else make_tool_response(
+                    else ToolResponse(
                         tool_name="analysis_agent",
                         message=str(analysis_raw),
                         error=False,
@@ -212,27 +199,18 @@ class OrchestratorExecutor:
                 )
 
                 if isinstance(analysis_resp, dict):
-                    analysis_data = (
-                        analysis_resp.get("data")
-                        if isinstance(analysis_resp.get("data"), dict)
-                        else {}
+                    analysis_data_raw = analysis_resp.get("data")
+                    analysis_data: Dict[str, Any] = (
+                        analysis_data_raw if isinstance(analysis_data_raw, dict) else {}
                     )
                     analysis_resp["data"] = {
-                        **dict(analysis_data),
+                        **analysis_data,
                         "orchestrator_trace": orchestrator_trace,
                     }
                 return {"output": analysis_resp}
 
-            if isinstance(data_response, dict):
-                data_data = (
-                    data_response.get("data")
-                    if isinstance(data_response.get("data"), dict)
-                    else {}
-                )
-                data_response["data"] = {
-                    **dict(data_data),
-                    "orchestrator_trace": orchestrator_trace,
-                }
+            data_response.data["orchestrator_trace"] = orchestrator_trace
+
             return {"output": data_response}
 
         logger.info(
@@ -329,7 +307,7 @@ class OrchestratorExecutor:
         data_query = plan.get("data_query") or user_text
         analysis_goal = plan.get("analysis_goal") or ""
 
-        orchestrator_trace = {
+        orchestrator_trace_new: OrchestratorTrace = {
             "needs_data": needs_data,
             "needs_analysis": needs_analysis,
             "data_query": data_query,
@@ -339,13 +317,12 @@ class OrchestratorExecutor:
         if callable(stream_callback):
             try:
                 stream_callback(
-                    {"type": "orchestrator_plan", "trace": orchestrator_trace}
+                    {"type": "orchestrator_plan", "trace": orchestrator_trace_new}
                 )
             except Exception:
                 pass
 
         # 2) DataAgent
-        data_response: ToolResponse
         if needs_data:
             logger.info(f"Invoking DataAgent - data_query: {data_query[:100]}")
             if callable(stream_callback):
@@ -366,22 +343,16 @@ class OrchestratorExecutor:
                     "stream_callback": stream_callback,
                 }
             )
-            data_response = (
-                raw.get("output", raw)
-                if isinstance(raw, dict)
-                else make_tool_response(
-                    tool_name="data_agent",
-                    message=str(raw),
-                    error=False,
-                )
-            )
+            print(f"OrchestratorAgentService invoke: raw={raw}")
+            data_response = raw.get("output")
+
             logger.debug(f"DataAgent completed - response type: {type(data_response)}")
         else:
             logger.info(
                 "DataAgent skipped - no data gathering needed per orchestrator plan"
             )
             # No data needed: answer directly with orchestrator
-            data_response = make_tool_response(
+            data_response = ToolResponse(
                 tool_name="orchestrator",
                 message=user_text,  # placeholder; next step will answer properly
                 error=False,
@@ -389,33 +360,20 @@ class OrchestratorExecutor:
 
         # If DataAgent paused (e.g. location confirmation), return immediately and
         # attach orchestrator metadata so the UI can resume without replanning.
-        if isinstance(data_response, dict):
-            data_data = (
-                data_response.get("data")
-                if isinstance(data_response.get("data"), dict)
-                else {}
-            )
-            if bool(data_data.get("needs_location_confirmation")) is True:
+        if data_response.data:
+            if data_response.data.get("needs_location_confirmation", False):
                 logger.info("DataAgent paused - location confirmation needed")
-                pause = (
-                    data_data.get("pause")
-                    if isinstance(data_data.get("pause"), dict)
-                    else {}
-                )
+                pause_raw = data_response.data.get("pause")
+                pause: Dict[str, Any] = pause_raw if isinstance(pause_raw, dict) else {}
                 logger.debug(
                     f"Initial pause payload keys: {list(pause.keys())}, has_resume_state: {'resume_state' in pause}"
                 )
-                data_response["data"] = {
-                    **dict(data_data),
-                    "orchestrator_trace": orchestrator_trace,
-                    "pause": {
-                        **dict(pause),
-                        "orchestrator_trace": orchestrator_trace,
-                        "needs_analysis": needs_analysis,
-                        "analysis_goal": analysis_goal,
-                        "user_text": user_text,
-                    },
-                }
+                data_response.data["orchestrator_trace"] = orchestrator_trace_new
+                pause["orchestrator_trace"] = orchestrator_trace_new
+                pause["needs_analysis"] = needs_analysis
+                pause["analysis_goal"] = analysis_goal
+                pause["user_text"] = user_text
+                data_response.data["pause"] = pause
                 logger.info(
                     f"Enriched pause state with orchestrator context - user_text: {user_text[:100]}, needs_analysis: {needs_analysis}"
                 )
@@ -435,11 +393,10 @@ class OrchestratorExecutor:
                     HumanMessage(content=direct_user_text),
                 ]
             )
-            resp = make_tool_response(
+            resp = ToolResponse(
                 tool_name="orchestrator", message=str(msg.content), error=False
             )
-            resp_data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-            resp["data"] = {**dict(resp_data), "orchestrator_trace": orchestrator_trace}
+            resp.data = {**resp.data, "orchestrator_trace": orchestrator_trace_new}
             return {"output": resp}
 
         # 4) AnalysisAgent (optional)
@@ -469,7 +426,7 @@ class OrchestratorExecutor:
             analysis_resp = (
                 analysis_raw.get("output", analysis_raw)
                 if isinstance(analysis_raw, dict)
-                else make_tool_response(
+                else ToolResponse(
                     tool_name="analysis_agent",
                     message=str(analysis_raw),
                     error=False,
@@ -477,30 +434,21 @@ class OrchestratorExecutor:
             )
 
             if isinstance(analysis_resp, dict):
-                analysis_data = (
-                    analysis_resp.get("data")
-                    if isinstance(analysis_resp.get("data"), dict)
-                    else {}
+                analysis_data_raw = analysis_resp.get("data")
+                analysis_data_final: Dict[str, Any] = (
+                    analysis_data_raw if isinstance(analysis_data_raw, dict) else {}
                 )
                 analysis_resp["data"] = {
-                    **dict(analysis_data),
-                    "orchestrator_trace": orchestrator_trace,
+                    **analysis_data_final,
+                    "orchestrator_trace": orchestrator_trace_new,
                 }
             logger.info("Orchestrator workflow completed with AnalysisAgent")
             return {"output": analysis_resp}
 
         # 5) Otherwise: return DataAgent response
         logger.info("Orchestrator workflow completed with DataAgent only")
-        if isinstance(data_response, dict):
-            data_data = (
-                data_response.get("data")
-                if isinstance(data_response.get("data"), dict)
-                else {}
-            )
-            data_response["data"] = {
-                **dict(data_data),
-                "orchestrator_trace": orchestrator_trace,
-            }
+        data_response.data["orchestrator_trace"] = orchestrator_trace_new
+
         return {"output": data_response}
 
 

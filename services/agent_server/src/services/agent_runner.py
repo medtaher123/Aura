@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Callable
 
 from ..core.logger import get_logger
-from ..tools.contracts import ToolResponse, make_tool_response
+from ..tools.contracts import ToolResponse
 
 logger = get_logger("agent_runner")
 
@@ -77,15 +77,8 @@ def coerce_tool_response(obj: Any) -> ToolResponse:
     else:
         message = str(obj)
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="unknown",
         message=message,
-        artifacts={"maps": [], "thumbnails": [], "urls": []},
-        start_date=None,
-        end_date=None,
-        country=None,
-        city=None,
-        coordinates=None,
-        data=None,
         error=False,
     )

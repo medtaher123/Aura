@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from src.core import get_logger
 
 logger = get_logger("mcp-remote-tools")
@@ -83,16 +83,10 @@ async def _call_tool_async(tool_name: str, arguments: dict) -> Any:
         # If this is an ExceptionGroup, extract the actual errors
         if hasattr(e, "__cause__"):
             errors = e.__cause__
-            error_msgs = [f"{type(ex).__name__}: {ex}" for ex in errors]
-            error_msg = f"Multiple errors: {'; '.join(error_msgs)}"
-            logger.error(f"MCP tool call failed for {tool_name}: {error_msg}")
-            # Re-raise the first actual exception for clearer error messages
             if errors:
                 raise Exception(error_msg) from e
 
-        logger.error(
-            f"MCP tool call failed for {tool_name}: {type(e).__name__}: {error_msg}"
-        )
+        logger.error(f"MCP tool call failed for {tool_name}: {traceback.format_exc()}")
         raise
 
 

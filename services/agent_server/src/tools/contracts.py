@@ -5,9 +5,9 @@ Tools must return a standardized ToolResponse dict to keep the UI and agent laye
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing_extensions import Any, Dict, List, Literal, Optional, TypedDict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RiskQuery(BaseModel):
@@ -36,11 +36,13 @@ class GeoServerRiskQuery(BaseModel):
     render_mode: Literal["auto", "wms", "geojson"] = "auto"
 
 
-class ToolArtifacts(TypedDict):
+class ToolArtifacts(BaseModel):
+    """Artifacts that can be rendered in UI"""
+
     # `maps` can contain either HTML filenames (legacy) or structured map specs (e.g. Pydeck).
-    maps: List[Any]
-    thumbnails: List[str]
-    urls: List[str]
+    maps: list[Any] = Field(default=[])
+    thumbnails: list[str] = Field(default=[])
+    urls: list[str] = Field(default=[])
 
 
 class ToolCoordinates(TypedDict):
@@ -48,55 +50,16 @@ class ToolCoordinates(TypedDict):
     lon: float
 
 
-class ToolResponse(TypedDict):
+class ToolResponse(BaseModel):
     message: str
-    artifacts: ToolArtifacts
-    tool_name: str
-    start_date: Optional[str]
-    end_date: Optional[str]
-    country: Optional[str]
-    city: Optional[str]
-    coordinates: Optional[ToolCoordinates]
-    data: Optional[Dict[str, Any]]
-    error: bool
-
-
-def make_tool_response(
-    *,
-    tool_name: str,
-    message: str,
-    artifacts: Optional[ToolArtifacts] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    country: Optional[str] = None,
-    city: Optional[str] = None,
-    coordinates: Optional[ToolCoordinates] = None,
-    data: Optional[Dict[str, Any]] = None,
-    error: bool = False,
-) -> ToolResponse:
-    """Create a standardized ToolResponse dict.
-
-    Notes:
-    - Always return all keys (UI and agent logic depends on that).
-    - Put tool-specific payloads in `data`.
-    - Put any renderable assets in `artifacts`.
-    """
-
-    normalized_artifacts: ToolArtifacts = artifacts or {"maps": [], "thumbnails": [], "urls": []}
-    # Defensive normalization
-    normalized_artifacts.setdefault("maps", [])
-    normalized_artifacts.setdefault("thumbnails", [])
-    normalized_artifacts.setdefault("urls", [])
-
-    return {
-        "message": message,
-        "artifacts": normalized_artifacts,
-        "tool_name": tool_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "country": country,
-        "city": city,
-        "coordinates": coordinates,
-        "data": data,
-        "error": bool(error),
-    }
+    tool_name: str = Field(..., description="Name of the tool that was called")
+    artifacts: ToolArtifacts = Field(default=ToolArtifacts(), description="Artifacts")
+    start_date: Optional[str] = Field(default=None, description="Start date")
+    end_date: Optional[str] = Field(default=None, description="End date")
+    country: Optional[str] = Field(default=None, description="Country")
+    city: Optional[str] = Field(default=None, description="City")
+    coordinates: Optional[ToolCoordinates] = Field(
+        default=None, description="Coordinates"
+    )
+    data: Dict[str, Any] = Field(default={}, description="Data")
+    error: bool = Field(default=False, description="Whether an error occurred")

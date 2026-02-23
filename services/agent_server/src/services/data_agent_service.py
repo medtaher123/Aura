@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
@@ -16,7 +16,7 @@ from ..core.logger import get_logger
 from ..core.prompts import get_data_agent_react_prompt
 from .llm_service import get_chat_llm
 from ..tools.tools import get_all_tools
-from ..tools.contracts import ToolResponse, make_tool_response
+from ..tools.contracts import ToolArtifacts, ToolResponse
 
 logger = get_logger("data_agent")
 
@@ -193,7 +193,7 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
             logger.error(f"     Tool input: {json.dumps(tool_input, indent=2)}")
             logger.error(f"     Exception: {first_error}")
             logger.error(f"     Expected a JSON object with keys: {fields}")
-            return make_tool_response(
+            return ToolResponse(
                 tool_name=tool_name,
                 message=(
                     f"❌ Tool invocation failed: {first_error or 'invalid input'}\n"
@@ -215,7 +215,7 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
         logger.error(f"     Tool: {tool.name}")
         logger.error(f"     Tool input: {json.dumps(tool_input, indent=2)}")
         logger.error(f"     Exception: {e}")
-        return make_tool_response(
+        return ToolResponse(
             tool_name=tool_name,
             message=f"❌ Tool invocation failed: {e}",
             data={"exception": repr(e), "tool_input": str(tool_input)},
@@ -224,34 +224,45 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
 
 
 def _coerce_tool_response(obj: Any, *, tool_name: str) -> ToolResponse:
-    if (
-        isinstance(obj, dict)
-        and "message" in obj
-        and "artifacts" in obj
-        and "tool_name" in obj
-        and "error" in obj
-    ):
-        # Ensure artifacts keys exist
-        artifacts = obj.get("artifacts") or {"maps": [], "thumbnails": [], "urls": []}
-        if isinstance(artifacts, dict):
-            artifacts.setdefault("maps", [])
-            artifacts.setdefault("thumbnails", [])
-            artifacts.setdefault("urls", [])
-        obj["artifacts"] = artifacts
-        return obj  # type: ignore[return-value]
-
-    return make_tool_response(
+    resp = ToolResponse(
         tool_name=tool_name,
         message=str(obj),
-        artifacts={"maps": [], "thumbnails": [], "urls": []},
         data={"raw": str(obj)},
         error=False,
     )
+    if "artifacts" in obj:
+        resp.artifacts.maps = obj["artifacts"].get("maps", [])
+        resp.artifacts.thumbnails = obj["artifacts"].get("thumbnails", [])
+        resp.artifacts.urls = obj["artifacts"].get("urls", [])
+
+    if "message" in obj:
+        resp.message = obj["message"]
+    if "tool_name" in obj:
+        resp.tool_name = obj["tool_name"]
+    if "data" in obj:
+        resp.data = obj["data"]
+    if "error" in obj:
+        resp.error = obj["error"]
+    if "start_date" in obj:
+        resp.start_date = obj["start_date"]
+    if "end_date" in obj:
+        resp.end_date = obj["end_date"]
+    if "country" in obj:
+        resp.country = obj["country"]
+    if "city" in obj:
+        resp.city = obj["city"]
+    if "coordinates" in obj:
+        resp.coordinates = obj["coordinates"]
+
+    return resp
 
 
 def _merge_steps_into_response(
     user_text: str, steps: list[ToolResponse], final_message: Optional[str]
 ) -> ToolResponse:
+    logger.info(
+        f"Merging steps into response - user_text: {user_text}, steps: {steps}, final_message: {final_message}"
+    )
     merged_maps_str: list[str] = []
     merged_maps_other: list[Any] = []
     merged_thumbs: list[str] = []
@@ -261,24 +272,20 @@ def _merge_steps_into_response(
     coordinates = None
 
     for r in steps:
-        artifacts = r.get("artifacts") or {}
-        for x in artifacts.get("maps") or []:
+        artifacts = r.artifacts
+        for x in artifacts.maps:
             if isinstance(x, str):
                 merged_maps_str.append(x)
             elif isinstance(x, dict):
                 merged_maps_other.append(x)
-        merged_thumbs.extend(
-            [x for x in (artifacts.get("thumbnails") or []) if isinstance(x, str)]
-        )
-        merged_urls.extend(
-            [x for x in (artifacts.get("urls") or []) if isinstance(x, str)]
-        )
+        merged_thumbs.extend([x for x in (artifacts.thumbnails) if isinstance(x, str)])
+        merged_urls.extend([x for x in (artifacts.urls) if isinstance(x, str)])
 
-        start_date = start_date or r.get("start_date")
-        end_date = end_date or r.get("end_date")
-        country = country or r.get("country")
-        city = city or r.get("city")
-        coordinates = coordinates or r.get("coordinates")
+        start_date = start_date or r.start_date
+        end_date = end_date or r.end_date
+        country = country or r.country
+        city = city or r.city
+        coordinates = coordinates or r.coordinates
 
     # De-dup while preserving order
     def dedup(xs: list[str]) -> list[str]:
@@ -382,11 +389,7 @@ def _merge_steps_into_response(
     else:
         # fallback: concatenate tool messages
         message = "\n\n".join(
-            [
-                f"{r.get('tool_name')}: {r.get('message')}"
-                for r in steps
-                if r.get("message")
-            ]
+            [f"{r.tool_name}: {r.message}" for r in steps if r.message]
         )
 
     # Overall error semantics: the DataAgent may try multiple tools (or retry the
@@ -395,16 +398,14 @@ def _merge_steps_into_response(
     # per-step failures via `data.tool_calls`.
     overall_error = False
     if steps:
-        overall_error = all(bool(r.get("error")) for r in steps)
+        overall_error = all(bool(r.error) for r in steps)
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="data_agent",
         message=message or "No data gathered.",
-        artifacts={
-            "maps": merged_maps,
-            "thumbnails": merged_thumbs,
-            "urls": merged_urls,
-        },
+        artifacts=ToolArtifacts(
+            maps=merged_maps, thumbnails=merged_thumbs, urls=merged_urls
+        ),
         start_date=start_date,
         end_date=end_date,
         country=country,
@@ -414,10 +415,10 @@ def _merge_steps_into_response(
             "user_query": user_text,
             "tool_calls": [
                 {
-                    "tool_name": r.get("tool_name"),
-                    "error": r.get("error"),
-                    "message": r.get("message"),
-                    "data": r.get("data"),
+                    "tool_name": r.tool_name,
+                    "error": r.error,
+                    "message": r.message,
+                    "data": r.data,
                 }
                 for r in steps
             ],
@@ -487,7 +488,7 @@ def create_data_agent_executor(
         llm = get_chat_llm()
     prompt = get_data_agent_react_prompt(list(tool_map.keys()))
 
-    graph = StateGraph(dict)
+    graph = StateGraph(dict)  # type: ignore[arg-type]
 
     def _norm_key(s: str) -> str:
         return " ".join(str(s).strip().lower().split())
@@ -571,10 +572,10 @@ def create_data_agent_executor(
         history_lines = []
         for i, r in enumerate(steps[-5:], start=1):
             tool_input = None
-            if isinstance(r.get("data"), dict):
-                tool_input = r.get("data", {}).get("tool_input")
+            if isinstance(r.data, dict):
+                tool_input = r.data.get("tool_input")
             history_lines.append(
-                f"{i}) tool={r.get('tool_name')} error={r.get('error')} input={tool_input} message={r.get('message')}"
+                f"{i}) tool={r.tool_name} error={r.error} input={tool_input} message={r.message}"
             )
         history = "\n".join(history_lines) if history_lines else "(none)"
 
@@ -761,7 +762,7 @@ def create_data_agent_executor(
             return next_state
         if tool is None:
             steps.append(
-                make_tool_response(
+                ToolResponse(
                     tool_name=tool_name,
                     message=f"Tool '{tool_name}' not found.",
                     data={"requested_tool": tool_name},
@@ -785,26 +786,28 @@ def create_data_agent_executor(
             try:
                 raw = _invoke_tool_safely(tool, tool_input)
             except Exception as e:
-                raw = make_tool_response(
+                raw = ToolResponse(
                     tool_name=tool_name,
                     message=f"❌ Tool '{tool_name}' raised an exception: {e}",
                     data={"exception": repr(e), "tool_input": str(tool_input)},
                     error=True,
                 )
 
-            coerced = _coerce_tool_response(raw, tool_name=tool_name)
-
+            coerced: ToolResponse = _coerce_tool_response(raw, tool_name=tool_name)
             # Attach safe trace metadata for UI/debugging (do not rely on this for tool correctness).
-            meta = coerced.get("data") if isinstance(coerced.get("data"), dict) else {}
-            meta = dict(meta)
-            meta.setdefault("tool_input", tool_input)
-            if planner_commentary:
-                meta.setdefault("commentary", planner_commentary)
-            coerced["data"] = meta
+            meta = coerced.data if coerced.data else {}
+            if meta.get("tool_input") is None:
+                meta["tool_input"] = tool_input
+            if meta.get("commentary") is None:
+                meta["commentary"] = planner_commentary
+            coerced.data = meta
 
             # Pause point: let the UI ask the user to disambiguate the location,
             # then resume from this exact tool call (without re-running prior steps).
             if bool(meta.get("needs_location_confirmation")) is True:
+                logger.info(
+                    f"DataAgent tool requires location confirmation: tool={tool_name}, step={step_count + 1}/{max_steps}"
+                )
                 paused_state = dict(next_state)
                 paused_state.pop("stream_callback", None)  # not serializable
                 paused_state.pop("output", None)
@@ -824,6 +827,10 @@ def create_data_agent_executor(
                 next_state["final_message"] = ""
 
                 if callable(stream_callback):
+                    logger.info(
+                        "Streaming data agent finalizing with message: Waiting for location confirmation…"
+                    )
+                    logger.debug(f"DataAgent finalizing state: {next_state}")
                     try:
                         stream_callback(
                             {
@@ -831,12 +838,13 @@ def create_data_agent_executor(
                                 "message": "Waiting for location confirmation…",
                             }
                         )
-                    except Exception:
+                    except Exception as e:
+                        logger.error(f"Error streaming data agent finalizing: {e}")
                         pass
                 return next_state
 
             logger.info(
-                f"DataAgent tool completed: tool={tool_name}, error={coerced.get('error')}, step={step_count + 1}/{max_steps}"
+                f"DataAgent tool completed: tool={tool_name}, error={coerced.error}, step={step_count + 1}/{max_steps}"
             )
             steps.append(coerced)
 
@@ -853,8 +861,8 @@ def create_data_agent_executor(
                             "tool_name": tool_name,
                             "commentary": planner_commentary,
                             "tool_input": tool_input,
-                            "observation": coerced.get("message"),
-                            "error": bool(coerced.get("error")),
+                            "observation": coerced.message,
+                            "error": coerced.error,
                         }
                     )
                 except Exception:
@@ -894,21 +902,13 @@ def create_data_agent_executor(
         return next_state
 
     def finalize_node(state: dict) -> dict:
+        logger.info(f"DataAgent finalizing - finalize_node state: {state}")
         # If the agent paused (e.g. location confirmation), return that tool response
         # directly (do not merge as final answer), and attach a resumable state blob.
-        pause = state.get("pause")
-        if (
-            isinstance(pause, dict)
-            and isinstance(pause.get("tool_response"), dict)
-            and isinstance(pause.get("pause"), dict)
-        ):
-            tool_resp = dict(pause["tool_response"])
-            tool_data = (
-                tool_resp.get("data") if isinstance(tool_resp.get("data"), dict) else {}
-            )
-            tool_data = dict(tool_data)
-            tool_data["pause"] = pause["pause"]
-            tool_resp["data"] = tool_data
+        pause = state.get("pause", {})
+        if isinstance(pause.get("pause"), dict):
+            tool_resp: ToolResponse = pause.get("tool_response")
+            tool_resp.data["pause"] = pause["pause"]
 
             next_state = dict(state)
             next_state["output"] = tool_resp

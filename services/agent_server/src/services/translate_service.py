@@ -4,6 +4,7 @@ Handles language detection and translation between user's language and English.
 """
 
 import re
+from typing import Optional
 from langdetect import detect
 from deep_translator import GoogleTranslator
 
@@ -110,7 +111,7 @@ def translate_to_english(text: str) -> str:
         return text
 
 
-def translate_from_english(text: str, target_lang: str = None) -> str:
+def translate_from_english(text: str, target_lang: Optional[str] = None) -> str:
     """Translate text from English to target language."""
     try:
         if target_lang == "en" or not target_lang:
@@ -123,7 +124,7 @@ def translate_from_english(text: str, target_lang: str = None) -> str:
         return unprotect(translated)
 
     except Exception as e:
-        logger.error(f"Translation failed from English to {target_lang}: {e}", exc_info=True)
+        logger.error(f"Translation failed from English to {target_lang}: {e}")
         return text
 
 
