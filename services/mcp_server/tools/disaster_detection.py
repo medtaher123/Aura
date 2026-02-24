@@ -5,6 +5,7 @@ from datetime import datetime
 import math
 import re
 from geopy.geocoders import Nominatim
+from geopy.location import Location as GeopyLocation
 import time
 from mcp_singleton import mcp
 
@@ -145,14 +146,9 @@ def _safe_float(x) -> Optional[float]:
 
 
 def _infer_view_state(
-    points: list[dict], *, coords: dict[str, float] | None = None
+    points: list[dict], *, coords: Optional[ToolCoordinates] = None
 ) -> dict:
-    # Prefer an explicit coords (e.g., city/country extent) when available.
-    if (
-        isinstance(coords, dict)
-        and coords.get("lat") is not None
-        and coords.get("lon") is not None
-    ):
+    if coords is not None:
         return view_state_from_bbox(coords, padding=0.18, min_zoom=4.0, max_zoom=9)
     return view_state_from_points(points or [], padding=0.18, min_zoom=4.0, max_zoom=9)
 
@@ -452,8 +448,9 @@ def query_disaster_events_tool(
                     for place in places:
                         geocode_attempts += 1
                         try:
-                            loc = geolocator.geocode(
-                                f"{place}, {country_e}", timeout=10
+                            loc: GeopyLocation | None = geolocator.geocode(
+                                f"{place}, {country_e}",
+                                timeout=10.0 # type: ignore[arg-type]
                             )
                             if loc:
                                 lat = float(loc.latitude)
@@ -526,20 +523,18 @@ def query_disaster_events_tool(
             f" Geocoded {geocode_success}/{geocode_attempts} missing locations."
         )
 
-    artifacts = {"maps": [], "thumbnails": [], "urls": []}
+    artifacts = ToolArtifacts()
     # Keep legacy behavior: don't render a map only when the *only* requested type is transport.
     only_transport = len(requested_types) == 1 and requested_types[0] == "transport"
     if not only_transport and map_points:
-        artifacts["maps"].append(
+        artifacts.maps.append(
             {
                 "title": f"Disaster events in {country_name}",
                 "view_state": _infer_view_state(
                     map_points,
-                    coords=location_coordinates.model_dump()
+                    coords=location_coordinates
                     if location_coordinates
-                    else country_coords.model_dump()
-                    if country_coords
-                    else None,
+                    else country_coords,
                 ),
                 "tooltip": {
                     "text": "{emoji} {type}\n{location}, {country}\n{start_date} → {end_date}\nDeaths: {total_deaths}\nAffected: {total_affected}",
@@ -576,11 +571,7 @@ def query_disaster_events_tool(
     return ToolResponse(
         tool_name="query_disaster_events_tool",
         message=human_text,
-        artifacts=ToolArtifacts(
-            maps=artifacts["maps"],
-            thumbnails=artifacts["thumbnails"],
-            urls=artifacts["urls"],
-        ),
+        artifacts=artifacts,
         country=country_name,
         city=location
         if isinstance(location, str) and location.strip() and location_bbox is not None

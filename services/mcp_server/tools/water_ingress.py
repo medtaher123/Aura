@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import requests
 import rasterio
+import rasterio.transform
 import numpy as np
 import matplotlib.pyplot as plt
 from mcp_singleton import mcp
@@ -353,7 +354,7 @@ def estimate_surface_water_ingress(location_input):
                 "Risk map: red areas indicate likely accumulation."
             ),
             "Location": location_info,
-            "Coordinates": {"lat": float(lat), "lon": float(lon)},
+            "Coordinates": ToolCoordinates(lat=float(lat), lon=float(lon)),
             "Bounds": bounds,
         }
     finally:
@@ -493,14 +494,12 @@ def estimate_surface_water_ingress_tool(
         if isinstance(maps, dict):
             risk_points = maps.get("Risk_points")
             coords = result.get("Coordinates")
-            if isinstance(risk_points, list) and isinstance(coords, dict):
+            if isinstance(risk_points, list) and isinstance(coords, ToolCoordinates):
                 view_state = (
                     view_state_from_bbox(
                         coords, padding=0.20, min_zoom=2.0, max_zoom=12.0
                     )
                     if coords is not None
-                    and coords.get("lat") is not None
-                    and coords.get("lon") is not None
                     else view_state_from_points(
                         risk_points, padding=0.20, min_zoom=2.0, max_zoom=12.0
                     )
@@ -522,12 +521,8 @@ def estimate_surface_water_ingress_tool(
         coords = None
         try:
             c = result.get("Coordinates")
-            if (
-                isinstance(c, dict)
-                and c.get("lat") is not None
-                and c.get("lon") is not None
-            ):
-                coords = ToolCoordinates(lat=float(c["lat"]), lon=float(c["lon"]))
+            if isinstance(c, ToolCoordinates):
+                coords = c
         except Exception:
             coords = None
 

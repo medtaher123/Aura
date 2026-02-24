@@ -6,7 +6,7 @@ import requests
 from mcp_singleton import mcp
 from core.logger import get_logger
 from config import get_config
-from utils.contracts import ToolArtifacts, ToolResponse
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from shapely.geometry import shape
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
@@ -210,7 +210,7 @@ def _summarize_features(feature_collection: dict[str, Any]) -> dict[str, Any]:
 def _view_state_from_bounds(bounds: Optional[list[float]]) -> dict[str, float]:
     if bounds and len(bounds) == 4:
         minx, miny, maxx, maxy = bounds
-        coords = {"lat": (miny + maxy) / 2, "lon": (minx + maxx) / 2}
+        coords = ToolCoordinates(lat=(miny + maxy) / 2, lon=(minx + maxx) / 2)
         return view_state_from_bbox(coords, padding=0.12, min_zoom=2.0, max_zoom=10.5)
     return {"latitude": 36.8, "longitude": 10.2, "zoom": 8}
 

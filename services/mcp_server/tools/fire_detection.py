@@ -11,7 +11,7 @@ from utils.map_view_service import (
     view_state_from_points,
 )
 from mcp_singleton import mcp
-from utils.contracts import ToolArtifacts, ToolResponse
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 
 logger = get_logger(__name__)
 config = get_config()
@@ -146,7 +146,7 @@ def detect_fire_near_city(
             logger.error(f"Invalid coordinates: lat={lat}, lon={lon}")
             raise GeocodingError(f"Invalid coordinates: lat={lat}, lon={lon}")
 
-        coords = {"lat": lat_city_f, "lon": lon_city_f}
+        coords = ToolCoordinates(lat=lat_city_f, lon=lon_city_f)
         resolved_name = None
         if not isinstance(city_name, str) or not city_name.strip():
             try:
@@ -164,7 +164,7 @@ def detect_fire_near_city(
         )
         print("City bbox:", bbox)
         print("City coordinates:", lat_city, lon_city)
-        if lat_city is None:
+        if lat_city is None or lon_city is None:
             raise GeocodingError(
                 f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
             )
@@ -177,7 +177,7 @@ def detect_fire_near_city(
                 f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
             )
 
-        coords = {"lat": lat_city_f, "lon": lon_city_f}
+        coords = ToolCoordinates(lat=lat_city_f, lon=lon_city_f)
         resolved_name = city_name_final or city_name
 
         if isinstance(bbox, list) and len(bbox) == 4:
@@ -330,7 +330,7 @@ def detect_fire_tool(
         result = detect_fire_near_city(
             start_date,
             end_date,
-            location,
+            location or "",
             radius_km_f,
             lat=lat,
             lon=lon,
@@ -394,13 +394,13 @@ def detect_fire_tool(
         coords = result.get("coords") if isinstance(result, dict) else None
         view_state = (
             view_state_from_bbox(
-                coords or {},
+                coords,
                 padding=0.18,
                 min_zoom=5.0,
                 max_zoom=10.5,
                 radius=radius_km_f,
             )
-            if isinstance(bbox, list) and len(bbox) == 4
+            if isinstance(bbox, list) and len(bbox) == 4 and coords is not None
             else view_state_from_points(
                 points or [],
                 padding=0.18,

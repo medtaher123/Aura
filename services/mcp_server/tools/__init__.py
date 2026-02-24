@@ -15,7 +15,7 @@ from tools.itinerary import get_route_info
 from tools.risk_geoserver import geoserver_risk_mask_tool
 from tools.weather import weather_tool
 from tools.geographic_info import geo_info_tool
-
+from tools.flood_depth_damage import flood_depth_damage_tool
 from tools.streamflow import streamflow_forecast_tool
 from tools.floods_and_droughts import drought_flood_risk_tool
 from tools.nasa_power import nasa_power_daily_tool, nasa_power_hourly_tool
@@ -40,4 +40,5 @@ __all__ = [
     "nasa_power_daily_tool",
     "infrastructure_query_tool",
     "tools_info_tool",
+    "flood_depth_damage_tool",
 ]

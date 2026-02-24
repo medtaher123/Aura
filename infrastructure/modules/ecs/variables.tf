@@ -28,53 +28,49 @@ variable "security_group_ids" {
   type        = list(string)
 }
 
-# =============================================================================
-# MCP Server Variables
-# =============================================================================
-
-variable "mcp_server_cpu" {
-  description = "CPU units for MCP server task"
+variable "task_cpu" {
+  description = "CPU units for the task"
   type        = string
 }
 
-variable "mcp_server_memory" {
-  description = "Memory for MCP server task"
+variable "task_memory" {
+  description = "Memory for the task"
   type        = string
 }
 
-variable "mcp_server_desired_count" {
-  description = "Desired number of MCP server tasks"
+variable "desired_count" {
+  description = "Desired number of tasks"
   type        = number
 }
 
-variable "mcp_server_container_image" {
-  description = "Docker image for MCP server"
+variable "container_image" {
+  description = "Docker image for the container"
   type        = string
 }
 
-variable "mcp_server_container_port" {
-  description = "Port exposed by the MCP server container"
+variable "container_port" {
+  description = "Port exposed by the container"
   type        = number
   default     = 8000
 }
 
-variable "mcp_server_log_level" {
-  description = "Log level for MCP server"
+variable "log_level" {
+  description = "Log level for the application"
   type        = string
 }
 
-variable "mcp_server_workers" {
-  description = "Number of workers for MCP server"
+variable "workers" {
+  description = "Number of workers"
   type        = string
 }
 
-variable "mcp_server_execution_role_arn" {
-  description = "ARN of the task execution role for MCP Server"
+variable "execution_role_arn" {
+  description = "ARN of the task execution role"
   type        = string
 }
 
-variable "mcp_server_task_role_arn" {
-  description = "ARN of the task role for MCP Server"
+variable "task_role_arn" {
+  description = "ARN of the task role"
   type        = string
 }
 
@@ -106,72 +102,52 @@ variable "fire_archive_dir" {
   default     = "/tmp/fire_archive"
 }
 
-# =============================================================================
-# Agent Server Variables
-# =============================================================================
-
-variable "agent_server_enabled" {
-  description = "Whether to deploy the Agent Server"
-  type        = bool
-  default     = true
-}
-
-variable "agent_server_container_image" {
-  description = "Docker image for Agent Server"
+# Streamlit Service Variables
+variable "streamlit_container_image" {
+  description = "Docker image for Streamlit container"
   type        = string
   default     = ""
 }
 
-variable "agent_server_container_port" {
-  description = "Port exposed by the Agent Server container"
-  type        = number
-  default     = 8080
-}
-
-variable "agent_server_task_cpu" {
-  description = "CPU units for Agent Server task"
-  type        = string
-  default     = "512"
-}
-
-variable "agent_server_task_memory" {
-  description = "Memory for Agent Server task"
-  type        = string
-  default     = "1024"
-}
-
-variable "agent_server_desired_count" {
-  description = "Desired number of Agent Server tasks"
-  type        = number
-  default     = 1
-}
-
-variable "agent_server_log_level" {
-  description = "Log level for Agent Server"
-  type        = string
-  default     = "info"
-}
-
-variable "agent_server_workers" {
-  description = "Number of workers for Agent Server"
-  type        = string
-  default     = "1"
-}
-
-variable "agent_server_mcp_server_url" {
-  description = "MCP Server URL for Agent Server to connect to"
-  type        = string
-  default     = "http://localhost:8000"
-}
-
-variable "agent_server_bedrock_model_id" {
-  description = "AWS Bedrock model ID for LLM"
-  type        = string
-  default     = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-}
-
-variable "agent_server_bedrock_max_tokens" {
-  description = "Max tokens for Bedrock LLM responses"
+variable "streamlit_cpu" {
+  description = "CPU units for Streamlit task"
   type        = string
   default     = "4096"
+}
+
+variable "streamlit_memory" {
+  description = "Memory for Streamlit task"
+  type        = string
+  default     = "8192"
+}
+
+variable "streamlit_desired_count" {
+  description = "Desired number of Streamlit tasks"
+  type        = number
+  default     = 2
+}
+
+variable "target_group_arn" {
+  description = "ARN of the ALB target group for Streamlit"
+  type        = string
+  default     = ""
+}
+
+variable "mcp_server_url" {
+  description = "URL for MCP server (used by Streamlit)"
+  type        = string
+  default     = ""
+}
+
+variable "maptiler_api_key_arn" {
+  description = "ARN for Maptiler API key secret"
+  type        = string
+  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAPTILER_API_KEY-cfpZua"
+}
+
+# Service Discovery
+variable "service_discovery_registry_arn" {
+  description = "ARN of the service discovery registry for MCP server"
+  type        = string
+  default     = ""
 }

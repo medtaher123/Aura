@@ -711,7 +711,7 @@ def drought_flood_risk_tool(
 
         view_state = (
             view_state_from_bbox(
-                {"lat": lat, "lon": lon},
+                ToolCoordinates(lat=lat, lon=lon),
                 padding=0.22,
                 min_zoom=4.5,
                 max_zoom=10.5,

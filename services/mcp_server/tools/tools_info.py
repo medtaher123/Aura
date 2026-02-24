@@ -280,7 +280,7 @@ TOOLS_CATALOG = {
     },
     "infrastructure_query_tool": {
         "name": "Infrastructure Query Tool",
-        "purpose": "Query OpenStreetMap (OSM) data for infrastructure near a location using AWS Athena",
+        "purpose": "Query OpenStreetMap (OSM) infrastructure near a location using AWS Athena and display results on a map",
         "data_sources": [
             "AWS Athena with OSM tables",
             "S3 bucket for Athena query results",
@@ -288,17 +288,21 @@ TOOLS_CATALOG = {
         ],
         "capabilities": [
             "Query infrastructure by type (amenity, building, landuse)",
-            "Count and categorize infrastructure features",
-            "Spatial queries around a location"
+            "Count and categorize infrastructure features within a radius",
+            "Return a zoomed map and plot matching infrastructure points",
+            "Support location name or lat/lon coordinates"
         ],
         "example_questions": [
             "What infrastructure is near Paris?",
-            "Show me buildings and amenities in Berlin"
+            "How many hospitals are near Paris within 250 km?",
+            "Show me schools near Berlin within 20 km"
         ],
         "parameters": {
             "location": "Location to query",
-            "radius_km": "Search radius in kilometers",
-            "infrastructure_types": "Types of infrastructure to query"
+            "lat": "Optional latitude (if not using location name)",
+            "lon": "Optional longitude (if not using location name)",
+            "radius_km": "Search radius in kilometers (default: 50)",
+            "infrastructure_types": "Types of infrastructure to query (e.g., ['hospital', 'school'])"
         }
     },
     "geo_info_tool": {

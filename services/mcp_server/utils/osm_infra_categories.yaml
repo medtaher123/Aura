@@ -1,0 +1,117 @@
+# OSM infrastructure: tag keys we query and semantic categories.
+# When a query is about a "type", we look it up here and include all matching tag keys/values.
+
+# Tag keys used for infrastructure (in SELECT, GROUP BY, and WHERE).
+# Add more keys here; they will be included when that type is queried.
+infra_tag_keys:
+  - amenity
+  - building
+  - landuse
+  - industrial
+  - shop
+  - leisure
+  - tourism
+  - office
+  - highway
+  - man_made
+  - historic
+  - craft
+  - military
+
+# Semantic categories: query type -> tag_key -> list of values to match.
+# When user asks for "healthcare", we search tags['amenity'] IN (...).
+semantic_categories:
+  healthcare:
+    amenity:
+      - hospital
+      - clinic
+      - doctors
+      - dentist
+      - pharmacy
+      - nursing_home
+      - healthcare
+  education:
+    amenity:
+      - school
+      - college
+      - university
+      - kindergarten
+      - language_school
+      - music_school
+      - driving_school
+  emergency:
+    amenity:
+      - police
+      - fire_station
+      - ambulance_station
+      - emergency_service
+  transport:
+    amenity:
+      - bus_station
+      - ferry_terminal
+      - taxi
+      - parking
+      - fuel
+      - charging_station
+  industrial:
+    industrial:
+      - industrial
+      - factory
+      - warehouse
+      - manufacture
+      - works
+      - depot
+    building:
+      - industrial
+      - factory
+      - warehouse
+  commercial:
+    shop: []   # any non-null; filled from type_to_tag_keys or "all" at runtime
+    amenity:
+      - bank
+      - atm
+      - marketplace
+  leisure:
+    leisure: []   # any
+  tourism:
+    tourism: []   # any
+  office:
+    office: []   # any
+  residential:
+    building:
+      - residential
+      - house
+      - apartments
+      - detached
+      - semidetached_house
+  government:
+    office:
+      - government
+    amenity:
+      - townhall
+      - courthouse
+  religion:
+    amenity:
+      - place_of_worship
+
+# Alias: user input -> category name (semantic) or tag key (e.g. "shop" -> use tag key "shop")
+aliases:
+  health: healthcare
+  medical: healthcare
+  education_facilities: education
+  educational: education
+  schools: education
+  emergency_services: emergency
+  transportation: transport
+  industry: industrial
+  manufacturing: industrial
+  commercial: commercial
+  shops: shop
+  retail: shop
+  leisure: leisure
+  tourism: tourism
+  offices: office
+  residential: residential
+  government: government
+  religious: religion
+  worship: religion

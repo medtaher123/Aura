@@ -5,8 +5,7 @@ set -e
 trap 'kill -TERM $STREAMLIT_PID 2>/dev/null; wait' SIGTERM SIGINT
 
 echo "Starting Streamlit application..."
-cd src/ui
-streamlit run streamlit_app.py \
+streamlit run src/ui/streamlit_app.py \
     --server.port=8501 \
     --server.address=0.0.0.0 \
     --server.headless=true \
@@ -14,6 +13,6 @@ streamlit run streamlit_app.py \
     --server.enableXsrfProtection=false &
 STREAMLIT_PID=$!
 
-# Wait for both processes
+# Wait for process
 wait -n
 exit $?

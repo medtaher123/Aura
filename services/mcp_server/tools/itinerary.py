@@ -3,7 +3,7 @@ import requests
 from mcp_singleton import mcp
 
 from core.logger import get_logger
-from utils.contracts import ToolArtifacts, ToolResponse
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from utils.map_view_service import view_state_from_bbox
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
@@ -355,10 +355,10 @@ def get_route_info(
     )
 
     # Calculate center coordinates from start and end points
-    coords = {
-        "lat": (float(lat1) + float(lat2)) / 2,
-        "lon": (float(lon1) + float(lon2)) / 2,
-    }
+    coords = ToolCoordinates(
+        lat=(float(lat1) + float(lat2)) / 2,
+        lon=(float(lon1) + float(lon2)) / 2,
+    )
     view_state = view_state_from_bbox(coords, padding=0.20, min_zoom=2.0, max_zoom=12.0)
 
     map_spec = {

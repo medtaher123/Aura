@@ -47,6 +47,16 @@ class MCPServerConfig(BaseSettings):
         description="Directory for fire detection archives",
     )
 
+    # Athena / OSM infrastructure queries
+    athena_db: str = Field(
+        default="default",
+        description="Athena database/schema for OSM queries",
+    )
+    athena_output: str = Field(
+        default="s3://metaplanet-athena-query-results-96327/",
+        description="S3 URI for Athena query output results",
+    )
+
     # GDFC drought/flood data (S3 public bucket)
     gdfc_drought_s3: str = Field(
         default="",
@@ -63,6 +73,11 @@ class MCPServerConfig(BaseSettings):
     gdfc_flood_var: str = Field(
         default="",
         description="Optional GDFC flood variable name override",
+    )
+
+    aws_region: str = Field(
+        default="us-east-1",
+        description="Default AWS region for Athena/S3 clients",
     )
 
     model_config = SettingsConfigDict(

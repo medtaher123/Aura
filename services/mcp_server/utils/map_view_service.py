@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import math
 from typing import Any
+from typing_extensions import Optional
 
 from core.logger import get_logger
+from utils.contracts import ToolCoordinates
 
 logger = get_logger(__name__)
 
@@ -33,8 +35,8 @@ def _safe_float(x: Any) -> float | None:
         return None
 
 
-def bbox_from_points(points: list[dict[str, Any]]) -> list[float] | None:
-    """Compute bbox [min_lat, max_lat, min_lon, max_lon] from point dicts."""
+def bbox_from_points(points: list[dict[str, Any]]) -> Optional[ToolCoordinates]:
+    """Compute center point from a list of point dicts."""
     if not isinstance(points, list) or not points:
         return None
 
@@ -43,7 +45,6 @@ def bbox_from_points(points: list[dict[str, Any]]) -> list[float] | None:
     for p in points:
         if not isinstance(p, dict):
             continue
-        # Support common coordinate key variants.
         lat = _safe_float(p.get("lat"))
         if lat is None:
             lat = _safe_float(p.get("latitude"))
@@ -61,25 +62,24 @@ def bbox_from_points(points: list[dict[str, Any]]) -> list[float] | None:
     if not lats or not lons:
         return None
 
-    return {"lat": sum(lats) / len(lats), "lon": sum(lons) / len(lons)}  # center point
+    return ToolCoordinates(lat=sum(lats) / len(lats), lon=sum(lons) / len(lons))
 
 
 def view_state_from_bbox(
-    coords: dict[str, float],
+    coords: Optional[ToolCoordinates],
     *,
     padding: float = 0.15,
     min_zoom: float = 5.0,
     max_zoom: float = 10.5,
     radius: float | None = None,
 ) -> dict[str, float]:
-    """Derive a map view_state from bbox."""
-    # Use coords instead of bbox
-    if not isinstance(coords, dict):
+    """Derive a map view_state from coordinates."""
+    if coords is None:
         return {"latitude": 0.0, "longitude": 0.0, "zoom": float(min_zoom)}
 
     try:
-        center_lat = float(coords["lat"])
-        center_lon = float(coords["lon"])
+        center_lat = float(coords.lat)
+        center_lon = float(coords.lon)
     except Exception:
         return {"latitude": 0.0, "longitude": 0.0, "zoom": float(min_zoom)}
 

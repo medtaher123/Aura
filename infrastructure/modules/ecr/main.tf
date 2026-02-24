@@ -40,9 +40,9 @@ resource "aws_ecr_lifecycle_policy" "mcp_server" {
   })
 }
 
-# ECR Repository for Agent Server
-resource "aws_ecr_repository" "agent_server" {
-  name                 = "${var.project_name}-agent-server"
+# ECR Repository for Streamlit
+resource "aws_ecr_repository" "streamlit" {
+  name                 = "${var.project_name}-streamlit"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
@@ -54,15 +54,15 @@ resource "aws_ecr_repository" "agent_server" {
   }
 
   tags = {
-    Name        = "${var.project_name}-agent-server"
+    Name        = "${var.project_name}-streamlit"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
 }
 
-# ECR Lifecycle Policy for Agent Server - Keep last 10 images
-resource "aws_ecr_lifecycle_policy" "agent_server" {
-  repository = aws_ecr_repository.agent_server.name
+# ECR Lifecycle Policy for Streamlit - Keep last 10 images
+resource "aws_ecr_lifecycle_policy" "streamlit" {
+  repository = aws_ecr_repository.streamlit.name
 
   policy = jsonencode({
     rules = [
@@ -166,7 +166,7 @@ resource "aws_iam_policy" "github_actions_ecr" {
         ]
         Resource = [
           aws_ecr_repository.mcp_server.arn,
-          aws_ecr_repository.agent_server.arn
+          aws_ecr_repository.streamlit.arn
         ]
       },
       {
@@ -177,7 +177,7 @@ resource "aws_iam_policy" "github_actions_ecr" {
         ]
         Resource = [
           "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${var.project_name}-cluster/${var.project_name}-mcp-service",
-          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${var.project_name}-cluster/${var.project_name}-agent-service"
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${var.project_name}-cluster/${var.project_name}-streamlit-service"
         ]
       },
       {

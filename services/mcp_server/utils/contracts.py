@@ -23,6 +23,7 @@ class ToolCoordinates(BaseModel):
 
     lat: float = Field(..., description="Latitude")
     lon: float = Field(..., description="Longitude")
+    zoom: Optional[float] = Field(default=None, description="Map zoom level")
 
 
 class ToolResponse(BaseModel):
