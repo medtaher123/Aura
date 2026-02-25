@@ -6,19 +6,20 @@ import pytest
 import sys
 import os
 
+from src.models.tools import ToolResponse, ToolArtifacts
+
 # Ensure src is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 @pytest.fixture
-def sample_tool_response():
+def sample_tool_response() -> ToolResponse:
     """Create a sample ToolResponse for testing."""
-    from src.tools.contracts import make_tool_response
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="test_tool",
         message="Test message",
-        artifacts={"maps": ["test_map.html"], "thumbnails": [], "urls": []},
+        artifacts=ToolArtifacts(maps=["test_map.html"], thumbnails=[], urls=[]),
         start_date="2024-01-01",
         end_date="2024-12-31",
         country="France",

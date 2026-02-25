@@ -25,3 +25,5 @@ Data/
 *.swp
 *.swo
 *~
+maps/
+maps/*

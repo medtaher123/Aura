@@ -4,11 +4,13 @@
 pythonpath = [
     ".",
     "services/mcp_server",
+    "services/agent_server",
     "services/streamlit",
     "services/streamlit/src"
 ]
 testpaths = [
     "services/mcp_server/tests",
+    "services/agent_server/tests",
     "services/streamlit/src/tests"
 ]
 python_files = ["test_*.py"]
@@ -26,6 +28,7 @@ markers = [
 [tool.pyright]
 extraPaths = [
     "services/mcp_server",
+    "services/agent_server",
     "services/streamlit",
     "services/streamlit/src"
 ]

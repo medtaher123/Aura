@@ -1,6 +1,6 @@
 """LLM service module.
 
-This project use AWS Bedrock (Converse API) and is designed to be imported
+This project uses AWS Bedrock (Converse API) and is designed to be imported
 without immediately requiring AWS credentials (network calls only happen when
 `get_chat_llm()` is invoked).
 """
@@ -8,15 +8,19 @@ without immediately requiring AWS credentials (network calls only happen when
 from __future__ import annotations
 
 import os
-from functools import lru_cache
 from typing import Any, Optional
 
-from src.core.config import DEFAULT_LLM_TEMPERATURE
+from langchain_aws import ChatBedrock, ChatBedrockConverse
+
+from ..config import get_config
 
 
 DEFAULT_BEDROCK_MODEL_ID = os.getenv(
     "BEDROCK_MODEL_ID",
     "arn:aws:bedrock:eu-west-3:963275461308:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+)
+DEFAULT_BEDROCK_REGION = (
+    os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or "eu-west-3"
 )
 
 
@@ -58,7 +62,7 @@ def get_chat_llm(
     temperature: Optional[float] = 0.1,
     max_tokens: Optional[int] = None,
     top_p: Optional[float] = 0.3,
-) -> Any:
+) -> ChatBedrockConverse | ChatBedrock:
     """Return a LangChain chat model backed by AWS Bedrock.
 
     Configure via env vars:
@@ -80,7 +84,7 @@ def get_chat_llm(
     region = region or 'eu-west-3'
 
     if temperature is None:
-        temperature = float(DEFAULT_LLM_TEMPERATURE)
+        temperature = get_config().default_llm_temperature
     if max_tokens is None:
         max_tokens = int(os.getenv("BEDROCK_MAX_TOKENS", "1024"))
     if top_p is None:

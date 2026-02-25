@@ -1,6 +1,6 @@
 # ECR Repository for MCP Server
 resource "aws_ecr_repository" "mcp_server" {
-  name                 = "${var.project_name}-mcp"
+  name                 = "${var.project_name}-mcp-server"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
@@ -12,7 +12,7 @@ resource "aws_ecr_repository" "mcp_server" {
   }
 
   tags = {
-    Name        = "${var.project_name}-mcp"
+    Name        = "${var.project_name}-mcp-server"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }

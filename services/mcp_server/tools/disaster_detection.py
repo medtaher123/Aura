@@ -5,11 +5,12 @@ from datetime import datetime
 import math
 import re
 from geopy.geocoders import Nominatim
+from geopy.location import Location as GeopyLocation
 import time
 from mcp_singleton import mcp
 
 from core.logger import get_logger
-from utils.contracts import make_tool_response
+from utils.contracts import ToolResponse, ToolArtifacts, ToolCoordinates
 from typing import Optional
 
 from utils.bbox_service import get_city_candidates, reverse_geocode
@@ -145,14 +146,9 @@ def _safe_float(x) -> Optional[float]:
 
 
 def _infer_view_state(
-    points: list[dict], *, coords: dict[str, float] | None = None
+    points: list[dict], *, coords: Optional[ToolCoordinates] = None
 ) -> dict:
-    # Prefer an explicit coords (e.g., city/country extent) when available.
-    if (
-        isinstance(coords, dict)
-        and coords.get("lat") is not None
-        and coords.get("lon") is not None
-    ):
+    if coords is not None:
         return view_state_from_bbox(coords, padding=0.18, min_zoom=4.0, max_zoom=9)
     return view_state_from_points(points or [], padding=0.18, min_zoom=4.0, max_zoom=9)
 
@@ -233,7 +229,7 @@ def query_disaster_events_tool(
     lat: float | None = None,
     lon: float | None = None,
     disaster_type: str | list[str] = "flood",
-) -> dict:
+) -> ToolResponse:
     """
     Search for natural & technological disasters
     (flood, storm, earthquake, extreme temperature, drought,
@@ -283,7 +279,7 @@ def query_disaster_events_tool(
     else:
         iso3 = None
     if not iso3:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="query_disaster_events_tool",
             message=f"Country '{country_name}' not recognized.",
             country=country_name,
@@ -297,9 +293,8 @@ def query_disaster_events_tool(
     # Optional: location bbox filter (city/region within country)
     # -----------------------
     location_bbox: list[float] | None = None
-    country_bbox: list[float] | None = None
     location_display: str | None = None
-    location_coordinates: dict | None = None
+    location_coordinates: Optional[ToolCoordinates] = None
     radius_km = 100.0
 
     if lat is not None and lon is not None:
@@ -307,7 +302,7 @@ def query_disaster_events_tool(
             lat_f = float(lat)
             lon_f = float(lon)
         except Exception:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="query_disaster_events_tool",
                 message="Invalid coordinates provided. lat/lon must be numeric.",
                 country=country_name,
@@ -317,7 +312,7 @@ def query_disaster_events_tool(
             )
 
         location_bbox = [lat_f, lat_f, lon_f, lon_f]
-        location_coordinates = {"lat": lat_f, "lon": lon_f}
+        location_coordinates = ToolCoordinates(lat=lat_f, lon=lon_f)
         location_display = location
         if not (isinstance(location, str) and location.strip()):
             try:
@@ -336,7 +331,7 @@ def query_disaster_events_tool(
             candidates = get_city_candidates(query, limit=5)
 
             if len(candidates) > 1:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_disaster_events_tool",
                     message=f"I found multiple matches for '{location}'. Please confirm the correct location.",
                     country=country_name,
@@ -353,7 +348,7 @@ def query_disaster_events_tool(
                 )
 
             if not candidates or not candidates[0].get("bbox"):
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="query_disaster_events_tool",
                     message=f"Couldn't resolve '{location}' to a bounding box inside {country_name}.",
                     country=country_name,
@@ -370,7 +365,7 @@ def query_disaster_events_tool(
                 lat0 = candidates[0].get("lat")
                 lon0 = candidates[0].get("lon")
                 if lat0 is not None and lon0 is not None:
-                    location_coordinates = {"lat": float(lat0), "lon": float(lon0)}
+                    location_coordinates = ToolCoordinates(lat=lat0, lon=lon0)
             except Exception:
                 location_coordinates = None
 
@@ -378,7 +373,7 @@ def query_disaster_events_tool(
     # Country bbox (for country-wide framing)
     # -----------------------
     # If the user didn't specify a sub-location, try to frame the country itself.
-    country_coords: dict[str, float] | None = None
+    country_coords: Optional[ToolCoordinates] = None
     if location_bbox is None and isinstance(country_name, str) and country_name.strip():
         try:
             cands = get_city_candidates(country_name.strip(), limit=1)
@@ -386,7 +381,7 @@ def query_disaster_events_tool(
                 lat_c = cands[0].get("lat")
                 lon_c = cands[0].get("lon")
                 if lat_c is not None and lon_c is not None:
-                    country_coords = {"lat": float(lat_c), "lon": float(lon_c)}
+                    country_coords = ToolCoordinates(lat=float(lat_c), lon=float(lon_c))
         except Exception:
             country_coords = None
 
@@ -396,7 +391,7 @@ def query_disaster_events_tool(
     events = get_emdat_by_iso3(iso3)
     if not events:
         human_text = f"No data found for country '{country_name}' (code {iso3})."
-        return make_tool_response(
+        return ToolResponse(
             tool_name="query_disaster_events_tool",
             message=human_text,
             country=country_name,
@@ -414,7 +409,7 @@ def query_disaster_events_tool(
             f"No {', '.join([repr(t) for t in requested_types])} events found in {country_name} "
             f"between {start_date} and {end_date}."
         )
-        return make_tool_response(
+        return ToolResponse(
             tool_name="query_disaster_events_tool",
             message=human_text,
             country=country_name,
@@ -453,8 +448,9 @@ def query_disaster_events_tool(
                     for place in places:
                         geocode_attempts += 1
                         try:
-                            loc = geolocator.geocode(
-                                f"{place}, {country_e}", timeout=10
+                            loc: GeopyLocation | None = geolocator.geocode(
+                                f"{place}, {country_e}",
+                                timeout=10.0 # type: ignore[arg-type]
                             )
                             if loc:
                                 lat = float(loc.latitude)
@@ -527,15 +523,18 @@ def query_disaster_events_tool(
             f" Geocoded {geocode_success}/{geocode_attempts} missing locations."
         )
 
-    artifacts = {"maps": [], "thumbnails": [], "urls": []}
+    artifacts = ToolArtifacts()
     # Keep legacy behavior: don't render a map only when the *only* requested type is transport.
     only_transport = len(requested_types) == 1 and requested_types[0] == "transport"
     if not only_transport and map_points:
-        artifacts["maps"].append(
+        artifacts.maps.append(
             {
                 "title": f"Disaster events in {country_name}",
                 "view_state": _infer_view_state(
-                    map_points, coords=location_coordinates or country_coords
+                    map_points,
+                    coords=location_coordinates
+                    if location_coordinates
+                    else country_coords,
                 ),
                 "tooltip": {
                     "text": "{emoji} {type}\n{location}, {country}\n{start_date} → {end_date}\nDeaths: {total_deaths}\nAffected: {total_affected}",
@@ -569,7 +568,7 @@ def query_disaster_events_tool(
             }
         )
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="query_disaster_events_tool",
         message=human_text,
         artifacts=artifacts,

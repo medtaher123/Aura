@@ -14,7 +14,7 @@ import s3fs
 import xarray as xr
 
 
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox
 from utils.map_view_service import view_state_from_points
@@ -205,7 +205,6 @@ def _point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: f
 
 
 def _min_distance_to_paths(px: float, py: float, paths: object) -> Optional[float]:
-    import math
 
     if not isinstance(paths, list):
         return None
@@ -621,7 +620,7 @@ def streamflow_forecast_tool(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     hydroviewer_url: Optional[str] = None,
-) -> dict:
+) -> ToolResponse:
     """
     Get streamflow forecast and flood risk for rivers using GEOGLOWS global hydrological model.
     
@@ -646,7 +645,7 @@ def streamflow_forecast_tool(
 
     # Validate inputs
     if not river_name and not reach_id and lat is None and lon is None and not hydroviewer_url:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="streamflow_forecast_tool",
             message=(
                 "Please provide 'river_name', 'reach_id', 'lat'+'lon', or a 'hydroviewer_url' "
@@ -687,7 +686,7 @@ def streamflow_forecast_tool(
     # Optional river name: used only to provide map coordinates
     if (lat is None or lon is None) and river_name:
         if not isinstance(river_name, str) or not river_name.strip():
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="streamflow_forecast_tool",
                 message="River name must be a non-empty string.",
                 error=True,
@@ -729,9 +728,11 @@ def streamflow_forecast_tool(
         cand_id, cand_geojson = _identify_geoglows_river_feature(lat, lon, return_geometry=True)
         if cand_id == reach_id and cand_geojson is not None:
             river_geojson = cand_geojson
-
+    coordinates = None
+    if lat is not None and lon is not None:
+        coordinates = ToolCoordinates(lat=lat, lon=lon)
     if reach_id is None:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="streamflow_forecast_tool",
             message=(
                 "I couldn't infer a GEOGLOWS river_id (reach_id) from the provided river_name. "
@@ -739,21 +740,21 @@ def streamflow_forecast_tool(
                 "You can also find river numbers here: "
                 "https://training.geoglows.org/rfs/accessing-data/find-river-numbers/"
             ),
-            coordinates={"lat": lat, "lon": lon} if lat is not None and lon is not None else None,
+            coordinates=coordinates,
             data={"river_name": river_display_name or river_name},
             error=True,
         )
 
     # Validate reach_id
     if not isinstance(reach_id, int) or reach_id <= 0:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="streamflow_forecast_tool",
             message=f"Invalid reach_id (river_id): {reach_id}. Must be a positive integer.",
             error=True,
         )
 
     if not _river_id_exists(reach_id):
-        return make_tool_response(
+        return ToolResponse(
             tool_name="streamflow_forecast_tool",
             message=(
                 "The provided river_id was not found in the GEOGLOWS return-periods dataset. "
@@ -767,7 +768,7 @@ def streamflow_forecast_tool(
     # Get return periods (flood thresholds)
     return_periods = _get_return_periods(reach_id)
     if not return_periods:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="streamflow_forecast_tool",
             message=f"Could not retrieve flood threshold data for river_id {reach_id}.",
             data={"reach_id": reach_id, "river_id": reach_id},
@@ -777,7 +778,7 @@ def streamflow_forecast_tool(
     # Get forecast statistics
     forecast_stats = _get_forecast_stats(reach_id)
     if not forecast_stats:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="streamflow_forecast_tool",
             message=f"Could not retrieve streamflow forecast for river_id {reach_id}.",
             data={"reach_id": reach_id, "river_id": reach_id},
@@ -791,7 +792,6 @@ def streamflow_forecast_tool(
     risk_assessment = _assess_flood_risk(peak_discharge, return_periods)
     risk_level = risk_assessment["risk_level"]
     return_period = risk_assessment["return_period"]
-    point_color = risk_assessment["color"]
 
     # Build response message
     river_desc = river_display_name or f"Reach {reach_id}"
@@ -799,7 +799,7 @@ def streamflow_forecast_tool(
     message_parts = [
         f"📊 **Streamflow Forecast for {river_desc}**",
         f"River ID: {reach_id}",
-        f"",
+        "",
         f"🌊 **Peak Forecast Discharge**: {peak_discharge:.1f} m³/s",
     ]
 
@@ -814,11 +814,11 @@ def streamflow_forecast_tool(
 
     message_parts.extend(
         [
-            f"",
+            "",
             f"⚠️ **Flood Risk**: {risk_level.upper()}",
             f"📈 **Return Period**: {return_period}",
-            f"",
-            f"**Flood Thresholds (m³/s):**",
+            "",
+            "**Flood Thresholds (m³/s):**",
             f"• 2-year: {return_periods.get('return_period_2', 0):.1f}",
             f"• 5-year: {return_periods.get('return_period_5', 0):.1f}",
             f"• 10-year: {return_periods.get('return_period_10', 0):.1f}",
@@ -857,16 +857,12 @@ def streamflow_forecast_tool(
         f"https://geoglows.ecmwf.int/apps/geoglows-hydroviewer/?river_id={reach_id}"
     )
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="streamflow_forecast_tool",
         message=message,
-        artifacts={
-            "maps": maps,
-            "thumbnails": [],
-            "urls": [viewer_url],
-        },
+        artifacts=ToolArtifacts(maps=maps, thumbnails=[], urls=[viewer_url]),
         city=river_display_name,
-        coordinates={"lat": lat, "lon": lon} if lat and lon else None,
+        coordinates=coordinates,
         data={
             "reach_id": reach_id,
             "river_id": reach_id,

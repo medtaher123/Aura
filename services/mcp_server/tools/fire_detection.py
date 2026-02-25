@@ -2,7 +2,6 @@
 from datetime import datetime, timedelta, date
 from pathlib import Path
 import io
-import os
 from core.logger import get_logger
 from config import get_config
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
@@ -12,7 +11,7 @@ from utils.map_view_service import (
     view_state_from_points,
 )
 from mcp_singleton import mcp
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 
 logger = get_logger(__name__)
 config = get_config()
@@ -24,7 +23,6 @@ MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ARCHIVE_DIR = r"C:\MEPDev\LLM_Demo\langgraph_project\Data"
-
 
 
 class FireArchiveMissingError(RuntimeError):
@@ -49,6 +47,7 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
 
 def _s3_object_exists(bucket: str, key: str) -> bool:
     import boto3
+
     s3 = boto3.client("s3")
     try:
         s3.head_object(Bucket=bucket, Key=key)
@@ -92,6 +91,7 @@ def haversine(lat1, lon1, lat2, lon2):
 class GeocodingError(RuntimeError):
     pass
 
+
 # Find the archive file(s) that contain data for the given date range
 def find_archive_files_for_range(start_date_obj, end_date_obj):
     if not _is_s3_path(ARCHIVE_DIR):
@@ -127,12 +127,13 @@ def should_use_api(start_date, end_date):
 def detect_fire_near_city(
     start_date,
     end_date,
-    city_name=None,
-    radius_km=100,
+    city_name: str = "",
+    radius_km: float = 100,
     lat=None,
     lon=None,
 ):
-    print("Detecting fires near city:", city_name)
+    city_name = str(city_name).strip() or ""
+    logger.info(f"Detecting fires near city: {city_name}")
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
 
@@ -142,24 +143,28 @@ def detect_fire_near_city(
             lat_city_f = float(lat)
             lon_city_f = float(lon)
         except (TypeError, ValueError):
+            logger.error(f"Invalid coordinates: lat={lat}, lon={lon}")
             raise GeocodingError(f"Invalid coordinates: lat={lat}, lon={lon}")
 
-        coords = {"lat": lat_city_f, "lon": lon_city_f}
+        coords = ToolCoordinates(lat=lat_city_f, lon=lon_city_f)
         resolved_name = None
         if not isinstance(city_name, str) or not city_name.strip():
             try:
                 rev = reverse_geocode(lat_city_f, lon_city_f)
                 resolved_name = rev.get("city") or rev.get("country")
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error reverse geocoding: {e}")
                 resolved_name = None
-        resolved_name = resolved_name or city_name or f"{lat_city_f:.4f}, {lon_city_f:.4f}"
+        resolved_name = (
+            resolved_name or city_name or f"{lat_city_f:.4f}, {lon_city_f:.4f}"
+        )
     else:
         bbox, lat_city, lon_city, city_name_final = get_city_bbox(
             city_name, require_confirmation=True
         )
         print("City bbox:", bbox)
         print("City coordinates:", lat_city, lon_city)
-        if lat_city is None:
+        if lat_city is None or lon_city is None:
             raise GeocodingError(
                 f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
             )
@@ -172,14 +177,20 @@ def detect_fire_near_city(
                 f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
             )
 
-        coords = {"lat": lat_city_f, "lon": lon_city_f}
+        coords = ToolCoordinates(lat=lat_city_f, lon=lon_city_f)
         resolved_name = city_name_final or city_name
 
         if isinstance(bbox, list) and len(bbox) == 4:
             try:
                 south, north, west, east = (float(x) for x in bbox)
-                bbox_norm = [min(south, north), max(south, north), min(west, east), max(west, east)]
-            except Exception:
+                bbox_norm = [
+                    min(south, north),
+                    max(south, north),
+                    min(west, east),
+                    max(west, east),
+                ]
+            except Exception as e:
+                logger.error(f"Error parsing bbox: {e}")
                 bbox_norm = None
 
     use_api = should_use_api(start_date, end_date)
@@ -192,8 +203,9 @@ def detect_fire_near_city(
         df = pd.read_csv(url)
     else:
         file_paths = find_archive_files_for_range(start_date_obj, end_date_obj)
-        print("Using archive files for fire data:", file_paths)
+        logger.info(f"Using archive files for fire data: {', '.join(file_paths)}")
         if not file_paths:
+            logger.error("No fire archive CSV found for the requested date range.")
             raise FireDataUnavailableError(
                 "No fire archive CSV found for the requested date range. "
                 f"Checked location: '{ARCHIVE_DIR}'. "
@@ -204,13 +216,25 @@ def detect_fire_near_city(
 
     # Ensure date column exists
     if "acq_date" not in df.columns:
-        print("Date column 'acq_date' not found in data.")
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
+        logger.error("Date column 'acq_date' not found in data.")
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
 
     # Ensure required coordinate columns exist and are numeric
     if "latitude" not in df.columns or "longitude" not in df.columns:
         print("Latitude/longitude columns not found in data.")
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
 
     df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
@@ -221,7 +245,13 @@ def detect_fire_near_city(
         (df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)
     ].copy()
     if df.empty:
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
 
     df["distance"] = haversine(
         lat_city_f,
@@ -232,7 +262,13 @@ def detect_fire_near_city(
     df_filtered = df[df["distance"] <= radius_km]
 
     if df_filtered.empty:
-        return {"points": [], "nb_fires": 0, "coords": coords, "location_name": resolved_name, "bbox": bbox_norm}
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
 
     points = [
         {
@@ -253,9 +289,6 @@ def detect_fire_near_city(
     }
 
 
-
-
-
 @mcp.tool()
 def detect_fire_tool(
     start_date: str,
@@ -264,7 +297,7 @@ def detect_fire_tool(
     lat: float | None = None,
     lon: float | None = None,
     radius_km: float | None = 100,
-) -> dict:
+) -> ToolResponse:
     """
     Tool to detect fires near a city/country for a given date range and radius.
     Provide either a location name or lat/lon coordinates.
@@ -279,26 +312,25 @@ def detect_fire_tool(
             not (isinstance(location, str) and location.strip())
             and not (lat is not None and lon is not None)
         ):
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="detect_fire_tool",
                 message=(
                     "Please specify a city (location) or lat/lon coordinates and a start_date (YYYY-MM-DD)."
                 ),
-                location=location,
                 start_date=start_date,
                 end_date=end_date,
                 error=True,
             )
 
         try:
-            radius_km_f = float(radius_km)
+            radius_km_f = float(radius_km or 100.0)
         except Exception:
             radius_km_f = 100.0
 
         result = detect_fire_near_city(
             start_date,
             end_date,
-            location,
+            location or "",
             radius_km_f,
             lat=lat,
             lon=lon,
@@ -308,9 +340,15 @@ def detect_fire_tool(
         print("points:", points)
         nb_fires = result.get("nb_fires") if isinstance(result, dict) else None
         coords = result.get("coords") if isinstance(result, dict) else None
-        location_name = result.get("location_name") if isinstance(result, dict) else None
+        location_name = (
+            result.get("location_name") if isinstance(result, dict) else None
+        )
 
-        display_location = location_name if isinstance(location_name, str) and location_name.strip() else location
+        display_location = (
+            location_name
+            if isinstance(location_name, str) and location_name.strip()
+            else location
+        )
 
         # NO FIRES FOUND
         if not nb_fires:
@@ -324,7 +362,7 @@ def detect_fire_tool(
                     f"There were no hotspots or possible fires detected near {display_location} from {start_date} to {end_date} "
                     f"within a radius of {radius_km_f} km."
                 )
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="detect_fire_tool",
                 message=message,
                 start_date=start_date,
@@ -355,21 +393,35 @@ def detect_fire_tool(
         bbox = result.get("bbox") if isinstance(result, dict) else None
         coords = result.get("coords") if isinstance(result, dict) else None
         view_state = (
-            view_state_from_bbox(coords, padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
-            if isinstance(bbox, list) and len(bbox) == 4
-            else view_state_from_points(points or [], padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
+            view_state_from_bbox(
+                coords,
+                padding=0.18,
+                min_zoom=5.0,
+                max_zoom=10.5,
+                radius=radius_km_f,
+            )
+            if isinstance(bbox, list) and len(bbox) == 4 and coords is not None
+            else view_state_from_points(
+                points or [],
+                padding=0.18,
+                min_zoom=5.0,
+                max_zoom=10.5,
+                radius=radius_km_f,
+            )
         )
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="detect_fire_tool",
             message=message,
-            artifacts={
-                "maps": [
+            artifacts=ToolArtifacts(
+                maps=[
                     {
                         "title": "Fires near city",
                         "points": points,
                         "view_state": view_state,
-                        "tooltip": {"text": "{acq_date} {acq_time}\nBrightness: {brightness}"},
+                        "tooltip": {
+                            "text": "{acq_date} {acq_time}\nBrightness: {brightness}"
+                        },
                         "fill_color": [255, 0, 0, 160],
                         "radius": 5,
                         "radius_units": "pixels",
@@ -377,9 +429,9 @@ def detect_fire_tool(
                         "radius_max_pixels": 7,
                     }
                 ],
-                "thumbnails": [],
-                "urls": [],
-            },
+                thumbnails=[],
+                urls=[],
+            ),
             start_date=start_date,
             end_date=end_date,
             city=display_location,
@@ -389,13 +441,13 @@ def detect_fire_tool(
         )
 
     except GeocodingError as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="detect_fire_tool",
             message=str(e),
             error=True,
         )
     except LocationAmbiguousError as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="detect_fire_tool",
             message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
             city=location,
@@ -410,7 +462,11 @@ def detect_fire_tool(
             error=False,
         )
     except Exception as e:
-        return make_tool_response(
+        import traceback
+
+        logger.error(f"Unexpected error during processing: {e}")
+        logger.error(traceback.format_exc())
+        return ToolResponse(
             tool_name="detect_fire_tool",
             message=f"Unexpected error during processing: {str(e)}",
             error=True,

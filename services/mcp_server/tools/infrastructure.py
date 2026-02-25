@@ -21,7 +21,7 @@ from core.logger import get_logger
 from config import get_config
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.map_view_service import view_state_from_bbox, view_state_from_points
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 
 logger = get_logger(__name__)
 
@@ -222,7 +222,7 @@ def infrastructure_query_tool(
     lon: float | None = None,
     radius_km: float | None = 50.0,
     infrastructure_types: Optional[List[str]] = None
-) -> dict:
+) -> ToolResponse:
     """
     Query OSM data on Athena to find infrastructure near a location.
     Args:
@@ -241,13 +241,13 @@ def infrastructure_query_tool(
                 lat_f = float(lat)
                 lon_f = float(lon)
             except Exception:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message="Invalid coordinates provided. lat/lon must be numeric.",
                     error=True,
                 )
 
-            coords = {"lat": lat_f, "lon": lon_f }
+            coords = ToolCoordinates(lat=lat_f, lon=lon_f)
             resolved_name = None
             if not (isinstance(location, str) and location.strip()):
                 try:
@@ -258,7 +258,7 @@ def infrastructure_query_tool(
             resolved_name = resolved_name or location or f"{lat_f:.4f}, {lon_f:.4f}"
         else:
             if not isinstance(location, str) or not location.strip():
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message="Please provide a location name or lat/lon coordinates.",
                     error=True,
@@ -268,7 +268,7 @@ def infrastructure_query_tool(
                 location, require_confirmation=True
             )
             if lat_city is None or lon_city is None:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message=(
                         f"Could not geocode location '{location}'. "
@@ -281,7 +281,7 @@ def infrastructure_query_tool(
                 lat_f = float(lat_city)
                 lon_f = float(lon_city)
             except Exception:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message=(
                         f"Geocoding returned non-numeric coordinates for '{location}': "
@@ -291,13 +291,10 @@ def infrastructure_query_tool(
                     error=True,
                 )
 
-            coords = {"lat": lat_f, "lon": lon_f}
+            coords = ToolCoordinates(lat=lat_f, lon=lon_f)
             resolved_name = city_name_final or location
 
-        try:
-            radius_km_f = float(radius_km)
-        except Exception:
-            radius_km_f = 50.0
+        radius_km_f = float(radius_km or 50.0)
 
         athena_db = (
             os.environ.get("ATHENA_DB")
@@ -315,7 +312,7 @@ def infrastructure_query_tool(
         table = os.environ.get("ATHENA_OSM_TABLE", "planet")
 
         if not isinstance(athena_output, str) or not athena_output.strip():
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message="ATHENA_OUTPUT is not set. Provide an S3 output bucket (e.g. s3://my-athena-results/).",
                 city=resolved_name,
@@ -327,7 +324,7 @@ def infrastructure_query_tool(
                 error=True,
             )
         if athena_output.strip().startswith("s3://your-athena-query-results"):
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message=(
                     "ATHENA_OUTPUT is still set to the placeholder "
@@ -342,7 +339,7 @@ def infrastructure_query_tool(
                 error=True,
             )
         if not athena_output.strip().startswith("s3://"):
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message="ATHENA_OUTPUT must be an S3 URI (e.g. s3://my-athena-results/).",
                 city=resolved_name,
@@ -356,7 +353,7 @@ def infrastructure_query_tool(
 
         bucket = _parse_s3_bucket(athena_output.strip())
         if not bucket:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message="ATHENA_OUTPUT S3 URI is invalid. Expected format: s3://bucket/prefix",
                 city=resolved_name,
@@ -373,7 +370,7 @@ def infrastructure_query_tool(
             loc = s3_client.get_bucket_location(Bucket=bucket)
             bucket_region = loc.get("LocationConstraint") or "us-east-1"
             if bucket_region != region:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message=(
                         f"ATHENA_OUTPUT bucket region mismatch. Bucket '{bucket}' is in "
@@ -392,7 +389,7 @@ def infrastructure_query_tool(
                     error=True,
                 )
         except ClientError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message=f"Unable to access ATHENA_OUTPUT bucket '{bucket}': {str(e)}",
                 city=resolved_name,
@@ -523,7 +520,7 @@ def infrastructure_query_tool(
                 try:
                     _run_ddl(create_db, "default")
                 except Exception as e:
-                    return make_tool_response(
+                    return ToolResponse(
                         tool_name="infrastructure_query_tool",
                         message=(
                             "Unable to create Athena database. Ensure the IAM role/user "
@@ -565,7 +562,7 @@ def infrastructure_query_tool(
                     athena_db = bootstrap_db
                     databases = _list_athena_databases(client)
                 except Exception as e:
-                    return make_tool_response(
+                    return ToolResponse(
                         tool_name="infrastructure_query_tool",
                         message=(
                             "Unable to create OSM table in Athena. Ensure the IAM role/user "
@@ -583,7 +580,7 @@ def infrastructure_query_tool(
                         error=True,
                     )
             else:
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message=(
                         "No Athena databases found in AwsDataCatalog. Create a Glue/Athena "
@@ -636,7 +633,7 @@ def infrastructure_query_tool(
                 )
             else:
                 message = f"Athena query failed: {str(e)}"
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="infrastructure_query_tool",
                 message=message,
                 city=resolved_name,
@@ -678,7 +675,7 @@ def infrastructure_query_tool(
                 if reason:
                     message = f"{message} {reason}"
                 logger.error(message)
-                return make_tool_response(
+                return ToolResponse(
                     tool_name="infrastructure_query_tool",
                     message=message,
                     city=resolved_name,
@@ -888,8 +885,8 @@ def infrastructure_query_tool(
             if map_points
             else view_state_from_bbox(coords, padding=0.18, min_zoom=5.0, max_zoom=10.5, radius=radius_km_f)
         )
-        artifacts = {
-            "maps": [
+        artifacts = ToolArtifacts(
+            maps= [
                 {
                     "title": f"Infrastructure near {resolved_name}",
                     "points": map_points,
@@ -902,11 +899,11 @@ def infrastructure_query_tool(
                     "radius_max_pixels": 8,
                 }
             ],
-            "thumbnails": [],
-            "urls": [],
-        }
+            thumbnails= [],
+            urls= [],
+        )
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="infrastructure_query_tool",
             message=message,
             artifacts=artifacts,
@@ -926,7 +923,7 @@ def infrastructure_query_tool(
             error=False,
         )
     except LocationAmbiguousError as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="infrastructure_query_tool",
             message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
             city=location,
@@ -940,7 +937,7 @@ def infrastructure_query_tool(
         )
     except Exception as e:
         logger.error(f"Error in infrastructure_query_tool: {e}")
-        return make_tool_response(
+        return ToolResponse(
             tool_name="infrastructure_query_tool",
             message=f"Error: {str(e)}",
             data={},

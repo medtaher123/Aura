@@ -1,0 +1,41 @@
+# Agent Server Requirements
+# FastAPI backend with WebSocket support for agent orchestration
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=14.0
+
+# Configuration
+pydantic>=2.5.3
+pydantic-settings>=2.5.2
+
+# LangChain / LangGraph (Agent framework)
+langchain>=0.3.26
+langchain-aws>=0.2.27
+langchain-core>=0.3.67
+langgraph>=0.5.1
+langgraph-checkpoint>=2.1.0
+
+# AWS SDK (for Bedrock LLM)
+boto3>=1.41.0
+
+# MCP Client (for tool integration)
+mcp>=1.25.0
+httpx>=0.28.1
+httpx-sse>=0.4.1
+
+# Translation
+langdetect>=1.0.9
+deep-translator>=1.11.4
+
+# PDF processing
+pypdf>=5.1.0
+
+# Utilities
+python-dotenv>=1.1.1
+requests>=2.32.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

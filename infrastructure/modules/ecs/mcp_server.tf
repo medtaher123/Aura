@@ -4,12 +4,12 @@ locals {
   mcp_container_definitions = [
     {
       name      = "mcp-server"
-      image     = var.container_image
+      image     = var.mcp_server_container_image
       essential = true
 
       portMappings = [
         {
-          containerPort = var.container_port
+          containerPort = var.mcp_server_container_port
           protocol      = "tcp"
           name          = "mcp-http"
         }
@@ -18,11 +18,11 @@ locals {
       environment = [
         {
           name  = "LOG_LEVEL"
-          value = var.log_level
+          value = var.mcp_server_log_level
         },
         {
           name  = "WORKERS"
-          value = var.workers
+          value = var.mcp_server_workers
         },
         {
           name  = "PYTHONUNBUFFERED"
@@ -63,7 +63,7 @@ locals {
       }
 
       healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:${var.container_port}/health || exit 1"]
+        command     = ["CMD-SHELL", "curl -f http://localhost:${var.mcp_server_container_port}/health || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3
@@ -87,10 +87,10 @@ resource "aws_ecs_task_definition" "mcp_server" {
   family                   = "${var.project_name}-mcp-server"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
-  execution_role_arn       = var.execution_role_arn
-  task_role_arn            = var.task_role_arn
+  cpu                      = var.mcp_server_cpu
+  memory                   = var.mcp_server_memory
+  execution_role_arn       = var.mcp_server_execution_role_arn
+  task_role_arn            = var.mcp_server_task_role_arn
 
   container_definitions = jsonencode(local.mcp_container_definitions)
 
@@ -104,7 +104,7 @@ resource "aws_ecs_service" "mcp_server" {
   name             = "${var.project_name}-mcp-service"
   cluster          = aws_ecs_cluster.main.id
   task_definition  = aws_ecs_task_definition.mcp_server.arn
-  desired_count    = var.desired_count
+  desired_count    = var.mcp_server_desired_count
   launch_type      = "FARGATE"
   platform_version = "LATEST"
 

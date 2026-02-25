@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
 from mcp_singleton import mcp
-from utils.contracts import make_tool_response
+from utils.contracts import ToolResponse
 
 logger = get_logger(__name__)
 
@@ -152,7 +152,10 @@ def _resolve_year(year: Optional[int]) -> int:
     except Exception as exc:
         raise ValueError("Year must be an integer.") from exc
 
+
 import pandas as pd
+
+
 @lru_cache(maxsize=1)
 def _load_dataset() -> Dict[str, Any]:
     if not DATASET_PATH.exists():
@@ -168,7 +171,9 @@ def _load_dataset() -> Dict[str, Any]:
     if len(columns) < 9:
         raise RuntimeError("Unexpected format in 'Damage functions' sheet.")
 
-    damage_df = damage_df.rename(columns={columns[0]: "damage_class", columns[1]: "depth_m"})
+    damage_df = damage_df.rename(
+        columns={columns[0]: "damage_class", columns[1]: "depth_m"}
+    )
     damage_df["damage_class"] = damage_df["damage_class"].ffill()
     damage_df["depth_m"] = pd.to_numeric(damage_df["depth_m"], errors="coerce")
     damage_df = damage_df.dropna(subset=["damage_class", "depth_m"])
@@ -299,7 +304,7 @@ def flood_depth_damage_tool(
     continent: Optional[str] = None,
     basis: Optional[str] = None,
     year: Optional[int] = None,
-) -> dict:
+) -> ToolResponse:
     """
     Estimate flood damage using global depth-damage curves.
 
@@ -313,7 +318,7 @@ def flood_depth_damage_tool(
         year: Year used to apply global multiplier (defaults to current year if not provided).
     """
     if not isinstance(country, str) or not country.strip():
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message="Please provide a country name or ISO code.",
             country=country,
@@ -322,7 +327,7 @@ def flood_depth_damage_tool(
     if (not isinstance(asset_class, str) or not asset_class.strip()) and (
         not isinstance(building_type, str) or not building_type.strip()
     ):
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message="Please provide an asset class (e.g., Residential, Commercial).",
             country=country,
@@ -332,7 +337,7 @@ def flood_depth_damage_tool(
     try:
         depth_val = float(depth_m)
     except Exception:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message="Depth must be a numeric value in meters.",
             country=country,
@@ -342,7 +347,7 @@ def flood_depth_damage_tool(
     try:
         resolved_year = _resolve_year(year)
     except Exception as exc:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=str(exc),
             country=country,
@@ -351,7 +356,7 @@ def flood_depth_damage_tool(
 
     multiplier = GLOBAL_MULTIPLIER.get(resolved_year)
     if multiplier is None:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=(
                 "Unsupported year. Provide a year between "
@@ -361,10 +366,14 @@ def flood_depth_damage_tool(
             error=True,
         )
 
-    asset_value = asset_class if isinstance(asset_class, str) and asset_class.strip() else building_type
+    asset_value = (
+        asset_class
+        if isinstance(asset_class, str) and asset_class.strip()
+        else building_type
+    )
     asset_key = _normalize_asset_class(asset_value or "")
     if not asset_key:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=f"Unsupported asset class '{asset_value}'.",
             country=country,
@@ -373,12 +382,17 @@ def flood_depth_damage_tool(
 
     cont_key = _normalize_continent(continent) if continent else None
     basis_key = BASIS_ALIASES.get(_normalize_text(basis)) if basis else None
-    if basis and basis_key is None and asset_key in {
-        "residential",
-        "commercial",
-        "industrial",
-    }:
-        return make_tool_response(
+    if (
+        basis
+        and basis_key is None
+        and asset_key
+        in {
+            "residential",
+            "commercial",
+            "industrial",
+        }
+    ):
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=(
                 "Unsupported basis. Use one of: building, structure, content, land_use, object."
@@ -388,7 +402,7 @@ def flood_depth_damage_tool(
         )
     if basis and asset_key == "agriculture":
         if _normalize_text(basis) not in AG_BASIS_OPTIONS:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="flood_depth_damage_tool",
                 message="Unsupported basis for agriculture. Use per_hectare.",
                 country=country,
@@ -396,7 +410,7 @@ def flood_depth_damage_tool(
             )
     if basis and asset_key in {"infrastructure", "transport"}:
         if _normalize_text(basis) not in AREA_BASIS_OPTIONS:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="flood_depth_damage_tool",
                 message="Unsupported basis. Use per_m2 for infrastructure/transport.",
                 country=country,
@@ -407,7 +421,7 @@ def flood_depth_damage_tool(
         dataset = _load_dataset()
     except Exception as exc:
         logger.error("Failed to load depth-damage dataset.", exc_info=True)
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=f"Failed to load dataset: {exc}",
             country=country,
@@ -420,7 +434,7 @@ def flood_depth_damage_tool(
 
     curve_set = curves.get(asset_key, {})
     if not curve_set:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=f"No damage curves found for asset class '{asset_value}'.",
             country=country,
@@ -433,7 +447,7 @@ def flood_depth_damage_tool(
         # Try global fallback, then fail with guidance
         curve = curve_set.get("global")
     if not curve:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=(
                 "No damage curve available for the requested country. "
@@ -445,7 +459,7 @@ def flood_depth_damage_tool(
     try:
         fractional_damage = _interpolate_damage(depth_val, curve)
     except Exception as exc:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=str(exc),
             country=country,
@@ -456,7 +470,7 @@ def flood_depth_damage_tool(
     max_table = max_damage.get(asset_key, {})
     max_values = max_table.get(_normalize_country(resolved_country or country))
     if not max_values:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message=f"No max damage values found for {country} ({asset_class}).",
             country=country,
@@ -485,7 +499,7 @@ def flood_depth_damage_tool(
         unit = "EUR/m2"
 
     if max_value is None:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_depth_damage_tool",
             message="Max damage value is missing for the selected basis.",
             country=country,
@@ -503,7 +517,7 @@ def flood_depth_damage_tool(
         f"estimated damage ~ {estimated_damage:.2f} {unit}."
     )
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="flood_depth_damage_tool",
         message=message,
         country=resolved_country,

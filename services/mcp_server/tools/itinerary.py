@@ -3,7 +3,7 @@ import requests
 from mcp_singleton import mcp
 
 from core.logger import get_logger
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from utils.map_view_service import view_state_from_bbox
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
@@ -171,7 +171,7 @@ def get_route_info(
     source_lon: float | None = None,
     destination_lat: float | None = None,
     destination_lon: float | None = None,
-) -> dict:
+) -> ToolResponse:
     """
     Compute a driving route between two places.
     Preferred inputs:
@@ -189,7 +189,7 @@ def get_route_info(
 
     if (not start or not end) and isinstance(query, str) and query.strip():
         if "->" not in query:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="get_route_info",
                 message="Expected either (source, destination) or query formatted as 'Start -> End'.",
                 data={"source": source, "destination": destination, "query": query},
@@ -204,7 +204,7 @@ def get_route_info(
         destination_lat is not None and destination_lon is not None
     )
     if missing_source or missing_dest:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="get_route_info",
             message=(
                 "Please provide both 'source' and 'destination', or provide source_lat/source_lon "
@@ -231,7 +231,7 @@ def get_route_info(
             lat1 = float(source_lat)
             lon1 = float(source_lon)
         except Exception:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="get_route_info",
                 message="Invalid source coordinates provided. lat/lon must be numeric.",
                 error=True,
@@ -240,7 +240,7 @@ def get_route_info(
         try:
             lat1, lon1 = geocode_place(start)
         except LocationAmbiguousError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="get_route_info",
                 message=f"I found multiple matches for '{e.query}'. Please confirm the correct start location.",
                 data={
@@ -260,7 +260,7 @@ def get_route_info(
             lat2 = float(destination_lat)
             lon2 = float(destination_lon)
         except Exception:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="get_route_info",
                 message="Invalid destination coordinates provided. lat/lon must be numeric.",
                 error=True,
@@ -269,7 +269,7 @@ def get_route_info(
         try:
             lat2, lon2 = geocode_place(end)
         except LocationAmbiguousError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="get_route_info",
                 message=f"I found multiple matches for '{e.query}'. Please confirm the correct destination location.",
                 data={
@@ -285,7 +285,7 @@ def get_route_info(
             )
 
     if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="get_route_info",
             message="Location not found for start or destination.",
             data={
@@ -320,7 +320,7 @@ def get_route_info(
     try:
         data = get_route((lat1, lon1), (lat2, lon2))
     except requests.RequestException as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="get_route_info",
             message=f"Network error: {e}",
             data={"start": start, "end": end},
@@ -328,7 +328,7 @@ def get_route_info(
         )
 
     if not data or data.get("code") != "Ok" or not data.get("routes"):
-        return make_tool_response(
+        return ToolResponse(
             tool_name="get_route_info",
             message="Unable to compute route.",
             data={"start": start, "end": end},
@@ -355,10 +355,10 @@ def get_route_info(
     )
 
     # Calculate center coordinates from start and end points
-    coords = {
-        "lat": (float(lat1) + float(lat2)) / 2,
-        "lon": (float(lon1) + float(lon2)) / 2,
-    }
+    coords = ToolCoordinates(
+        lat=(float(lat1) + float(lat2)) / 2,
+        lon=(float(lon1) + float(lon2)) / 2,
+    )
     view_state = view_state_from_bbox(coords, padding=0.20, min_zoom=2.0, max_zoom=12.0)
 
     map_spec = {
@@ -407,10 +407,10 @@ def get_route_info(
         ],
     }
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="get_route_info",
         message=message,
-        artifacts={"maps": [map_spec], "thumbnails": [], "urls": []},
+        artifacts=ToolArtifacts(maps=[map_spec], thumbnails=[], urls=[]),
         data={
             "start": start,
             "end": end,

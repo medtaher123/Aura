@@ -163,16 +163,16 @@ For team collaboration, store Terraform state in S3:
 1. **Create S3 bucket and DynamoDB table** (one-time setup):
    ```bash
    # Create S3 bucket for state
-   aws s3 mb s3://mpllm-terraform-state-963275461308 --region eu-west-3
+   aws s3 mb s3://mpllm-terraform-state-637423200916 --region eu-west-3
    
    # Enable versioning
    aws s3api put-bucket-versioning \
-     --bucket mpllm-terraform-state-963275461308 \
+     --bucket mpllm-terraform-state-637423200916 \
      --versioning-configuration Status=Enabled
    
    # Enable encryption
    aws s3api put-bucket-encryption \
-     --bucket mpllm-terraform-state-963275461308 \
+     --bucket mpllm-terraform-state-637423200916 \
      --server-side-encryption-configuration '{
        "Rules": [{
          "ApplyServerSideEncryptionByDefault": {
@@ -193,7 +193,7 @@ For team collaboration, store Terraform state in S3:
 2. **Uncomment backend configuration** in [providers.tf](providers.tf):
    ```hcl
    backend "s3" {
-     bucket         = "mpllm-terraform-state-963275461308"
+     bucket         = "mpllm-terraform-state-637423200916"
      key            = "mcp-server/terraform.tfstate"
      region         = "eu-west-3"
      encrypt        = true
