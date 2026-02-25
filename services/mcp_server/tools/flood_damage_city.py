@@ -20,7 +20,8 @@ import requests
 from config import get_config
 from core.logger import get_logger
 from mcp_singleton import mcp
-from utils.contracts import ToolResponse
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
+from utils.map_view_service import view_state_from_bbox
 
 from tools.flood_depth_damage import (
     GLOBAL_MULTIPLIER,
@@ -199,10 +200,12 @@ def _geojson_polygon_to_wkt(geojson: Any) -> Optional[str]:
     return None
 
 
-def _get_city_polygon_and_country(city_name: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def _get_city_polygon_and_country(
+    city_name: str,
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[float], Optional[float]]:
     """
-    Fetch city polygon (WKT) and country from Nominatim.
-    Returns (polygon_wkt, country_name, display_name).
+    Fetch city polygon (WKT), country, and center from Nominatim.
+    Returns (polygon_wkt, country_name, display_name, center_lat, center_lon).
     """
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": city_name, "format": "json", "limit": 1, "polygon_geojson": 1}
@@ -211,17 +214,22 @@ def _get_city_polygon_and_country(city_name: str) -> Tuple[Optional[str], Option
         resp.raise_for_status()
         data = resp.json()
         if not data or not isinstance(data, list) or not data[0]:
-            return None, None, None
+            return None, None, None, None, None
         item = data[0]
         geojson = item.get("geojson")
         address = item.get("address", {}) if isinstance(item.get("address"), dict) else {}
         country = address.get("country") or item.get("display_name", "").split(",")[-1].strip()
         display = item.get("display_name", city_name)
         wkt = _geojson_polygon_to_wkt(geojson)
-        return wkt, country, display
+        try:
+            center_lat = float(item.get("lat")) if item.get("lat") is not None else None
+            center_lon = float(item.get("lon")) if item.get("lon") is not None else None
+        except (TypeError, ValueError):
+            center_lat, center_lon = None, None
+        return wkt, country, display, center_lat, center_lon
     except Exception as e:
         logger.warning("Nominatim geocode failed for %s: %s", city_name, e)
-        return None, None, None
+        return None, None, None, None, None
 
 
 
@@ -417,6 +425,32 @@ def _ensure_daylight_table(athena_db: str, athena_output: str, region: str) -> O
     return None
 
 
+def _add_map_artifact(
+    response: ToolResponse,
+    display_name: str,
+    center_lat: Optional[float],
+    center_lon: Optional[float],
+) -> None:
+    """Add a map artifact to response when center coordinates are available."""
+    if center_lat is None or center_lon is None:
+        return
+    coords = ToolCoordinates(lat=center_lat, lon=center_lon)
+    view_state = view_state_from_bbox(
+        coords,
+        padding=0.18,
+        min_zoom=5.0,
+        max_zoom=10.5,
+        radius=25.0,
+    )
+    response.artifacts.maps.append(
+        {
+            "title": f"Flood damage area: {display_name}",
+            "view_state": view_state,
+            "tooltip": {"text": ""},
+        }
+    )
+
+
 @mcp.tool()
 def flood_damage_city_tool(
     city: str,
@@ -461,7 +495,7 @@ def flood_damage_city_tool(
             error=True,
         )
 
-    polygon_wkt, country, display_name = _get_city_polygon_and_country(city.strip())
+    polygon_wkt, country, display_name, center_lat, center_lon = _get_city_polygon_and_country(city.strip())
     if not polygon_wkt or not country:
         return ToolResponse(
             tool_name="flood_damage_city_tool",
@@ -491,7 +525,7 @@ def flood_damage_city_tool(
         or ""
     ).strip()
     if not athena_output or athena_output.startswith("s3://your-"):
-        return ToolResponse(
+        resp = ToolResponse(
             tool_name="flood_damage_city_tool",
             message="DAYLIGHT_ATHENA_OUTPUT must be set to an S3 URI in us-west-2 (e.g. s3://your-bucket/daylight/). The bucket must be in us-west-2 because Athena runs there for Daylight OSM.",
             data={"city": display_name, "country": country},
@@ -499,6 +533,8 @@ def flood_damage_city_tool(
             country=country,
             error=True,
         )
+        _add_map_artifact(resp, display_name, center_lat, center_lon)
+        return resp.model_dump(mode="json")
 
     athena_db = os.environ.get("ATHENA_DB") or get_config().athena_db or "default"
 
@@ -510,7 +546,7 @@ def flood_damage_city_tool(
         polygon_wkt, filter_asset, athena_output, athena_db, DAYLIGHT_REGION
     )
     if query_err:
-        return ToolResponse(
+        resp = ToolResponse(
             tool_name="flood_damage_city_tool",
             message=f"Daylight OSM query failed: {query_err}",
             data={"city": display_name, "country": country},
@@ -518,9 +554,11 @@ def flood_damage_city_tool(
             country=country,
             error=True,
         )
+        _add_map_artifact(resp, display_name, center_lat, center_lon)
+        return resp.model_dump(mode="json")
 
     if not areas:
-        return ToolResponse(
+        resp = ToolResponse(
             tool_name="flood_damage_city_tool",
             message=f"No buildings found within {display_name}.",
             data={"city": display_name, "country": country, "depth_m": depth_val},
@@ -528,6 +566,8 @@ def flood_damage_city_tool(
             country=country,
             error=False,
         )
+        _add_map_artifact(resp, display_name, center_lat, center_lon)
+        return resp.model_dump(mode="json")
 
     cont = _normalize_continent(continent) or "europe"  # default for European cities
     basis = "building_total"
@@ -565,11 +605,13 @@ def flood_damage_city_tool(
         ) + "."
     )
 
-    return ToolResponse(
+    resp = ToolResponse(
         tool_name="flood_damage_city_tool",
         message=message,
         city=display_name,
         country=country,
+        artifacts=ToolArtifacts(maps=[], thumbnails=[], urls=[]),
+        coordinates=ToolCoordinates(lat=center_lat, lon=center_lon) if (center_lat is not None and center_lon is not None) else None,
         data={
             "city": display_name,
             "country": country,
@@ -582,3 +624,5 @@ def flood_damage_city_tool(
         },
         error=False,
     )
+    _add_map_artifact(resp, display_name, center_lat, center_lon)
+    return resp.model_dump(mode="json")
