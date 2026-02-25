@@ -1,4 +1,4 @@
-# ECS Task Execution Role
+# ECS Task Execution Role (shared)
 # Used by ECS to pull images, write logs, and access secrets
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "ecsTaskExecutionRole"
@@ -23,13 +23,11 @@ resource "aws_iam_role" "ecs_task_execution_role" {
   }
 }
 
-# Attach AWS managed policy for ECS task execution
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Additional policy for accessing Secrets Manager
 resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
   name = "ecs-task-execution-secrets"
   role = aws_iam_role.ecs_task_execution_role.id
@@ -45,7 +43,8 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         ]
         Resource = [
           var.opentopo_api_key_arn,
-          var.map_key_arn
+          var.map_key_arn,
+          var.maptiler_api_key_arn
         ]
       },
       {
@@ -65,12 +64,12 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
   })
 }
 
-# ECS Task Role
-# Used by the application running inside the container
-resource "aws_iam_role" "ecs_task_role" {
-  name = "ecsTaskRole"
+# --------------------------------------------------------------------------
+# Per-service Task Roles
+# --------------------------------------------------------------------------
 
-  assume_role_policy = jsonencode({
+locals {
+  ecs_assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -83,56 +82,49 @@ resource "aws_iam_role" "ecs_task_role" {
     ]
   })
 
+  shared_statements = [
+    {
+      Sid    = "CloudWatchLogs"
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ]
+      Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/${var.project_name}-*:*"
+    },
+    {
+      Sid    = "ECSDescribe"
+      Effect = "Allow"
+      Action = [
+        "ec2:DescribeNetworkInterfaces",
+        "ecs:DescribeTasks"
+      ]
+      Resource = "*"
+    }
+  ]
+}
+
+# --- MCP Server Task Role ---
+# Needs: CloudWatch, ECS describe, S3, Athena, Glue (tool execution layer)
+resource "aws_iam_role" "mcp_task_role" {
+  name               = "${var.project_name}-mcp-task-role"
+  assume_role_policy = local.ecs_assume_role_policy
+
   tags = {
-    Name        = "ecsTaskRole"
+    Name        = "${var.project_name}-mcp-task-role"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
 }
 
-# Task role policy for application-level permissions
-resource "aws_iam_role_policy" "ecs_task_role_policy" {
-  name = "ecs-task-role-policy"
-  role = aws_iam_role.ecs_task_role.id
+resource "aws_iam_role_policy" "mcp_task_role_policy" {
+  name = "mcp-task-role-policy"
+  role = aws_iam_role.mcp_task_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      # CloudWatch Logs
-      {
-        Sid    = "CloudWatchLogs"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/${var.project_name}-*:*"
-      },
-      # EC2/ECS describe operations
-      {
-        Sid    = "ECSDescribe"
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeNetworkInterfaces",
-          "ecs:DescribeTasks"
-        ]
-        Resource = "*"
-      },
-      # AWS Bedrock - for Streamlit LLM service
-      {
-        Sid    = "BedrockInvoke"
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream"
-        ]
-        Resource = [
-          "arn:aws:bedrock:*::foundation-model/*",
-          "arn:aws:bedrock:*:${var.aws_account_id}:inference-profile/*"
-        ]
-      },
-      # S3 - for fire archive and Athena results
+    Statement = concat(local.shared_statements, [
       {
         Sid    = "S3Access"
         Effect = "Allow"
@@ -150,42 +142,83 @@ resource "aws_iam_role_policy" "ecs_task_role_policy" {
           "arn:aws:s3:::${var.project_name}-*/*"
         ]
       },
-      # AWS Athena - for OSM infrastructure queries
       {
         Sid    = "AthenaAccess"
         Effect = "Allow"
         Action = [
-          "athena:StartQueryExecution",
-          "athena:GetQueryExecution",
-          "athena:GetQueryResults",
-          "athena:StopQueryExecution",
-          "athena:ListDatabases",
-          "athena:ListDataCatalogs",
-          "athena:ListTableMetadata",
-          "athena:GetDatabase",
-          "athena:GetTableMetadata"
+          "athena:*",
         ]
         Resource = "*"
       },
-      # AWS Glue - for Athena catalog access
       {
         Sid    = "GlueAccess"
         Effect = "Allow"
         Action = [
-          "glue:GetDatabase",
-          "glue:GetDatabases",
-          "glue:GetTable",
-          "glue:GetTables",
-          "glue:CreateDatabase",
-          "glue:CreateTable",
-          "glue:GetPartitions"
+          "glue:*",
         ]
         Resource = [
-          "arn:aws:glue:${var.aws_region}:${var.aws_account_id}:catalog",
-          "arn:aws:glue:${var.aws_region}:${var.aws_account_id}:database/*",
-          "arn:aws:glue:${var.aws_region}:${var.aws_account_id}:table/*"
+          "*"
         ]
       }
-    ]
+    ])
+  })
+}
+
+# --- Agent Server Task Role ---
+# Needs: CloudWatch, ECS describe, Bedrock (LLM orchestration layer)
+resource "aws_iam_role" "agent_task_role" {
+  name               = "${var.project_name}-agent-task-role"
+  assume_role_policy = local.ecs_assume_role_policy
+
+  tags = {
+    Name        = "${var.project_name}-agent-task-role"
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_iam_role_policy" "agent_task_role_policy" {
+  name = "agent-task-role-policy"
+  role = aws_iam_role.agent_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(local.shared_statements, [
+      {
+        Sid    = "BedrockInvoke"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:${var.aws_account_id}:inference-profile/*"
+        ]
+      }
+    ])
+  })
+}
+
+# --- Streamlit Task Role ---
+# Needs: CloudWatch, ECS describe only (UI layer, talks to Agent server via WebSocket)
+resource "aws_iam_role" "streamlit_task_role" {
+  name               = "${var.project_name}-streamlit-task-role"
+  assume_role_policy = local.ecs_assume_role_policy
+
+  tags = {
+    Name        = "${var.project_name}-streamlit-task-role"
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_iam_role_policy" "streamlit_task_role_policy" {
+  name = "streamlit-task-role-policy"
+  role = aws_iam_role.streamlit_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = local.shared_statements
   })
 }

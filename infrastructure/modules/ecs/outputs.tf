@@ -40,18 +40,18 @@ output "streamlit_cloudwatch_log_group" {
   value       = try(aws_cloudwatch_log_group.streamlit.name, "")
 }
 
-# Legacy outputs for backward compatibility
-output "service_name" {
-  description = "ECS service name (legacy, use mcp_service_name)"
-  value       = aws_ecs_service.mcp_server.name
+# Agent Server outputs
+output "agent_service_name" {
+  description = "Agent server ECS service name"
+  value       = try(aws_ecs_service.agent_server[0].name, "")
 }
 
-output "task_definition_arn" {
-  description = "Task definition ARN (legacy, use mcp_task_definition_arn)"
-  value       = aws_ecs_task_definition.mcp_server.arn
+output "agent_task_definition_arn" {
+  description = "Agent server Task definition ARN"
+  value       = try(aws_ecs_task_definition.agent_server[0].arn, "")
 }
 
-output "cloudwatch_log_group" {
-  description = "CloudWatch log group name (legacy, use mcp_cloudwatch_log_group)"
-  value       = aws_cloudwatch_log_group.mcp_server.name
+output "agent_cloudwatch_log_group" {
+  description = "Agent server CloudWatch log group name"
+  value       = try(aws_cloudwatch_log_group.agent_server[0].name, "")
 }

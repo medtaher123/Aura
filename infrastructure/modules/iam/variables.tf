@@ -27,3 +27,8 @@ variable "map_key_arn" {
   description = "ARN for Map key secret"
   type        = string
 }
+
+variable "maptiler_api_key_arn" {
+  description = "ARN for Maptiler API key secret"
+  type        = string
+}
