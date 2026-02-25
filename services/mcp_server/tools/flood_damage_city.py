@@ -20,7 +20,7 @@ import requests
 from config import get_config
 from core.logger import get_logger
 from mcp_singleton import mcp
-from utils.contracts import make_tool_response
+from utils.contracts import ToolResponse
 
 from tools.flood_depth_damage import (
     GLOBAL_MULTIPLIER,
@@ -424,7 +424,7 @@ def flood_damage_city_tool(
     year: Optional[int] = None,
     asset_class: Optional[str] = None,
     continent: Optional[str] = None,
-) -> dict:
+) -> ToolResponse:
     """
     Estimate total flood damage for a city by combining flood damage per m²
     (from the global depth-damage dataset) with building areas from Daylight OSM.
@@ -439,7 +439,7 @@ def flood_damage_city_tool(
 
     """
     if not isinstance(city, str) or not city.strip():
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message="Please provide a city name.",
             error=True,
@@ -447,7 +447,7 @@ def flood_damage_city_tool(
     try:
         depth_val = float(depth_m)
     except Exception:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message="Depth must be a numeric value in meters.",
             error=True,
@@ -455,7 +455,7 @@ def flood_damage_city_tool(
     try:
         resolved_year = _resolve_year(year)
     except Exception as exc:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message=str(exc),
             error=True,
@@ -463,7 +463,7 @@ def flood_damage_city_tool(
 
     polygon_wkt, country, display_name = _get_city_polygon_and_country(city.strip())
     if not polygon_wkt or not country:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message=f"Could not geocode city '{city}' or retrieve boundary polygon. Try a more specific name (e.g. 'Paris, France').",
             error=True,
@@ -473,13 +473,13 @@ def flood_damage_city_tool(
     if asset_class:
         filter_asset = _normalize_asset_class(asset_class)
         if not filter_asset:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="flood_damage_city_tool",
                 message=f"Unsupported asset_class '{asset_class}'. Use residential, commercial, or industrial.",
                 error=True,
             )
         if filter_asset not in {"residential", "commercial", "industrial"}:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="flood_damage_city_tool",
                 message="City damage tool supports residential, commercial, industrial only.",
                 error=True,
@@ -491,10 +491,12 @@ def flood_damage_city_tool(
         or ""
     ).strip()
     if not athena_output or athena_output.startswith("s3://your-"):
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message="DAYLIGHT_ATHENA_OUTPUT must be set to an S3 URI in us-west-2 (e.g. s3://your-bucket/daylight/). The bucket must be in us-west-2 because Athena runs there for Daylight OSM.",
             data={"city": display_name, "country": country},
+            city=display_name,
+            country=country,
             error=True,
         )
 
@@ -508,18 +510,22 @@ def flood_damage_city_tool(
         polygon_wkt, filter_asset, athena_output, athena_db, DAYLIGHT_REGION
     )
     if query_err:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message=f"Daylight OSM query failed: {query_err}",
             data={"city": display_name, "country": country},
+            city=display_name,
+            country=country,
             error=True,
         )
 
     if not areas:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="flood_damage_city_tool",
             message=f"No buildings found within {display_name}.",
             data={"city": display_name, "country": country, "depth_m": depth_val},
+            city=display_name,
+            country=country,
             error=False,
         )
 
@@ -559,9 +565,11 @@ def flood_damage_city_tool(
         ) + "."
     )
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="flood_damage_city_tool",
         message=message,
+        city=display_name,
+        country=country,
         data={
             "city": display_name,
             "country": country,
