@@ -166,3 +166,68 @@ async def test_infrastructure_tool_missing_input(mcp_client):
     result = await mcp_client.call_tool("infrastructure_query_tool", {})
     assert isinstance(result, dict)
     assert result.get("error") is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_infrastructure_tool_hospitals_near_paris_group_breakdown(
+    mcp_client, monkeypatch
+):
+    """
+    Test hospitals near Paris within 10km returns correct group_breakdown structure.
+    Verifies output correctness: group_breakdown should be {'hospital': {'hospital': 33}}.
+    """
+    # Mock Athena rows: hospital count = 33 for Paris 10km
+    hospital_rows = [
+        {
+            "Data": [
+                {"VarCharValue": "amenity"},
+                {"VarCharValue": "building"},
+                {"VarCharValue": "landuse"},
+                {"VarCharValue": "industrial"},
+                {"VarCharValue": "count"},
+            ]
+        },
+        {
+            "Data": [
+                {"VarCharValue": "hospital"},
+                {"VarCharValue": ""},
+                {"VarCharValue": ""},
+                {"VarCharValue": ""},
+                {"VarCharValue": "33"},
+            ]
+        },
+    ]
+    _patch_athena(monkeypatch, rows=hospital_rows)
+
+    def fake_get_city_bbox(_location, **_kwargs):
+        return ["48.81", "48.90", "2.25", "2.42"], "48.8566", "2.3522", "Paris"
+
+    monkeypatch.setattr(infra, "get_city_bbox", fake_get_city_bbox)
+
+    # Set env so tool proceeds past ATHENA_OUTPUT checks
+    monkeypatch.setenv("ATHENA_OUTPUT", "s3://test-infra-bucket/results/")
+    monkeypatch.setenv("AWS_REGION", "eu-west-3")
+
+    result = await mcp_client.call_tool(
+        "infrastructure_query_tool",
+        {
+            "location": "Paris",
+            "radius_km": 10,
+            "infrastructure_types": ["hospital"],
+        },
+    )
+
+    assert isinstance(result, dict)
+    assert result.get("tool_name") == "infrastructure_query_tool"
+    assert result.get("error") is False
+    assert result.get("city") == "Paris"
+    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522}
+
+    data = result.get("data", {})
+    assert "group_breakdown" in data, "response must include group_breakdown"
+    group_breakdown = data["group_breakdown"]
+    assert group_breakdown == {"hospital": {"hospital": 33}}, (
+        f"group_breakdown should be {{'hospital': {{'hospital': 33}}}}, "
+        f"got {group_breakdown}"
+    )

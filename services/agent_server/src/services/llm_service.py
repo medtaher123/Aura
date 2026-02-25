@@ -81,7 +81,7 @@ def get_chat_llm(
         from langchain_aws import ChatBedrock as _ChatBedrock  # type: ignore
 
     model_id = model_id or DEFAULT_BEDROCK_MODEL_ID
-    region = region or DEFAULT_BEDROCK_REGION
+    region = region or 'eu-west-3'
 
     if temperature is None:
         temperature = get_config().default_llm_temperature

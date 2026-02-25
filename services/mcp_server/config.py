@@ -56,6 +56,10 @@ class MCPServerConfig(BaseSettings):
         default="s3://metaplanet-athena-query-results-96327/",
         description="S3 URI for Athena query output results",
     )
+    daylight_athena_output: str = Field(
+        default="s3://metaplanet-daylight-athena-query-results-963275/",
+        description="S3 URI for Daylight OSM query output (bucket must be in us-west-2)",
+    )
 
     # GDFC drought/flood data (S3 public bucket)
     gdfc_drought_s3: str = Field(

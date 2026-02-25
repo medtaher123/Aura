@@ -27,16 +27,18 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- If the user asks about what tools are available, how tools work, what data sources tools use, or what questions they can ask, use tools_info_tool.\n"
     "- WATER/FLOOD RISK QUERIES: Use geoserver_risk_mask_tool for 'water risk', 'flood risk', 'flood mask', 'water mask', 'risk map', or 'show me risk in [city]'. This shows satellite-derived risk predictions.\n"
     "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2025', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
+    "- CITY FLOOD DAMAGE: Use flood_damage_city_tool when the user asks for total flood damage for a CITY (e.g., 'flood damage for Lyon at 3 m', 'total cost for Paris if flooded'). This combines OSM building areas with depth-damage curves. Use flood_depth_damage_tool for country-level damage per m² only.\n"
     "- SURFACE WATER INGRESS: Use estimate_surface_water_ingress_tool ONLY when user asks for 'ingress risk' or 'surface water ingress' or 'water accumulation points'. This computes terrain-based analysis.\n"
     "- You may call multiple tools over multiple steps.\n"
-    "- I the question is about 'last summer' or 'last month' or 'last year' or 'last week' or 'last day' or today' , use the get_date tool to get the date and then use the appropriate tool to get the data.\n"
+    "- If the question is about 'last summer' or 'last month' or 'last year' or 'last week' or 'last day' or 'today', use the get_date tool to get the date and then use the appropriate tool to get the data.\n"
     "- For fires, use only the detect_fire_tool.\n"
     "- Never call disaster event tools for fires.\n"
     "- For storms/extreme temperature/drought EVENTS call only the query_disaster_events_tool.\n"
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- For river discharge, streamflow, or river flood forecasts, use streamflow_forecast_tool.\n"
     "- For climate/energy time series at a location: if the user asks for trends over months/years or long-term daily aggregates, use nasa_power_daily_tool; if they ask for hourly profiles, peak times, or within-day extremes, use nasa_power_hourly_tool.\n"
-    '- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. ["storm", "drought"]).\n'
+    "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
+    "- For past events, use the term hazard, for future events, use the term risk.\n"
     "- Use ONLY the listed tools.\n"
     "- If you have enough information to answer, stop.\n"
     "- NEVER invent tool outputs, observations, results, URLs, or data.\n"
@@ -266,11 +268,32 @@ Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved a complete list of all available tools organized by category. See the returned comprehensive tool catalog.","commentary":"Summarizing all available tools."}
 
 Example 24
-User: Estimate flood damage for residential buildings in Kenya at 0.8 m depth
+User: Estimate flood damage for residential buildings in Kenya at 0.8 m depth in 2024
 Step 1 JSON:
-{"action":"flood_depth_damage_tool","action_input":{"country":"Kenya","asset_class":"residential","depth_m":0.8,"continent":"Africa","basis":"building"},"commentary":"Calling flood_depth_damage_tool to estimate depth-damage for residential assets in Kenya."}
+{"action":"flood_depth_damage_tool","action_input":{"country":"Kenya","asset_class":"residential","depth_m":0.8,"continent":"Africa","basis":"building","year":2024},"commentary":"Calling flood_depth_damage_tool to estimate depth-damage for residential assets in Kenya in 2024 at 0.8 m depth."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I estimated flood damage for residential buildings in Kenya at 0.8 m depth using the depth-damage curves and country max damage values. See the returned estimates.","commentary":"Summarizing the flood depth-damage results."}
+
+Example 25
+User: Estimate flood damage for commercial buildings in france at 2 m depth
+Step 1 JSON:
+{"action":"flood_depth_damage_tool","action_input":{"country":"France","asset_class":"commercial","depth_m":2,"continent":"Europe","basis":"building"},"commentary":"Calling flood_depth_damage_tool to estimate depth-damage for commercial assets in France at 2 m depth."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I estimated flood damage for commercial buildings in France at 2 m depth using the depth-damage curves and country max damage values. See the returned estimates.","commentary":"Summarizing the flood depth-damage results."}
+
+Example 26
+User: Estimate the total flood damage in Lyon with a flood depth of 3 meters in 2020.
+Step 1 JSON:
+{"action":"flood_damage_city_tool","action_input":{"city":"Lyon","depth_m":3,"year":2020},"commentary":"Calling flood_damage_city_tool to estimate total flood damage for Lyon at 3 m depth using OSM building areas and depth-damage curves."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I estimated total flood damage for Lyon at 3 m depth by combining building areas from OSM with country-specific damage curves. See the returned breakdown by building type and total cost in EUR.","commentary":"Summarizing the city flood damage results."}
+
+Example 27
+User: How many critical infrastructure facilities are there near Paris?
+Step 1 JSON:
+{"action":"infrastructure_query_tool","action_input":{"location":"Paris","radius_km":10,"infrastructure_types":["critical_infrastructure"]},"commentary":"Calling infrastructure_query_tool to list critical infrastructure facilities near Paris."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I queried critical infrastructure facilities near Paris. See the returned infrastructure list and counts.","commentary":"Summarizing the infrastructure query results."}
 """.strip()
 
 
@@ -302,6 +325,7 @@ Return ONLY valid JSON with EXACT keys:
 Rules:
 - If the user asks to "analyze", "report", "summarize findings", "assess risk", "explain results", set needs_analysis=true.
 - If the user asks about disasters( storms, Extreme weather, Earthquakes, floods...)/events/maps/images/weather/risk mask/fires/floods/routes/rivers/streamflow/discharge or anything requiring external data, set needs_data=true.
+- For past events, use the term hazard, for future events, use the term risk.
 - If needs_data=false, still set data_query to the original user request (string).
 - If needs_analysis=false, set analysis_goal to "".
 - NEVER invent tool outputs. Only plan.
@@ -378,6 +402,7 @@ Rules:
 - Do NOT invent facts, counts, dates, URLs, or map filenames.
 - When the data is from the NASA POWER tool, do not mention the max and min temperature values, but infer the trend from the data. And say that the temperature is high/low/normal/very high/very low in the period requested.
 - If the user ask to analyse flood damage for a specific country only include the current year or the year specified by the user. Do not say based on 2010 data. Use only the data of thet year not the 2010 data.
+- For past events, use the term hazard, for future events, use the term risk.
 - If the data_response has error=true or missing needed info, explain what is missing and what to fetch next.
 - Keep it concise and structured.
 

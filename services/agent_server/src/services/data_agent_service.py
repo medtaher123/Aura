@@ -20,6 +20,20 @@ from ..tools.contracts import ToolArtifacts, ToolResponse
 
 logger = get_logger("data_agent")
 
+# Cap size of tool results in planner prompt to avoid Bedrock "prompt too long" (e.g. 200k limit)
+MAX_TOOL_RESULT_MESSAGE_CHARS = 1500
+MAX_PREVIOUS_TOOL_RESULTS_CHARS = 8000
+
+
+def _truncate_for_prompt(s: Any, max_chars: int = MAX_TOOL_RESULT_MESSAGE_CHARS) -> str:
+    """Truncate string (or stringify and truncate) for inclusion in LLM prompt."""
+    if s is None:
+        return ""
+    text = str(s) if not isinstance(s, str) else s
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 20].rstrip() + "… [truncated]"
+
 
 def _extract_json_obj(text: str) -> Optional[dict]:
     if not text:
@@ -582,10 +596,17 @@ def create_data_agent_executor(
             tool_input = None
             if isinstance(r.data, dict):
                 tool_input = r.data.get("tool_input")
+            msg_part = _truncate_for_prompt(r.message)
+            input_part = _truncate_for_prompt(tool_input, max_chars=400)
             history_lines.append(
-                f"{i}) tool={r.tool_name} error={r.error} input={tool_input} message={r.message}"
+                f"{i}) tool={r.tool_name} error={r.error} input={input_part} message={msg_part}"
             )
         history = "\n".join(history_lines) if history_lines else "(none)"
+        if len(history) > MAX_PREVIOUS_TOOL_RESULTS_CHARS:
+            history = history[-MAX_PREVIOUS_TOOL_RESULTS_CHARS:].lstrip()
+            if "\n" in history[:100]:
+                history = history[history.find("\n") + 1 :]
+            history = "(earlier results truncated)\n" + history
 
         # If we can, constrain the planner to only pick remaining required tools.
         remaining_hint = ", ".join(remaining) if remaining else "(none)"
