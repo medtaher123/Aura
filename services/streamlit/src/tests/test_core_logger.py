@@ -45,7 +45,7 @@ class TestModuleLogger:
         assert logger.name == "metaplanet"
 
     def test_module_logger_level(self):
-        assert logger.level == logging.DEBUG
+        assert logger.level == logging.INFO
 
     def test_module_logger_has_handler(self):
         # The module should have at least one handler

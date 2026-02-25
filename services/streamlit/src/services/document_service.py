@@ -28,13 +28,13 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes, *, max_chars: int = 1000_000) 
         RuntimeError: if PDF dependencies are missing.
         ValueError: if input is empty.
     """
-    logger.info(
-        f"Starting PDF text extraction (size: {len(pdf_bytes)} bytes, max_chars: {max_chars})"
-    )
-
     if not isinstance(pdf_bytes, (bytes, bytearray)) or not pdf_bytes:
         logger.error("Empty PDF payload provided")
         raise ValueError("Empty PDF payload")
+
+    logger.info(
+        f"Starting PDF text extraction (size: {len(pdf_bytes)} bytes, max_chars: {max_chars})"
+    )
 
     try:
         from pypdf import PdfReader

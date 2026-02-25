@@ -6,7 +6,7 @@ import pytest
 import sys
 import os
 
-from src.models.tools import ToolResponse, ToolArtifacts
+from models import ToolResponse, ToolArtifacts
 
 # Ensure src is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

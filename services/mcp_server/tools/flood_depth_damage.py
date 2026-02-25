@@ -18,9 +18,10 @@ from utils.contracts import ToolResponse
 
 logger = get_logger(__name__)
 
-DATASET_PATH = Path(
-    "/home/ubuntu/MetaplanetLLM/services/mcp_server/utils/"
-    "global_flood_depth-damage_functions__30102017.xlsx"
+DATASET_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "utils"
+    / "global_flood_depth-damage_functions__30102017.xlsx"
 )
 
 ASSET_CLASS_ALIASES = {
