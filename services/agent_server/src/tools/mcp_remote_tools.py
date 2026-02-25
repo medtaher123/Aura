@@ -17,14 +17,19 @@ import os
 from dataclasses import dataclass
 from typing import Any, List, Optional
 from src.core import get_logger
+from src.config import get_config
 
 logger = get_logger("mcp-remote-tools")
 
 
 def _mcp_sse_url() -> str:
-    base = (os.getenv("MCP_SERVER_URL") or "http://localhost:8000").strip()
+    """MCP SSE endpoint URL. Uses agent server config (loads from .env and MCP_SERVER_URL)."""
+    try:
+        base = get_config().mcp_server_url.strip()
+    except Exception:
+        base = ""
     if not base:
-        base = "http://localhost:8000"
+        base = (os.getenv("MCP_SERVER_URL") or "http://localhost:8000").strip()
     base = base.rstrip("/")
     return base if base.endswith("/sse") else f"{base}/sse"
 

@@ -25,8 +25,8 @@ class AgentServerConfig(BaseSettings):
 
     # MCP Server connection
     mcp_server_url: str = Field(
-        default="http://mcp-server:8000",
-        description="MCP Server URL for tool integration",
+        default="http://localhost:8000",
+        description="MCP Server URL for tool integration (use http://mcp-server:8000 in Docker)",
     )
 
     # AWS Bedrock settings

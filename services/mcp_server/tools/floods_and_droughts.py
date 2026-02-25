@@ -86,16 +86,19 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
     return bucket, key
 
 
-def _s3_client_unsigned():
+def _s3_client_unsigned(region_name: str = "us-west-2"):
     """
     Public AWS OpenData buckets often allow anonymous access.
     This creates a boto3 client with unsigned requests (no credentials required).
+    GDFC bucket is in us-west-2.
     """
     import boto3
     from botocore import UNSIGNED
     from botocore.config import Config
 
-    return boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    return boto3.client(
+        "s3", region_name=region_name, config=Config(signature_version=UNSIGNED)
+    )
 
 
 def _download_s3_to_temp(s3_uri: str) -> Path:
@@ -195,9 +198,20 @@ def _open_dataset_s3(s3_uri_or_prefix: str, cache_key: str) -> xr.Dataset:
 
     try:
         tmp_path = _download_s3_to_temp(s3_uri)
-        ds = xr.open_dataset(tmp_path)
-        _DATA_CACHE[cache_key] = ds
-        return ds
+        # Prefer h5netcdf (pure Python); fallback to netcdf4. See xarray IO backends.
+        for engine in ("h5netcdf", "netcdf4", None):
+            try:
+                ds = xr.open_dataset(tmp_path, engine=engine)
+                _DATA_CACHE[cache_key] = ds
+                return ds
+            except Exception as e:
+                if engine is None:
+                    raise GDFCDataUnavailableError(
+                        "Failed to open NetCDF: install one of [h5netcdf, netcdf4]. "
+                        "E.g. pip install h5netcdf netcdf4. Details: " + str(e)
+                    ) from e
+                logger.debug(f"[GDFC] open_dataset(engine={engine}) failed: {e}")
+                continue
     finally:
         if tmp_path is not None:
             try:
