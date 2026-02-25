@@ -40,6 +40,10 @@ def normalize_chat_messages(messages: Any) -> list[dict]:
     return normalized
 
 
+# Per-message content cap so one huge assistant message doesn't blow the prompt (Bedrock 200k limit)
+MAX_MESSAGE_CONTENT_CHARS = 2500
+
+
 def format_chat_history(
     messages: Any,
     *,
@@ -49,7 +53,8 @@ def format_chat_history(
     """Format recent chat history as plain text for prompt injection.
 
     - Keeps only the last `max_messages` messages.
-    - Truncates oldest content to fit within `max_chars`.
+    - Truncates each message's content to MAX_MESSAGE_CONTENT_CHARS.
+    - Truncates total to fit within `max_chars`.
     """
 
     norm = normalize_chat_messages(messages)
@@ -62,6 +67,8 @@ def format_chat_history(
     for m in tail:
         role = m.get("role", "")
         content = m.get("content", "")
+        if len(content) > MAX_MESSAGE_CONTENT_CHARS:
+            content = content[: MAX_MESSAGE_CONTENT_CHARS - 20].rstrip() + "… [truncated]"
         lines.append(f"{role.capitalize()}: {content}")
 
     text = "\n".join(lines).strip()

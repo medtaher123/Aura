@@ -1,6 +1,26 @@
 import json
 
 
+def test_truncate_for_prompt_limits_size():
+    """Truncation keeps prompt under limit to avoid Bedrock 200k token error."""
+    from src.services.data_agent_service import (
+        _truncate_for_prompt,
+        MAX_TOOL_RESULT_MESSAGE_CHARS,
+    )
+
+    assert _truncate_for_prompt(None) == ""
+    assert _truncate_for_prompt("short") == "short"
+    long_msg = "x" * (MAX_TOOL_RESULT_MESSAGE_CHARS + 500)
+    out = _truncate_for_prompt(long_msg)
+    assert len(out) <= MAX_TOOL_RESULT_MESSAGE_CHARS + 20
+    assert out.endswith("… [truncated]")
+    # 400-char limit for input
+    long_input = "y" * 500
+    out_input = _truncate_for_prompt(long_input, max_chars=400)
+    assert len(out_input) <= 420
+    assert "… [truncated]" in out_input
+
+
 def test_data_agent_executes_multiple_tools_without_required_tools():
     """Regression test: DataAgent must not stop after the first tool call.
 
