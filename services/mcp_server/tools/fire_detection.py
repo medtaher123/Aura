@@ -316,12 +316,12 @@ def detect_fire_tool(
         if not nb_fires:
             if start_date == end_date:
                 message = (
-                    f"There were no fires detected near {display_location} on {start_date} "
+                    f"There were no hotspots or possible fires detected near {display_location} on {start_date} "
                     f"within a radius of {radius_km_f} km."
                 )
             else:
                 message = (
-                    f"There were no fires detected near {display_location} from {start_date} to {end_date} "
+                    f"There were no hotspots or possible fires detected near {display_location} from {start_date} to {end_date} "
                     f"within a radius of {radius_km_f} km."
                 )
             return make_tool_response(
@@ -341,12 +341,12 @@ def detect_fire_tool(
 
         if start_date == end_date:
             message = (
-                f"{nb_fires} fire(s) detected near {display_location} on {start_date} "
+                f"{nb_fires} fire(s) or hotspot(s) detected near {display_location} on {start_date} "
                 f"within a radius of {radius_km_f} km."
             )
         else:
             message = (
-                f"{nb_fires} fire(s) detected near {display_location} from {start_date} to {end_date} "
+                f"{nb_fires} fire(s) or hotspot(s) detected near {display_location} from {start_date} to {end_date} "
                 f"within a radius of {radius_km_f} km."
             )
 

@@ -60,7 +60,7 @@
         "storage_tank", "spring_box", "chimney", "cooling_tower", "flare",
         "gas_well", "petroleum_well", "offshore_platform", "gasometer",
         "antenna", "communications_tower", "mast", "satellite_dish",
-        "street_cabinet", "utility_pole", "monitoring_station", "manhole"
+        "street_cabinet", "utility_pole", "monitoring_station", "manhole", "dyke"
       ],
       "building": [
         "transformer_tower", "service", "power", "reservoir_covered",
@@ -70,7 +70,10 @@
         "oil", "gas", "chemical", "water_works"
       ],
       "amenity": [
-        "drinking_water"
+        "drinking_water","reservoir"
+      ],
+      "energy": [
+        "power","nuclear","solar","wind","hydro","geothermal","biomass","waste","electricity","dam"
       ]
     },
     "office": {

@@ -27,6 +27,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- If the user asks about what tools are available, how tools work, what data sources tools use, or what questions they can ask, use tools_info_tool.\n"
     "- WATER/FLOOD RISK QUERIES: Use geoserver_risk_mask_tool for 'water risk', 'flood risk', 'flood mask', 'water mask', 'risk map', or 'show me risk in [city]'. This shows satellite-derived risk predictions.\n"
     "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2025', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
+    "- CITY FLOOD DAMAGE: Use flood_damage_city_tool when the user asks for total flood damage for a CITY (e.g., 'flood damage for Lyon at 3 m', 'total cost for Paris if flooded'). This combines OSM building areas with depth-damage curves. Use flood_depth_damage_tool for country-level damage per m² only.\n"
     "- SURFACE WATER INGRESS: Use estimate_surface_water_ingress_tool ONLY when user asks for 'ingress risk' or 'surface water ingress' or 'water accumulation points'. This computes terrain-based analysis.\n"
     "- You may call multiple tools over multiple steps.\n"
     "- If the question is about 'last summer' or 'last month' or 'last year' or 'last week' or 'last day' or 'today', use the get_date tool to get the date and then use the appropriate tool to get the data.\n"
@@ -279,6 +280,20 @@ Step 1 JSON:
 {"action":"flood_depth_damage_tool","action_input":{"country":"France","asset_class":"commercial","depth_m":2,"continent":"Europe","basis":"building"},"commentary":"Calling flood_depth_damage_tool to estimate depth-damage for commercial assets in France at 2 m depth."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I estimated flood damage for commercial buildings in France at 2 m depth using the depth-damage curves and country max damage values. See the returned estimates.","commentary":"Summarizing the flood depth-damage results."}
+
+Example 26
+User: Estimate the total flood damage in Lyon with a flood depth of 3 meters in 2020.
+Step 1 JSON:
+{"action":"flood_damage_city_tool","action_input":{"city":"Lyon","depth_m":3,"year":2020},"commentary":"Calling flood_damage_city_tool to estimate total flood damage for Lyon at 3 m depth using OSM building areas and depth-damage curves."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I estimated total flood damage for Lyon at 3 m depth by combining building areas from OSM with country-specific damage curves. See the returned breakdown by building type and total cost in EUR.","commentary":"Summarizing the city flood damage results."}
+
+Example 27
+User: How many critical infrastructure facilities are there near Paris?
+Step 1 JSON:
+{"action":"infrastructure_query_tool","action_input":{"location":"Paris","radius_km":10,"infrastructure_types":["critical_infrastructure"]},"commentary":"Calling infrastructure_query_tool to list critical infrastructure facilities near Paris."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I queried critical infrastructure facilities near Paris. See the returned infrastructure list and counts.","commentary":"Summarizing the infrastructure query results."}
 """.strip()
 
 

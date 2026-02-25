@@ -6,7 +6,7 @@ given a flood depth, asset class, and country.
 """
 
 from __future__ import annotations
-
+from utils.multiplier_year import GLOBAL_MULTIPLIER
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -78,30 +78,6 @@ BASIS_ALIASES = {
 AG_BASIS_OPTIONS = {"per_hectare", "per_ha", "hectare"}
 AREA_BASIS_OPTIONS = {"per_m2", "m2", "sqm"}
 
-#change this to be outside the code
-GLOBAL_MULTIPLIER = {
-    2010: 1.000,
-    2011: 1.045,
-    2012: 1.093,
-    2013: 1.143,
-    2014: 1.195,
-    2015: 1.249,
-    2016: 1.306,
-    2017: 1.365,
-    2018: 1.427,
-    2019: 1.492,
-    2020: 1.559,
-    2021: 1.630,
-    2022: 1.704,
-    2023: 1.782,
-    2024: 1.863,
-    2025: 1.948,
-    2026: 2.036,
-    2027: 2.128,
-    2028: 2.223,
-    2029: 2.323,
-    2030: 2.427,
-}
 
 
 def _normalize_text(value: str) -> str:
@@ -460,9 +436,7 @@ def flood_depth_damage_tool(
         return make_tool_response(
             tool_name="flood_depth_damage_tool",
             message=(
-                "No damage curve available for the requested continent. "
-                "Provide a continent like Europe, Asia, Africa, Oceania, "
-                "North America, or Central/South America."
+                "No damage curve available for the requested country. "
             ),
             country=country,
             error=True,

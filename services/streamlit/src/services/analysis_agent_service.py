@@ -10,6 +10,19 @@ from src.services.llm_service import get_chat_llm
 from src.core.prompts import get_analysis_prompt
 from src.tools.contracts import ToolResponse, make_tool_response
 
+# Cap size of data_response in analysis prompt to avoid Bedrock "prompt too long" (200k limit)
+MAX_DATA_RESPONSE_CHARS = 12000
+
+
+def _format_data_response_for_prompt(data_response: Any) -> str:
+    """Stringify data_response for the analysis prompt, truncating if huge."""
+    if data_response is None:
+        return "(no data)"
+    s = str(data_response)
+    if len(s) <= MAX_DATA_RESPONSE_CHARS:
+        return s
+    return s[: MAX_DATA_RESPONSE_CHARS - 50].rstrip() + "\n… [truncated for length]"
+
 
 @dataclass
 class AnalysisAgentExecutor:
@@ -26,6 +39,8 @@ class AnalysisAgentExecutor:
         if isinstance(context, str) and context.strip():
             context_block = f"conversation_context:\n{context.strip()}\n\n"
 
+        data_response_text = _format_data_response_for_prompt(data_response)
+
         msg = self.llm.invoke(
             [
                 SystemMessage(content=prompt),
@@ -33,7 +48,7 @@ class AnalysisAgentExecutor:
                     content=(
                         f"{context_block}"
                         f"user_question:\n{user_question}\n\n"
-                        f"data_response:\n{data_response}"
+                        f"data_response:\n{data_response_text}"
                     )
                 ),
             ]
