@@ -398,15 +398,13 @@ for msg in st.session_state.messages:
             st.write(content)
         else:
             # assistant + not error
+            # Show map if any item is a legacy HTML path or a spec with view_state
+            # (view_state alone is enough to show a basemap centered on the location)
             has_map = any(
                 (isinstance(x, str) and x.endswith(".html"))
                 or (
                     isinstance(x, dict)
                     and isinstance(x.get("view_state"), dict)
-                    and (
-                        isinstance(x.get("points"), list)
-                        or isinstance(x.get("layers"), list)
-                    )
                 )
                 for x in maps
             )
