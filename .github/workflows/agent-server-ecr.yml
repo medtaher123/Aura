@@ -25,10 +25,10 @@ concurrency:
 
 env:
     AWS_REGION: eu-west-3
-    ECR_REPOSITORY: eo-agent-server
+    ECR_REPOSITORY: eo-agent-agent-server
     SERVICE_PATH: services/agent_server
     ECS_CLUSTER: eo-agent-cluster
-    ECS_SERVICE: eo-agent-server-service
+    ECS_SERVICE: eo-agent-agent-service
 
 jobs:
     build-and-push:
