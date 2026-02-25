@@ -20,7 +20,6 @@ Optional (if you already know variable names):
 
 from __future__ import annotations
 
-import os
 import math
 import tempfile
 from pathlib import Path
@@ -33,7 +32,7 @@ from core.logger import get_logger
 from config import get_config
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.map_view_service import view_state_from_bbox, view_state_from_points
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from mcp_singleton import mcp
 
 logger = get_logger(__name__)
@@ -44,16 +43,14 @@ config = get_config()
 # CONFIG (S3-only)
 # --------------------------------------------------------------------------------------
 
-def _get_attr(obj, name: str, default=None):
-    return getattr(obj, name, default)
 
 # REQUIRED
-GDFC_DROUGHT_S3 = _get_attr(config, "gdfc_drought_s3", os.getenv("GDFC_DROUGHT_S3", "")).strip()
-GDFC_FLOOD_S3 = _get_attr(config, "gdfc_flood_s3", os.getenv("GDFC_FLOOD_S3", "")).strip()
+GDFC_DROUGHT_S3 = config.gdfc_drought_s3
+GDFC_FLOOD_S3 = config.gdfc_flood_s3
 
 # OPTIONAL (we can also auto-detect a likely variable name)
-GDFC_DROUGHT_VAR = _get_attr(config, "gdfc_drought_var", os.getenv("GDFC_DROUGHT_VAR", "")).strip()
-GDFC_FLOOD_VAR = _get_attr(config, "gdfc_flood_var", os.getenv("GDFC_FLOOD_VAR", "")).strip()
+GDFC_DROUGHT_VAR = config.gdfc_drought_var
+GDFC_FLOOD_VAR = config.gdfc_flood_var
 
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -63,8 +60,10 @@ MAPS_DIR.mkdir(parents=True, exist_ok=True)
 # Errors
 # --------------------------------------------------------------------------------------
 
+
 class GDFCDataUnavailableError(RuntimeError):
     pass
+
 
 class GeocodingError(RuntimeError):
     pass
@@ -74,8 +73,10 @@ class GeocodingError(RuntimeError):
 # S3 helpers (PUBLIC bucket, no credentials required)
 # --------------------------------------------------------------------------------------
 
+
 def _is_s3_path(path: str) -> bool:
     return isinstance(path, str) and path.startswith("s3://")
+
 
 def _parse_s3_uri(uri: str) -> tuple[str, str]:
     stripped = uri.replace("s3://", "", 1)
@@ -83,6 +84,7 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
         return stripped, ""
     bucket, key = stripped.split("/", 1)
     return bucket, key
+
 
 def _s3_client_unsigned():
     """
@@ -95,6 +97,7 @@ def _s3_client_unsigned():
 
     return boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
+
 def _download_s3_to_temp(s3_uri: str) -> Path:
     """
     Downloads an S3 object to a temp file and returns the temp path.
@@ -104,7 +107,9 @@ def _download_s3_to_temp(s3_uri: str) -> Path:
     if not bucket or not key:
         raise GDFCDataUnavailableError(f"Invalid S3 URI: {s3_uri}")
 
-    tmp = tempfile.NamedTemporaryFile(prefix="gdfc_", suffix=Path(key).suffix or ".nc", delete=False)
+    tmp = tempfile.NamedTemporaryFile(
+        prefix="gdfc_", suffix=Path(key).suffix or ".nc", delete=False
+    )
     tmp_path = Path(tmp.name)
     tmp.close()
 
@@ -119,6 +124,7 @@ def _download_s3_to_temp(s3_uri: str) -> Path:
             f"Check the path exists and region is correct (us-west-2). Details: {e}"
         )
     return tmp_path
+
 
 def _resolve_s3_nc(s3_uri_or_prefix: str) -> str:
     """
@@ -174,6 +180,7 @@ def _resolve_s3_nc(s3_uri_or_prefix: str) -> str:
 
 _DATA_CACHE: Dict[str, Any] = {}
 _PERCENTILE_CACHE: Dict[str, Any] = {}
+
 
 def _open_dataset_s3(s3_uri_or_prefix: str, cache_key: str) -> xr.Dataset:
     """
@@ -269,7 +276,11 @@ def _extract_nearest(ds: xr.Dataset, var_name: str, lat: float, lon: float) -> f
     lon_norm = _normalize_lon(lon, ds[lon_name])
 
     try:
-        val = ds[var_name].sel({lat_name: lat, lon_name: lon_norm}, method="nearest").values
+        val = (
+            ds[var_name]
+            .sel({lat_name: lat, lon_name: lon_norm}, method="nearest")
+            .values
+        )
         return float(np.asarray(val).item())
     except Exception:
         ds_lat = ds[lat_name]
@@ -290,7 +301,9 @@ def _safe_float(x) -> Optional[float]:
         return None
 
 
-def _compute_percentile(cache_key: str, ds: xr.Dataset, var_name: str, value: float, sample_step: int = 8) -> Optional[float]:
+def _compute_percentile(
+    cache_key: str, ds: xr.Dataset, var_name: str, value: float, sample_step: int = 8
+) -> Optional[float]:
     ck = f"{cache_key}:{var_name}:step{sample_step}"
     if ck in _PERCENTILE_CACHE:
         arr = _PERCENTILE_CACHE[ck]
@@ -317,6 +330,7 @@ def _compute_percentile(cache_key: str, ds: xr.Dataset, var_name: str, value: fl
 # Risk scoring logic
 # --------------------------------------------------------------------------------------
 
+
 def _risk_level_from_return_period_drought(rp_years: float) -> str:
     if rp_years >= 20:
         return "High"
@@ -324,12 +338,14 @@ def _risk_level_from_return_period_drought(rp_years: float) -> str:
         return "Medium"
     return "Low"
 
+
 def _risk_level_from_return_period_flood(rp_years: float) -> str:
     if rp_years <= 20:
         return "High"
     if rp_years <= 50:
         return "Medium"
     return "Low"
+
 
 def _color_for_level(level: str) -> List[int]:
     if level == "High":
@@ -339,9 +355,9 @@ def _color_for_level(level: str) -> List[int]:
     return [0, 128, 0, 160]
 
 
-from typing import Optional, Dict, Any, List
-
-def _aggregate_risk_score(percentile: Optional[float], return_period: float, hazard: str) -> Optional[float]:
+def _aggregate_risk_score(
+    percentile: Optional[float], return_period: float, hazard: str
+) -> Optional[float]:
     if percentile is None:
         return None
 
@@ -371,7 +387,6 @@ def _flood_profile() -> Dict[str, str]:
     }
 
 
-
 def _historical_context_stub(hazard: str) -> Dict[str, str]:
     # lightweight, catalogue-based interpretation (no event parsing)
     if hazard == "drought":
@@ -392,6 +407,7 @@ def _historical_context_stub(hazard: str) -> Dict[str, str]:
 # Core computations
 # --------------------------------------------------------------------------------------
 
+
 def _resolve_location(
     location: str | None,
     *,
@@ -403,9 +419,7 @@ def _resolve_location(
             lat_f = float(lat)
             lon_f = float(lon)
         except (TypeError, ValueError):
-            raise GeocodingError(
-                f"Invalid coordinates: lat={lat}, lon={lon}."
-            )
+            raise GeocodingError(f"Invalid coordinates: lat={lat}, lon={lon}.")
 
         resolved_name = None
         if not isinstance(location, str) or not location.strip():
@@ -415,15 +429,19 @@ def _resolve_location(
             except Exception:
                 resolved_name = None
 
-        resolved_name = resolved_name or (location.strip() if isinstance(location, str) else None) or f"{lat_f:.4f}, {lon_f:.4f}"
+        resolved_name = (
+            resolved_name
+            or (location.strip() if isinstance(location, str) else None)
+            or f"{lat_f:.4f}, {lon_f:.4f}"
+        )
         return None, lat_f, lon_f, resolved_name
 
     if not isinstance(location, str) or not location.strip():
-        raise GeocodingError(
-            "Please provide a location name or lat/lon coordinates."
-        )
+        raise GeocodingError("Please provide a location name or lat/lon coordinates.")
 
-    bbox, lat_city, lon_city, city_name_final = get_city_bbox(location, require_confirmation=True)
+    bbox, lat_city, lon_city, city_name_final = get_city_bbox(
+        location, require_confirmation=True
+    )
 
     if lat_city is None or lon_city is None:
         raise GeocodingError(
@@ -442,7 +460,12 @@ def _resolve_location(
     if isinstance(bbox, list) and len(bbox) == 4:
         try:
             south, north, west, east = (float(x) for x in bbox)
-            bbox_norm = [min(south, north), max(south, north), min(west, east), max(west, east)]
+            bbox_norm = [
+                min(south, north),
+                max(south, north),
+                min(west, east),
+                max(west, east),
+            ]
         except Exception:
             bbox_norm = None
 
@@ -460,7 +483,6 @@ def _ensure_s3_config():
         raise GDFCDataUnavailableError(
             "GDFC_FLOOD_S3 must be set to an S3 URI (public bucket). "
             "Example: s3://global-drought-flood-catalogue/Hazard-Maps/Pluvial-Frequency/<file>.nc"
-
         )
 
 
@@ -472,7 +494,9 @@ def get_drought_metrics(lat: float, lon: float) -> Dict[str, Any]:
     raw = _extract_nearest(ds, var, lat, lon)
     v = _safe_float(raw)
     if v is None:
-        raise GDFCDataUnavailableError("Drought value is missing/invalid at this location.")
+        raise GDFCDataUnavailableError(
+            "Drought value is missing/invalid at this location."
+        )
 
     level = _risk_level_from_return_period_drought(v)
     pct = _compute_percentile("gdfc_drought", ds, (var or _pick_first_data_var(ds)), v)
@@ -548,7 +572,6 @@ def get_flood_metrics(lat: float, lon: float) -> Dict[str, Any]:
     }
 
 
-
 def _compose_message(location_name: str, hazards: List[Dict[str, Any]]) -> str:
     """
     Compose a detailed, human-readable hazard message including:
@@ -611,23 +634,22 @@ def _compose_message(location_name: str, hazards: List[Dict[str, Any]]) -> str:
         "⚠️ Interpretation: This assessment is based on historical pluvial "
         "and drought frequencies (1950–2016 baseline). It does not account for "
         "local drainage capacity, urban infrastructure, or river overtopping."
-
     )
-
 
 
 # --------------------------------------------------------------------------------------
 # MCP Tool
 # --------------------------------------------------------------------------------------
 
+
 @mcp.tool()
 def drought_flood_risk_tool(
     location: str | None = None,
-    hazard: str | None = "both",     # expected
-    risk_type: str | None = None,    # backward compat (agent sometimes sends risk_type)
+    hazard: str | None = "both",  # expected
+    risk_type: str | None = None,  # backward compat (agent sometimes sends risk_type)
     lat: float | None = None,
     lon: float | None = None,
-) -> dict:
+) -> ToolResponse:
     """
     Long-term drought & flood risk assessment based on GDFC Hazard Maps (1950–2016).
 
@@ -639,11 +661,10 @@ def drought_flood_risk_tool(
             lon: longitude
     """
     try:
-        if (
-            (not isinstance(location, str) or not location.strip())
-            and not (lat is not None and lon is not None)
+        if (not isinstance(location, str) or not location.strip()) and not (
+            lat is not None and lon is not None
         ):
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="drought_flood_risk_tool",
                 message="Please specify a location (e.g., 'Paris, France') or lat/lon coordinates.",
                 error=True,
@@ -689,16 +710,24 @@ def drought_flood_risk_tool(
         points = [point]
 
         view_state = (
-            view_state_from_bbox({"lat": lat, "lon": lon}, padding=0.22, min_zoom=4.5, max_zoom=10.5, radius=0)
+            view_state_from_bbox(
+                ToolCoordinates(lat=lat, lon=lon),
+                padding=0.22,
+                min_zoom=4.5,
+                max_zoom=10.5,
+                radius=0,
+            )
             if isinstance(bbox, list) and len(bbox) == 4
-            else view_state_from_points(points, padding=0.22, min_zoom=4.5, max_zoom=10.5, radius=0)
+            else view_state_from_points(
+                points, padding=0.22, min_zoom=4.5, max_zoom=10.5, radius=0
+            )
         )
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="drought_flood_risk_tool",
             message=message,
             city=resolved_name,
-            coordinates={"lat": lat, "lon": lon},
+            coordinates=ToolCoordinates(lat=lat, lon=lon),
             data={
                 "hazards": hazards,
                 "source": "Global Drought and Flood Catalogue (GDFC) - Hazard Maps",
@@ -716,13 +745,15 @@ def drought_flood_risk_tool(
                     "flood_var": GDFC_FLOOD_VAR or None,
                 },
             },
-            artifacts={
-                "maps": [
+            artifacts=ToolArtifacts(
+                maps=[
                     {
                         "title": "Drought/Flood long-term risk (GDFC baseline)",
                         "points": points,
                         "view_state": view_state,
-                        "tooltip": {"text": "{location}\nRisk: {risk_level}\n{details}"},
+                        "tooltip": {
+                            "text": "{location}\nRisk: {risk_level}\n{details}"
+                        },
                         "fill_color": _color_for_level(max_level),
                         "radius": 10,
                         "radius_units": "pixels",
@@ -730,14 +761,14 @@ def drought_flood_risk_tool(
                         "radius_max_pixels": 12,
                     }
                 ],
-                "thumbnails": [],
-                "urls": [],
-            },
+                thumbnails=[],
+                urls=[],
+            ),
             error=False,
         )
 
     except LocationAmbiguousError as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="drought_flood_risk_tool",
             message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
             city=location,
@@ -751,21 +782,21 @@ def drought_flood_risk_tool(
         )
 
     except GeocodingError as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="drought_flood_risk_tool",
             message=str(e),
             error=True,
         )
 
     except GDFCDataUnavailableError as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="drought_flood_risk_tool",
             message=str(e),
             error=True,
         )
 
     except Exception as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="drought_flood_risk_tool",
             message=f"Unexpected error during processing: {str(e)}",
             error=True,

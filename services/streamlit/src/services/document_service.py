@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 import io
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes, *, max_chars: int = 1000_000) -> str:
@@ -17,36 +28,63 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes, *, max_chars: int = 1000_000) 
         RuntimeError: if PDF dependencies are missing.
         ValueError: if input is empty.
     """
+    logger.info(
+        f"Starting PDF text extraction (size: {len(pdf_bytes)} bytes, max_chars: {max_chars})"
+    )
+
     if not isinstance(pdf_bytes, (bytes, bytearray)) or not pdf_bytes:
+        logger.error("Empty PDF payload provided")
         raise ValueError("Empty PDF payload")
 
     try:
         from pypdf import PdfReader
     except Exception as e:  # pragma: no cover
+        logger.error(f"pypdf dependency missing: {e}")
         raise RuntimeError("Missing dependency: install pypdf") from e
 
-    reader = PdfReader(io.BytesIO(bytes(pdf_bytes)))
+    try:
+        reader = PdfReader(io.BytesIO(bytes(pdf_bytes)))
+        logger.debug(f"PDF loaded successfully, pages: {len(reader.pages)}")
+    except Exception as e:
+        logger.error(f"Failed to read PDF: {type(e).__name__}: {str(e)}")
+        raise
 
     parts: list[str] = []
     total = 0
 
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        text = text.replace("\x00", "").strip()
-        if not text:
+    for page_num, page in enumerate(reader.pages, 1):
+        try:
+            text = page.extract_text() or ""
+            text = text.replace("\x00", "").strip()
+            if not text:
+                logger.debug(f"Page {page_num}: No text extracted")
+                continue
+
+            remaining = max_chars - total
+            if remaining <= 0:
+                logger.info(f"Reached max_chars limit at page {page_num}")
+                break
+
+            if len(text) > remaining:
+                logger.debug(
+                    f"Page {page_num}: Truncating text from {len(text)} to {remaining} chars"
+                )
+                text = text[:remaining]
+
+            parts.append(text)
+            total += len(text)
+            logger.debug(
+                f"Page {page_num}: Extracted {len(text)} chars (total: {total})"
+            )
+
+            if total >= max_chars:
+                break
+        except Exception as e:
+            logger.warning(
+                f"Error extracting text from page {page_num}: {type(e).__name__}: {str(e)}"
+            )
             continue
 
-        remaining = max_chars - total
-        if remaining <= 0:
-            break
-
-        if len(text) > remaining:
-            text = text[:remaining]
-
-        parts.append(text)
-        total += len(text)
-
-        if total >= max_chars:
-            break
-
-    return "\n\n".join(parts).strip()
+    result = "\n\n".join(parts).strip()
+    logger.info(f"PDF extraction complete: {total} chars from {len(parts)} pages")
+    return result

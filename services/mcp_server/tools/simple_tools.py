@@ -6,14 +6,14 @@ This module contains simple tools with no external service dependencies.
 
 from mcp_singleton import mcp
 from datetime import date, datetime
-from utils.contracts import make_tool_response
+from utils.contracts import ToolResponse
 
 
 @mcp.tool()
-def get_time() -> dict:
+def get_time() -> ToolResponse:
     """Get the current time in a human-readable string format."""
     current_time = datetime.now().strftime("%Hh%M")
-    return make_tool_response(
+    return ToolResponse(
         tool_name="get_time",
         message=f"The current time is {current_time}.",
         data={"time": current_time},
@@ -22,10 +22,10 @@ def get_time() -> dict:
 
 
 @mcp.tool()
-def get_date() -> dict:
+def get_date() -> ToolResponse:
     """Get the current date in a human-readable string format."""
     current_date = date.today().strftime("%d/%m/%Y")
-    return make_tool_response(
+    return ToolResponse(
         tool_name="get_date",
         message=f"Today's date is {current_date}.",
         data={"date": current_date},
@@ -34,7 +34,7 @@ def get_date() -> dict:
 
 
 @mcp.tool()
-def calculator(expression: str) -> dict:
+def calculator(expression: str) -> ToolResponse:
     """Evaluate a simple arithmetic expression (e.g., '23 * 7')."""
     print("TOOOO")
     try:
@@ -43,14 +43,14 @@ def calculator(expression: str) -> dict:
             raise ValueError("Invalid characters in expression")
 
         result = eval(expression, {"__builtins__": {}}, {})
-        return make_tool_response(
+        return ToolResponse(
             tool_name="calculator",
             message=f"Result: {result}",
             data={"expression": expression, "result": result},
             error=False,
         )
     except Exception as e:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="calculator",
             message=f"Error evaluating expression: {str(e)}",
             data={"expression": expression},

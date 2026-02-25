@@ -6,7 +6,7 @@ import requests
 from mcp_singleton import mcp
 from core.logger import get_logger
 from config import get_config
-from utils.contracts import make_tool_response
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from shapely.geometry import shape
 
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
@@ -210,7 +210,7 @@ def _summarize_features(feature_collection: dict[str, Any]) -> dict[str, Any]:
 def _view_state_from_bounds(bounds: Optional[list[float]]) -> dict[str, float]:
     if bounds and len(bounds) == 4:
         minx, miny, maxx, maxy = bounds
-        coords = {"lat": (miny + maxy) / 2, "lon": (minx + maxx) / 2}
+        coords = ToolCoordinates(lat=(miny + maxy) / 2, lon=(minx + maxx) / 2)
         return view_state_from_bbox(coords, padding=0.12, min_zoom=2.0, max_zoom=10.5)
     return {"latitude": 36.8, "longitude": 10.2, "zoom": 8}
 
@@ -232,7 +232,7 @@ def geoserver_risk_mask_tool(
     model_version: str | None = None,
     limit: int = 500,
     render_mode: str = "auto",
-) -> dict[str, Any]:
+) -> ToolResponse:
     """Query GeoServer risk polygons with filters (WFS) and display them as a mask on a map (WMS or GeoJSON).
 
     Use this tool when the user asks to show/visualize risk masks or polygons from GeoServer, especially when they mention
@@ -273,7 +273,7 @@ def geoserver_risk_mask_tool(
         try:
             _ensure_bbox(filters)
         except LocationAmbiguousError as e:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="geoserver_risk_mask_tool",
                 message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
                 city=location,
@@ -335,10 +335,10 @@ def geoserver_risk_mask_tool(
             ],
         }
 
-        return make_tool_response(
+        return ToolResponse(
             tool_name="geoserver_risk_mask_tool",
             message="GeoServer risk mask generated.",
-            artifacts={"maps": [map_spec], "thumbnails": [], "urls": []},
+            artifacts=ToolArtifacts(maps=[map_spec], thumbnails=[], urls=[]),
             start_date=filters.get("start_date"),
             end_date=filters.get("end_date"),
             city=filters.get("location"),
@@ -360,7 +360,7 @@ def geoserver_risk_mask_tool(
 
     except Exception as e:
         logger.error(f"GeoServer risk mask tool error: {e}", exc_info=True)
-        return make_tool_response(
+        return ToolResponse(
             tool_name="geoserver_risk_mask_tool",
             message=f"GeoServer tool error: {str(e)}",
             error=True,

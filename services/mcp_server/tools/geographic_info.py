@@ -7,7 +7,7 @@ Retrieves information about countries and cities.
 import requests
 
 from utils.bbox_service import get_city_candidates, reverse_geocode
-from utils.contracts import make_tool_response
+from utils.contracts import ToolCoordinates, ToolResponse
 from mcp_singleton import mcp
 
 
@@ -86,7 +86,7 @@ def geo_info_tool(
     name: str | None = None,
     lat: float | None = None,
     lon: float | None = None,
-) -> dict:
+) -> ToolResponse:
     """Retrieve geographic information about a country or a city.
 
     Args:
@@ -101,7 +101,7 @@ def geo_info_tool(
             lat_f = float(lat)
             lon_f = float(lon)
         except Exception:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="geo_info_tool",
                 message="Invalid coordinates provided. lat/lon must be numeric.",
                 error=True,
@@ -129,7 +129,7 @@ def geo_info_tool(
             }
     else:
         if not isinstance(location_name, str) or not location_name.strip():
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="geo_info_tool",
                 message="Please provide a location name or lat/lon coordinates.",
                 error=True,
@@ -142,7 +142,7 @@ def geo_info_tool(
     if not info:
         candidates = get_city_candidates(location_name)
         if len(candidates) > 1:
-            return make_tool_response(
+            return ToolResponse(
                 tool_name="geo_info_tool",
                 message=f"I found multiple matches for '{location_name}'. Please confirm the correct location.",
                 city=location_name,
@@ -161,7 +161,7 @@ def geo_info_tool(
             info = get_city_info(location_name)
 
     if not info:
-        return make_tool_response(
+        return ToolResponse(
             tool_name="geo_info_tool",
             message=f"No results found for '{location_name}'.",
             city=location_name,
@@ -185,7 +185,7 @@ def geo_info_tool(
             lat = info.get("Latitude")
             lon = info.get("Longitude")
             if lat is not None and lon is not None:
-                coordinates = {"lat": float(lat), "lon": float(lon)}
+                coordinates = ToolCoordinates(lat=float(lat), lon=float(lon))
         except Exception:
             coordinates = None
     elif info_type == "coordinates":
@@ -193,11 +193,11 @@ def geo_info_tool(
             lat = info.get("Latitude")
             lon = info.get("Longitude")
             if lat is not None and lon is not None:
-                coordinates = {"lat": float(lat), "lon": float(lon)}
+                coordinates = ToolCoordinates(lat=float(lat), lon=float(lon))
         except Exception:
             coordinates = None
 
-    return make_tool_response(
+    return ToolResponse(
         tool_name="geo_info_tool",
         message=summary,
         country=country,

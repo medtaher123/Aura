@@ -284,7 +284,7 @@ def get_city_bbox(
             if last_exc:
                 logger.error(f"Failed to get bbox from Nominatim: {last_exc}")
             return None, None, None, city_name
-
+    return None, None, None, city_name
 
 def reverse_geocode(lat: float, lon: float):
     url = "https://nominatim.openstreetmap.org/reverse"
