@@ -353,7 +353,7 @@ def test_data_agent_pause_and_resume_location_confirmation():
             return ToolResponse(
                 tool_name=self.name,
                 message="ok",
-                artifacts={"maps": [], "thumbnails": [], "urls": []},
+                artifacts=ToolArtifacts(maps=[], thumbnails=[], urls=[]),
                 error=False,
             )
 
