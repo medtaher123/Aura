@@ -222,7 +222,7 @@ async def test_infrastructure_tool_hospitals_near_paris_group_breakdown(
     assert result.get("tool_name") == "infrastructure_query_tool"
     assert result.get("error") is False
     assert result.get("city") == "Paris"
-    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522}
+    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522, "zoom": None}
 
     data = result.get("data", {})
     assert "group_breakdown" in data, "response must include group_breakdown"

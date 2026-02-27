@@ -116,7 +116,7 @@ async def test_flood_damage_city_tool_unsupported_asset_class(mcp_client):
 async def test_flood_damage_city_tool_year_passed_through(mcp_client, monkeypatch):
     """Test tool passes year through to output when all deps are mocked."""
     def fake_geocode(_city_name):
-        return "POLYGON((2 48, 3 48, 3 49, 2 48))", "France", "Lyon"
+        return "POLYGON((2 48, 3 48, 3 49, 2 48))", "France", "Lyon", 48.8566, 2.3522
 
     def fake_query_areas(*_args, **_kwargs):
         return {"residential": 1000.0}, None
@@ -145,7 +145,7 @@ async def test_flood_damage_city_tool_year_passed_through(mcp_client, monkeypatc
 async def test_flood_damage_city_tool_city_not_found(mcp_client, monkeypatch):
     """Test tool returns error when geocoding returns no polygon."""
     def fake_geocode(_city_name):
-        return None, None, None
+        return None, None, None, None, None
 
     monkeypatch.setattr(fdc, "_get_city_polygon_and_country", fake_geocode)
 
@@ -164,7 +164,7 @@ async def test_flood_damage_city_tool_city_not_found(mcp_client, monkeypatch):
 async def test_flood_damage_city_tool_missing_s3_config(mcp_client, monkeypatch):
     """Test tool returns error when DAYLIGHT_ATHENA_OUTPUT is not set or placeholder."""
     def fake_geocode(_city_name):
-        return "POLYGON((2 48, 3 48, 3 49, 2 49, 2 48))", "France", "Lyon"
+        return "POLYGON((2 48, 3 48, 3 49, 2 49, 2 48))", "France", "Lyon", 48.8566, 2.3522
 
     class FakeConfig:
         daylight_athena_output = "s3://your-bucket/"
@@ -188,7 +188,7 @@ async def test_flood_damage_city_tool_missing_s3_config(mcp_client, monkeypatch)
 async def test_flood_damage_city_tool_success_with_mocked_athena(mcp_client, monkeypatch):
     """Test full flow with mocked geocoding and Athena: returns breakdown and total."""
     def fake_geocode(_city_name):
-        return "POLYGON((2 48, 3 48, 3 49, 2 49, 2 48))", "France", "Lyon"
+        return "POLYGON((2 48, 3 48, 3 49, 2 49, 2 48))", "France", "Lyon", 48.8566, 2.3522
 
     def fake_query_areas(*_args, **_kwargs):
         return {"residential": 10000.0, "commercial": 2000.0}, None
@@ -240,7 +240,7 @@ async def test_flood_damage_city_tool_success_with_mocked_athena(mcp_client, mon
 async def test_flood_damage_city_tool_no_buildings(mcp_client, monkeypatch):
     """Test tool returns friendly message when Athena finds no buildings in polygon."""
     def fake_geocode(_city_name):
-        return "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))", "France", "TinyVillage"
+        return "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))", "France", "TinyVillage", 48.8566, 2.3522
 
     def fake_query_areas(*_args, **_kwargs):
         return {}, None  # no buildings
@@ -271,7 +271,7 @@ async def test_flood_damage_city_tool_no_buildings(mcp_client, monkeypatch):
 async def test_flood_damage_city_tool_filter_asset_residential(mcp_client, monkeypatch):
     """Test tool with asset_class=residential only returns residential in breakdown."""
     def fake_geocode(_city_name):
-        return "POLYGON((2 48, 3 48, 3 49, 2 48))", "France", "Lyon"
+        return "POLYGON((2 48, 3 48, 3 49, 2 48))", "France", "Lyon", 48.8566, 2.3522
 
     def fake_query_areas(*_args, **_kwargs):
         return {"residential": 5000.0}, None
