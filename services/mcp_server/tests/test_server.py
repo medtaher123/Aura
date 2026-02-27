@@ -108,8 +108,8 @@ async def test_call_tool_method_success(mcp_server):
     # Verify result is not None
     assert result is not None
 
-    # Result should be a dict or list
-    assert isinstance(result, (dict, list))
+    # Raw MCP call_tool returns a list of content objects (or tuple)
+    assert isinstance(result, (list, tuple))
 
 
 @pytest.mark.integration
@@ -122,8 +122,8 @@ async def test_call_tool_method_with_arguments(mcp_server):
     # Verify result is not None
     assert result is not None
 
-    # Result should contain information about the calculation
-    assert isinstance(result, (dict, list))
+    # Raw MCP call_tool returns a list of content objects (or tuple)
+    assert isinstance(result, (list, tuple))
 
 
 @pytest.mark.integration

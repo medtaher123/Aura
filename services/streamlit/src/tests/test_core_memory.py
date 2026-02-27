@@ -4,7 +4,7 @@ Tests for core/memory.py - Chat message normalization and history formatting.
 
 import pytest
 
-from src.core.memory import normalize_chat_messages, format_chat_history
+from core.memory import normalize_chat_messages, format_chat_history
 
 
 class TestNormalizeChatMessages:

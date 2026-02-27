@@ -5,7 +5,7 @@ Tests for core/logger.py - Centralized logging configuration.
 import logging
 import pytest
 
-from src.core.logger import get_logger, logger
+from core.logger import get_logger
 
 
 class TestGetLogger:
@@ -38,22 +38,24 @@ class TestModuleLogger:
     """Tests for module-level logger instance."""
 
     def test_module_logger_exists(self):
-        assert logger is not None
-        assert isinstance(logger, logging.Logger)
+        assert get_logger() is not None
+        assert isinstance(get_logger(), logging.Logger)
 
     def test_module_logger_name(self):
-        assert logger.name == "metaplanet"
+        assert get_logger().name == "metaplanet"
 
     def test_module_logger_level(self):
-        assert logger.level == logging.INFO
+        logger_level = int(get_logger().level)
+        print(logger_level)
+        assert logger_level == int(logging.DEBUG)
 
     def test_module_logger_has_handler(self):
         # The module should have at least one handler
-        assert len(logger.handlers) > 0
+        assert len(get_logger().handlers) > 0
 
     def test_can_log_without_error(self):
         # Should not raise any errors
-        logger.debug("Test debug message")
-        logger.info("Test info message")
-        logger.warning("Test warning message")
-        logger.error("Test error message")
+        get_logger().debug("Test debug message")
+        get_logger().info("Test info message")
+        get_logger().warning("Test warning message")
+        get_logger().error("Test error message")

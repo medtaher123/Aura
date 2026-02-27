@@ -5,7 +5,7 @@ Tests for models/state_schema.py - Pydantic models for state management.
 import pytest
 from pydantic import ValidationError
 
-from src.models.state_schema import MyStateSchema
+from models.state_schema import MyStateSchema
 
 
 class TestMyStateSchema:

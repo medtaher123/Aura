@@ -14,6 +14,6 @@ LABELS: Dict[str, Dict[str, str]] = {
 }
 
 
-def get_labels(lang_code: str):
+def get_labels(lang_code: str | None) -> Dict[str, str]:
     base = lang_code.split("-")[0] if lang_code else "en"
     return LABELS.get(base, LABELS["en"])

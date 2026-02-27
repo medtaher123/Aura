@@ -5,7 +5,7 @@ Tests for services/document_service.py - PDF text extraction.
 import pytest
 from io import BytesIO
 
-from src.services.document_service import extract_text_from_pdf_bytes
+from services.document_service import extract_text_from_pdf_bytes
 
 
 class TestExtractTextFromPdfBytes:
@@ -40,7 +40,7 @@ class TestExtractTextFromPdfBytes:
         writer = PdfWriter()
         # Add a blank page
         writer.add_blank_page(width=72, height=72)
-        
+
         buffer = BytesIO()
         writer.write(buffer)
         pdf_bytes = buffer.getvalue()
@@ -78,7 +78,7 @@ class TestExtractTextFromPdfBytes:
 
         writer = PdfWriter()
         writer.add_blank_page(width=72, height=72)
-        
+
         buffer = BytesIO()
         writer.write(buffer)
         pdf_bytes = bytearray(buffer.getvalue())
@@ -95,7 +95,7 @@ class TestExtractTextFromPdfBytes:
 
         writer = PdfWriter()
         writer.add_blank_page(width=72, height=72)
-        
+
         buffer = BytesIO()
         writer.write(buffer)
         pdf_bytes = buffer.getvalue()
