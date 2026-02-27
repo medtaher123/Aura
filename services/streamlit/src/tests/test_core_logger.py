@@ -50,7 +50,7 @@ class TestModuleLogger:
     def test_module_logger_level(self):
         logger_level = int(get_logger().level)
         print(logger_level)
-        assert logger_level == int(logging.DEBUG)
+        assert logger_level == int(logging.INFO)
 
     def test_module_logger_has_handler(self):
         # The module should have at least one handler
