@@ -3,7 +3,7 @@ import re
 from typing import Optional
 from langdetect import detect
 from deep_translator import GoogleTranslator
-from core.logger import get_logger
+from src.core.logger import get_logger
 
 
 

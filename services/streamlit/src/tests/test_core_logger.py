@@ -5,7 +5,7 @@ Tests for core/logger.py - Centralized logging configuration.
 import logging
 import pytest
 
-from core.logger import get_logger
+from src.core.logger import get_logger
 
 
 class TestGetLogger:
