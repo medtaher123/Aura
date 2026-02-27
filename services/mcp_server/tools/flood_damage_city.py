@@ -533,8 +533,8 @@ def flood_damage_city_tool(
             country=country,
             error=True,
         )
-        _add_map_artifact(resp, display_name, center_lat, center_lon)
-        return resp.model_dump(mode="json")
+        _add_map_artifact(resp, display_name or "", center_lat, center_lon)
+        return resp
 
     athena_db = os.environ.get("ATHENA_DB") or get_config().athena_db or "default"
 
@@ -554,8 +554,8 @@ def flood_damage_city_tool(
             country=country,
             error=True,
         )
-        _add_map_artifact(resp, display_name, center_lat, center_lon)
-        return resp.model_dump(mode="json")
+        _add_map_artifact(resp, display_name or "", center_lat, center_lon)
+        return resp
 
     if not areas:
         resp = ToolResponse(
@@ -566,10 +566,10 @@ def flood_damage_city_tool(
             country=country,
             error=False,
         )
-        _add_map_artifact(resp, display_name, center_lat, center_lon)
-        return resp.model_dump(mode="json")
+        _add_map_artifact(resp, display_name or "", center_lat, center_lon)
+        return resp
 
-    cont = _normalize_continent(continent) or "europe"  # default for European cities
+    cont = _normalize_continent(continent or "europe") or "europe"  # default for European cities
     basis = "building_total"
     cost_per_m2: Dict[str, float] = {}
     for ac in areas:
@@ -624,5 +624,5 @@ def flood_damage_city_tool(
         },
         error=False,
     )
-    _add_map_artifact(resp, display_name, center_lat, center_lon)
-    return resp.model_dump(mode="json")
+    _add_map_artifact(resp, display_name or "", center_lat, center_lon)
+    return resp

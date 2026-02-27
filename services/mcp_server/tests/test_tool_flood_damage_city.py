@@ -217,12 +217,13 @@ async def test_flood_damage_city_tool_success_with_mocked_athena(mcp_client, mon
     assert "EUR" in (result.get("message") or "")
 
     data = result.get("data") or {}
+    total_estimated_damage_eur = data.get("total_estimated_damage_eur")
     assert data.get("city") == "Lyon"
     assert data.get("country") == "France"
     assert data.get("depth_m") == 2.0
     assert data.get("year") == 2024
     assert data.get("total_area_m2") == 12000.0
-    assert data.get("total_estimated_damage_eur") > 0
+    assert total_estimated_damage_eur is not None and total_estimated_damage_eur > 0 
     assert data.get("unit") == "EUR"
     breakdown = data.get("breakdown") or []
     assert len(breakdown) >= 1
