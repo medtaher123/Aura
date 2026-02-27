@@ -84,7 +84,7 @@ resource "aws_ecr_lifecycle_policy" "streamlit" {
 
 # ECR Repository for Agent Server
 resource "aws_ecr_repository" "agent_server" {
-  name                 = "${var.project_name}-server"
+  name                 = "${var.project_name}-agent-server"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
@@ -96,7 +96,7 @@ resource "aws_ecr_repository" "agent_server" {
   }
 
   tags = {
-    Name        = "${var.project_name}-server"
+    Name        = "${var.project_name}-agent-server"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
