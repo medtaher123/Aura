@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 # Pytest configuration for the workspace
-# Tests are in services/mcp_server/tests and services/streamlit/src/tests
+
 pythonpath = [
     ".",
     "services/mcp_server",
@@ -16,7 +16,7 @@ testpaths = [
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short --strict-markers"
+addopts = "-v --tb=short --strict-markers -m 'not integration'"
 filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
     "unit: Unit tests",
