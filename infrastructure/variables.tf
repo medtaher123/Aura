@@ -182,7 +182,7 @@ variable "agent_server_workers" {
 variable "agent_server_bedrock_model_id" {
   description = "Bedrock model ID for Agent server"
   type        = string
-  default     = "anthropic.claude-sonnet-4-20250514-v1:0"
+  default     = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
 }
 
 variable "agent_server_bedrock_max_tokens" {
