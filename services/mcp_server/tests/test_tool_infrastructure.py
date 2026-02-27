@@ -95,7 +95,7 @@ async def test_infrastructure_tool_with_city(mcp_client, monkeypatch):
 
     assert isinstance(result, dict)
     assert result.get("tool_name") == "infrastructure_query_tool"
-    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522}
+    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522, "zoom": None}
     assert result.get("city") == "Paris"
     assert result.get("data", {}).get("infrastructure")
 
@@ -117,7 +117,7 @@ async def test_infrastructure_tool_with_coordinates(mcp_client, monkeypatch):
 
     assert isinstance(result, dict)
     assert result.get("tool_name") == "infrastructure_query_tool"
-    assert result.get("coordinates") == {"lat": 52.52, "lon": 13.405}
+    assert result.get("coordinates") == {"lat": 52.52, "lon": 13.405, "zoom": None}
     assert result.get("city") == "Berlin"
 
 

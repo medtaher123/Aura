@@ -109,7 +109,7 @@ def sample_tool_call():
 @pytest.fixture
 def sample_city_bbox_call():
     """Sample bbox tool call for testing."""
-    return {"name": "get_date", "arguments": {}}
+    return {"name": "infrastructure_query_tool", "arguments": {"location": "Paris", "radius_km": 10}}
 
 
 @pytest.fixture

@@ -352,16 +352,42 @@ TOOLS_CATALOG = {
         "parameters": {
             "expression": "Arithmetic expression to evaluate"
         }
+    },
+    "flood_depth_damage_tool": {
+        "name": "Flood Depth-Damage Tool",
+        "purpose": "Estimate flood damage using global depth-damage curves and max damage tables",
+        "data_sources": [
+            "Global flood depth-damage functions dataset (JRC, 2017)",
+            "Country-level max damage values by asset class"
+        ],
+        "capabilities": [
+            "Estimate flood damage for a given depth and asset class",
+            "Support for residential, commercial, industrial, agriculture, infrastructure, and transport",
+            "Continent-specific damage curves",
+            "Year-adjusted damage values using global multipliers (2010-2030)"
+        ],
+        "example_questions": [
+            "Estimate flood damage for 2m depth in Germany for residential buildings",
+            "What is the flood damage for commercial buildings in France at 1.5m?"
+        ],
+        "parameters": {
+            "country": "Country name or ISO code",
+            "depth_m": "Flood depth in meters (0-6)",
+            "asset_class": "Asset class (residential, commercial, industrial, agriculture, infrastructure, transport)",
+            "continent": "Optional continent for curve selection",
+            "basis": "Optional basis for max damage (building, structure, content, land_use, object)",
+            "year": "Year for global multiplier (default: current year)"
+        }
     }
 }
 
 # Tool categories for better organization
 TOOL_CATEGORIES = {
-    "Fire & Disasters": ["detect_fire_tool", "query_disaster_events_tool", "query_hazards_tool"],
+    "Fire & Disasters": ["detect_fire_tool", "query_disaster_events_tool"],
     "Weather & Climate": ["weather_tool", "nasa_power_daily_tool", "nasa_power_hourly_tool", "drought_flood_risk_tool"],
-    "Water & Flooding": ["streamflow_forecast_tool", "estimate_surface_water_ingress_tool"],
+    "Water & Flooding": ["streamflow_forecast_tool", "estimate_surface_water_ingress_tool", "flood_depth_damage_tool"],
     "Satellite Imagery": ["query_stac_catalog"],
-    "Risk Analysis": ["geoserver_risk_mask_tool", "query_hazards_tool"],
+    "Risk Analysis": ["geoserver_risk_mask_tool"],
     "Infrastructure & Geography": ["infrastructure_query_tool", "geo_info_tool", "get_route_info"],
     "Utilities": ["get_time", "get_date", "calculator"]
 }

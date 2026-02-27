@@ -4,7 +4,7 @@ Tests for ui/i18n.py - Internationalization labels.
 
 import pytest
 
-from src.ui.i18n import get_labels, LABELS
+from ui import get_labels, LABELS
 
 
 class TestGetLabels:

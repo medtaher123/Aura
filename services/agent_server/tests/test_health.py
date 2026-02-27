@@ -13,7 +13,7 @@ def test_health_check(client):
     data = response.json()
     
     assert data["status"] == "healthy"
-    assert data["service"] == "metaplanet-agent-server"
+    assert data["service"] == "agent-server"
     assert "version" in data
     assert "uptime_seconds" in data
     assert "timestamp" in data
@@ -27,7 +27,7 @@ def test_root_endpoint(client):
     assert response.status_code == 200
     data = response.json()
     
-    assert data["service"] == "metaplanet-agent-server"
+    assert data["service"] == "agent-server"
     assert "version" in data
     assert "endpoints" in data
     assert data["endpoints"]["health"] == "/health"

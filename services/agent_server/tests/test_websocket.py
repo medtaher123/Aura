@@ -20,8 +20,9 @@ def test_websocket_connection():
         assert "server_version" in data
 
 
+@pytest.mark.integration
 def test_websocket_chat_request():
-    """Test sending a chat request."""
+    """Test sending a chat request via the full orchestrator pipeline (requires MCP server)."""
     client = TestClient(app)
     
     with client.websocket_connect("/ws/chat") as websocket:
