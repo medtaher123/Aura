@@ -98,6 +98,19 @@ async def test_list_tools_method(mcp_server):
     assert "calculator" in tool_names
 
 
+def _normalize_call_tool_result(result):
+    """Normalize raw MCP call_tool result to a dict (tuple/list of TextContent -> parsed JSON)."""
+    if result is None:
+        return None
+    if isinstance(result, tuple) and len(result) == 2:
+        _, result_dict = result
+        return result_dict
+    if isinstance(result, (list, tuple)) and len(result) > 0 and hasattr(result[0], "text"):
+        import json
+        return json.loads(result[0].text)
+    return result
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_call_tool_method_success(mcp_server):
@@ -107,9 +120,10 @@ async def test_call_tool_method_success(mcp_server):
 
     # Verify result is not None
     assert result is not None
+    # Result may be (list of TextContent,) or (list, dict); normalize to dict
+    normalized = _normalize_call_tool_result(result)
+    assert isinstance(normalized, dict)
 
-    # Raw MCP call_tool returns a list of content objects (or tuple)
-    assert isinstance(result, (list, tuple))
 
 
 @pytest.mark.integration
@@ -121,9 +135,10 @@ async def test_call_tool_method_with_arguments(mcp_server):
 
     # Verify result is not None
     assert result is not None
+    # Result may be (list of TextContent,) or (list, dict); normalize to dict
+    normalized = _normalize_call_tool_result(result)
+    assert isinstance(normalized, dict)
 
-    # Raw MCP call_tool returns a list of content objects (or tuple)
-    assert isinstance(result, (list, tuple))
 
 
 @pytest.mark.integration

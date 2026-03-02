@@ -137,3 +137,64 @@ async def test_flood_depth_damage_tool_france_3m_2025(mcp_client):
     assert max_damage == pytest.approx(1511, rel=0.02), (
         f"maximum damage should be ~1,511 EUR/m², got {max_damage}"
     )
+
+
+# Expected output for "estimated flood damage for residential buildings in France at 2 m depth in 2025".
+EXPECTED_FRANCE_RESIDENTIAL_2M_2025 = {
+    "fractional_damage": 0.600,
+    "adjusted_max_damage_value_eur_m2": 1510.93,
+    "estimated_damage_eur_m2": 906.56,
+}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_flood_depth_damage_tool_france_residential_2m_2025_output(mcp_client):
+    """
+    Test flood damage for residential buildings in France at 2 m depth (2025).
+    At this depth, damage fraction is 0.600 (60%). Max damage 1510.93 EUR/m² (2025 adjusted),
+    estimated damage ~906.56 EUR/m².
+    """
+    result = await mcp_client.call_tool(
+        "flood_depth_damage_tool",
+        {
+            "country": "France",
+            "asset_class": "residential",
+            "depth_m": 2.0,
+            "continent": "Europe",
+            "basis": "building",
+            "year": 2025,
+        },
+    )
+
+    assert isinstance(result, dict)
+    assert result.get("tool_name") == "flood_depth_damage_tool"
+    assert result.get("error") is False
+    assert result.get("country", "").lower() == "france"
+
+    data = result.get("data") or {}
+    assert data.get("asset_class") == "residential"
+    assert data.get("depth_m") == 2.0
+    assert data.get("unit") == "EUR/m2"
+
+    fractional = data.get("fractional_damage")
+    max_damage = data.get("adjusted_max_damage_value")
+    estimated = data.get("estimated_damage")
+
+    assert fractional is not None, "response must include fractional_damage"
+    assert max_damage is not None, "response must include adjusted_max_damage_value"
+    assert estimated is not None, "response must include estimated_damage"
+
+    assert fractional == pytest.approx(EXPECTED_FRANCE_RESIDENTIAL_2M_2025["fractional_damage"], rel=0.01), (
+        f"damage fraction should be 0.600 (60%), got {fractional}"
+    )
+    assert max_damage == pytest.approx(
+        EXPECTED_FRANCE_RESIDENTIAL_2M_2025["adjusted_max_damage_value_eur_m2"], rel=0.01
+    ), (
+        f"max damage should be ~1510.93 EUR/m², got {max_damage}"
+    )
+    assert estimated == pytest.approx(
+        EXPECTED_FRANCE_RESIDENTIAL_2M_2025["estimated_damage_eur_m2"], rel=0.01
+    ), (
+        f"estimated damage should be ~906.56 EUR/m², got {estimated}"
+    )

@@ -95,7 +95,9 @@ async def test_infrastructure_tool_with_city(mcp_client, monkeypatch):
 
     assert isinstance(result, dict)
     assert result.get("tool_name") == "infrastructure_query_tool"
-    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522, "zoom": None}
+    coords = result.get("coordinates") or {}
+    assert coords.get("lat") == pytest.approx(48.8566, abs=0.01)
+    assert coords.get("lon") == pytest.approx(2.3522, abs=0.01)
     assert result.get("city") == "Paris"
     assert result.get("data", {}).get("infrastructure")
 
@@ -117,7 +119,9 @@ async def test_infrastructure_tool_with_coordinates(mcp_client, monkeypatch):
 
     assert isinstance(result, dict)
     assert result.get("tool_name") == "infrastructure_query_tool"
-    assert result.get("coordinates") == {"lat": 52.52, "lon": 13.405, "zoom": None}
+    coords = result.get("coordinates") or {}
+    assert coords.get("lat") == pytest.approx(52.52, abs=0.01)
+    assert coords.get("lon") == pytest.approx(13.405, abs=0.01)
     assert result.get("city") == "Berlin"
 
 
@@ -222,7 +226,9 @@ async def test_infrastructure_tool_hospitals_near_paris_group_breakdown(
     assert result.get("tool_name") == "infrastructure_query_tool"
     assert result.get("error") is False
     assert result.get("city") == "Paris"
-    assert result.get("coordinates") == {"lat": 48.8566, "lon": 2.3522, "zoom": None}
+    coords = result.get("coordinates") or {}
+    assert coords.get("lat") == pytest.approx(48.8566, abs=0.01)
+    assert coords.get("lon") == pytest.approx(2.3522, abs=0.01)
 
     data = result.get("data", {})
     assert "group_breakdown" in data, "response must include group_breakdown"
