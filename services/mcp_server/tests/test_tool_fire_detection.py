@@ -119,13 +119,15 @@ async def test_detect_fire_tool_paris_2023_07_09_output(mcp_client):
     assert isinstance(result, dict)
     assert result.get("tool_name") == "detect_fire_tool"
 
-    # Skip when geocoding fails (e.g. Nominatim 429) so CI does not fail on external API limits
+    # Skip when geocoding fails (e.g. Nominatim 429) or when fire archive is not configured (CI).
     if result.get("error") is True:
         msg = (result.get("message") or "").lower()
         if "429" in msg or "too many requests" in msg or "could not geocode" in msg:
             pytest.skip("Geocoding failed (often due to Nominatim rate limit 429)")
+        if "fire_archive_dir" in msg or "must be set to an s3 uri" in msg:
+            pytest.skip("FIRE_ARCHIVE_DIR not set (e.g. in CI); skipping output assertion test")
         raise AssertionError(f"Tool returned error: {result.get('message')}")
-
+    
     artifacts = result.get("artifacts") or {}
     maps = artifacts.get("maps") or []
     assert len(maps) >= 1, "expected at least one map artifact"
