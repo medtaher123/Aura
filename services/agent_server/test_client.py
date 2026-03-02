@@ -209,7 +209,7 @@ class AgentServerTestClient:
                                 f"Pause state keys: {list(pause_state.keys())}"
                             )
 
-                            for idx, option in enumerate[Any](options):
+                            for idx, option in enumerate(options):
                                 self.print_status(f"  {idx}: {option}")
                             self.print_status(
                                 "Please select the correct location by entering the number of the option:"
@@ -314,7 +314,7 @@ async def main():
         "--host", default="localhost", help="Server host (default: localhost)"
     )
     parser.add_argument(
-        "--port", type=int, default=8000, help="Server port (default: 8000)"
+        "--port", type=int, default=8080, help="Server port (default: 8080)"
     )
     parser.add_argument(
         "--test",

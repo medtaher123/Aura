@@ -3,13 +3,9 @@ Pytest configuration and shared fixtures for streamlit service tests.
 """
 
 import pytest
-import sys
-import os
 
-from src.models.tools import ToolResponse, ToolArtifacts
-
-# Ensure src is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from models import ToolCoordinates, ToolResponse, ToolArtifacts
+from clients import ChatMessage
 
 
 @pytest.fixture
@@ -24,7 +20,7 @@ def sample_tool_response() -> ToolResponse:
         end_date="2024-12-31",
         country="France",
         city="Paris",
-        coordinates={"lat": 48.8566, "lon": 2.3522},
+        coordinates=ToolCoordinates(lat=48.8566, lon=2.3522),
         data={"test_key": "test_value"},
         error=False,
     )
@@ -34,10 +30,10 @@ def sample_tool_response() -> ToolResponse:
 def sample_chat_history():
     """Create a sample chat history for testing."""
     return [
-        {"role": "user", "content": "Show me fires in Berlin in 2024"},
-        {"role": "assistant", "content": "I found 10 fires in Berlin in 2024."},
-        {"role": "user", "content": "What about Paris?"},
-        {"role": "assistant", "content": "Paris had 5 fires in 2024."},
+        ChatMessage(role="user", content="Show me fires in Berlin in 2024"),
+        ChatMessage(role="assistant", content="I found 10 fires in Berlin in 2024."),
+        ChatMessage(role="user", content="What about Paris?"),
+        ChatMessage(role="assistant", content="Paris had 5 fires in 2024."),
     ]
 
 

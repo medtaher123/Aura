@@ -4,6 +4,7 @@ Tests for tools_info_tool
 
 import pytest
 from tools.tools_info import tools_info_tool
+from utils.contracts import ToolResponse
 
 
 def _as_dict(resp):
@@ -36,6 +37,7 @@ def test_specific_tool_info():
     assert "Example Questions" in result["message"]
 
 
+
 def test_tool_not_found():
     """Test handling of non-existent tool"""
     result = _as_dict(tools_info_tool(tool_name="nonexistent_tool"))
@@ -43,6 +45,7 @@ def test_tool_not_found():
     assert result["error"] is True
     assert "not found" in result["message"]
     assert "available_tools" in result["data"]
+
 
 
 def test_category_listing():
@@ -64,6 +67,7 @@ def test_category_partial_match():
     assert "Weather & Climate" in result["data"]["category"]
 
 
+
 def test_category_not_found():
     """Test handling of non-existent category"""
     result = _as_dict(tools_info_tool(category="nonexistent category"))
@@ -71,6 +75,7 @@ def test_category_not_found():
     assert result["error"] is True
     assert "not found" in result["message"]
     assert "available_categories" in result["data"]
+
 
 
 def test_query_fire_detection():
@@ -154,6 +159,7 @@ def test_tool_info_with_partial_name():
 
     assert result["error"] is False
     assert "detect_fire_tool" in result["data"]["tool_id"]
+
 
 
 def test_streamflow_tool_info():

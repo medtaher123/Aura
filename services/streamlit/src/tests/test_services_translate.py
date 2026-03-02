@@ -4,7 +4,7 @@ Tests for services/translate_service.py - Language detection and translation.
 
 import pytest
 
-from src.services.translate_service import (
+from services.translate_service import (
     detect_language,
     protect,
     unprotect,

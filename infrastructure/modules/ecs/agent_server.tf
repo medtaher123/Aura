@@ -86,8 +86,8 @@ resource "aws_ecs_task_definition" "agent_server" {
   requires_compatibilities = ["FARGATE"]
   cpu                      = var.agent_server_task_cpu
   memory                   = var.agent_server_task_memory
-  execution_role_arn       = var.mcp_server_execution_role_arn
-  task_role_arn            = var.mcp_server_task_role_arn
+  execution_role_arn       = var.execution_role_arn
+  task_role_arn            = var.agent_task_role_arn
 
   container_definitions = jsonencode(local.agent_server_container_definitions)
 
@@ -111,6 +111,10 @@ resource "aws_ecs_service" "agent_server" {
     subnets          = var.subnet_ids
     security_groups  = var.security_group_ids
     assign_public_ip = true
+  }
+
+  service_registries {
+    registry_arn = var.agent_service_discovery_registry_arn
   }
 
   deployment_maximum_percent         = 200

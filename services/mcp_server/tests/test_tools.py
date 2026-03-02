@@ -4,6 +4,7 @@ Tests for individual MCP tools.
 
 import pytest
 from tools.simple_tools import get_time, get_date, calculator
+from utils.contracts import ToolResponse
 
 
 def _as_dict(resp):
@@ -37,7 +38,7 @@ def test_get_date_tool():
     # Date should be in the data
     date_value = result["data"]["date"]
     assert "-" in date_value or "/" in date_value
-    assert "202" in date_value  # Should be in 2020s
+    assert "202" in date_value
 
 
 @pytest.mark.unit
@@ -93,7 +94,6 @@ def test_calculator_empty_expression():
         assert isinstance(result, dict)
         assert result.get("error") is True
     except Exception:
-        # Or raise an exception
         pass
 
 
