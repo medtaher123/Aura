@@ -495,18 +495,7 @@ def flood_damage_city_tool(
             error=True,
         )
 
-    _polygon_result = _get_city_polygon_and_country(city.strip())
-    if not _polygon_result or len(_polygon_result) < 3:
-        return ToolResponse(
-            tool_name="flood_damage_city_tool",
-            message=f"Could not geocode city '{city}' or retrieve boundary polygon. Try a more specific name (e.g. 'Paris, France').",
-            error=True,
-        )
-    polygon_wkt = _polygon_result[0]
-    country = _polygon_result[1]
-    display_name = _polygon_result[2] if len(_polygon_result) > 2 else None
-    center_lat = _polygon_result[3] if len(_polygon_result) > 3 else None
-    center_lon = _polygon_result[4] if len(_polygon_result) > 4 else None
+    polygon_wkt, country, display_name, center_lat, center_lon = _get_city_polygon_and_country(city.strip())
     if not polygon_wkt or not country:
         return ToolResponse(
             tool_name="flood_damage_city_tool",
