@@ -118,7 +118,13 @@ async def test_detect_fire_tool_paris_2023_07_09_output(mcp_client):
     )
     assert isinstance(result, dict)
     assert result.get("tool_name") == "detect_fire_tool"
-    assert result.get("error") is False
+
+    # Skip when geocoding fails (e.g. Nominatim 429) so CI does not fail on external API limits
+    if result.get("error") is True:
+        msg = (result.get("message") or "").lower()
+        if "429" in msg or "too many requests" in msg or "could not geocode" in msg:
+            pytest.skip("Geocoding failed (often due to Nominatim rate limit 429)")
+        raise AssertionError(f"Tool returned error: {result.get('message')}")
 
     artifacts = result.get("artifacts") or {}
     maps = artifacts.get("maps") or []

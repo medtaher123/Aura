@@ -6,10 +6,17 @@ import pytest
 from tools.simple_tools import get_time, get_date, calculator
 
 
+def _as_dict(resp):
+    """Convert ToolResponse (or other) to dict for assertions."""
+    if hasattr(resp, "model_dump"):
+        return resp.model_dump(mode="json")
+    return resp
+
+
 @pytest.mark.unit
 def test_get_time_tool():
     """Test get_time returns current time."""
-    result = get_time()
+    result = _as_dict(get_time())
     assert isinstance(result, dict)
     assert "message" in result
     assert "data" in result
@@ -22,7 +29,7 @@ def test_get_time_tool():
 @pytest.mark.unit
 def test_get_date_tool():
     """Test get_date returns current date."""
-    result = get_date()
+    result = _as_dict(get_date())
     assert isinstance(result, dict)
     assert "message" in result
     assert "data" in result
@@ -46,7 +53,7 @@ def test_calculator_valid_expressions():
     ]
 
     for expression, expected in test_cases:
-        result = calculator(expression=expression)
+        result = _as_dict(calculator(expression=expression))
         assert isinstance(result, dict)
         assert result.get("data", {}).get("result") == expected
 
@@ -54,7 +61,7 @@ def test_calculator_valid_expressions():
 @pytest.mark.unit
 def test_calculator_invalid_expression():
     """Test calculator with invalid expression."""
-    result = calculator(expression="not valid python")
+    result = _as_dict(calculator(expression="not valid python"))
     assert isinstance(result, dict)
     # Should have error=True or error message
     assert result.get("error") is True or "error" in result.get("message", "").lower()
@@ -71,7 +78,7 @@ def test_calculator_dangerous_expression():
     ]
     
     for expr in dangerous:
-        result = calculator(expression=expr)
+        result = _as_dict(calculator(expression=expr))
         assert isinstance(result, dict)
         # Should return error
         assert result.get("error") is True or "error" in result.get("message", "").lower()
@@ -81,7 +88,7 @@ def test_calculator_dangerous_expression():
 def test_calculator_empty_expression():
     """Test calculator with empty expression."""
     try:
-        result = calculator(expression="")
+        result = _as_dict(calculator(expression=""))
         # Should return error
         assert isinstance(result, dict)
         assert result.get("error") is True
@@ -93,7 +100,7 @@ def test_calculator_empty_expression():
 @pytest.mark.unit
 def test_calculator_division_by_zero():
     """Test calculator handles division by zero."""
-    result = calculator(expression="1 / 0")
+    result = _as_dict(calculator(expression="1 / 0"))
     assert isinstance(result, dict)
     # Should return error
     assert result.get("error") is True or "error" in result.get("message", "").lower()
