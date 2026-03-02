@@ -1,14 +1,6 @@
 from __future__ import annotations
 
 import io
-import sys
-from pathlib import Path
-
-# Ensure project root is on sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,13 +20,13 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes, *, max_chars: int = 1000_000) 
         RuntimeError: if PDF dependencies are missing.
         ValueError: if input is empty.
     """
-    logger.info(
-        f"Starting PDF text extraction (size: {len(pdf_bytes)} bytes, max_chars: {max_chars})"
-    )
-
     if not isinstance(pdf_bytes, (bytes, bytearray)) or not pdf_bytes:
         logger.error("Empty PDF payload provided")
         raise ValueError("Empty PDF payload")
+
+    logger.info(
+        f"Starting PDF text extraction (size: {len(pdf_bytes)} bytes, max_chars: {max_chars})"
+    )
 
     try:
         from pypdf import PdfReader

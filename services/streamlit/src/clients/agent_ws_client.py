@@ -428,7 +428,3 @@ class AgentWebSocketClient:
         self.close()
         return False
 
-
-def get_agent_client(url: Optional[str] = None) -> AgentWebSocketClient:
-    """Get an Agent WebSocket client instance."""
-    return AgentWebSocketClient(url=url)

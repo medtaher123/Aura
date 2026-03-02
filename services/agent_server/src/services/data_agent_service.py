@@ -238,35 +238,39 @@ def _invoke_tool_safely(tool: Any, tool_input: Any) -> Any:
 
 
 def _coerce_tool_response(obj: Any, *, tool_name: str) -> ToolResponse:
+    if isinstance(obj, ToolResponse):
+        return obj
+
     resp = ToolResponse(
         tool_name=tool_name,
         message=str(obj),
         data={"raw": str(obj)},
         error=False,
     )
-    if "artifacts" in obj:
-        resp.artifacts.maps = obj["artifacts"].get("maps", [])
-        resp.artifacts.thumbnails = obj["artifacts"].get("thumbnails", [])
-        resp.artifacts.urls = obj["artifacts"].get("urls", [])
+    if isinstance(obj, dict):
+        if "artifacts" in obj:
+            resp.artifacts.maps = obj["artifacts"].get("maps", [])
+            resp.artifacts.thumbnails = obj["artifacts"].get("thumbnails", [])
+            resp.artifacts.urls = obj["artifacts"].get("urls", [])
 
-    if "message" in obj:
-        resp.message = obj["message"]
-    if "tool_name" in obj:
-        resp.tool_name = obj["tool_name"]
-    if "data" in obj:
-        resp.data = obj["data"]
-    if "error" in obj:
-        resp.error = obj["error"]
-    if "start_date" in obj:
-        resp.start_date = obj["start_date"]
-    if "end_date" in obj:
-        resp.end_date = obj["end_date"]
-    if "country" in obj:
-        resp.country = obj["country"]
-    if "city" in obj:
-        resp.city = obj["city"]
-    if "coordinates" in obj:
-        resp.coordinates = obj["coordinates"]
+        if "message" in obj:
+            resp.message = obj["message"]
+        if "tool_name" in obj:
+            resp.tool_name = obj["tool_name"]
+        if "data" in obj:
+            resp.data = obj["data"]
+        if "error" in obj:
+            resp.error = obj["error"]
+        if "start_date" in obj:
+            resp.start_date = obj["start_date"]
+        if "end_date" in obj:
+            resp.end_date = obj["end_date"]
+        if "country" in obj:
+            resp.country = obj["country"]
+        if "city" in obj:
+            resp.city = obj["city"]
+        if "coordinates" in obj:
+            resp.coordinates = obj["coordinates"]
 
     return resp
 

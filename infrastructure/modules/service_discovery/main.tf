@@ -34,3 +34,28 @@ resource "aws_service_discovery_service" "mcp_server" {
     Environment = var.environment
   }
 }
+
+# Service Discovery Service for Agent Server
+resource "aws_service_discovery_service" "agent_server" {
+  name = "agent-server"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+
+    routing_policy = "MULTIVALUE"
+  }
+
+  health_check_custom_config {
+    failure_threshold = 2
+  }
+
+  tags = {
+    Name        = "${var.project_name}-agent-discovery"
+    Environment = var.environment
+  }
+}

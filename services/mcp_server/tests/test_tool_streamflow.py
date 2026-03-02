@@ -122,7 +122,19 @@ async def test_streamflow_forecast_tool_with_reach_id(mcp_client, monkeypatch):
     def _fake_view_state_from_points(points, padding=0.1, min_zoom=8.0, max_zoom=12.0):
         return {"latitude": 48.8566, "longitude": 2.3522, "zoom": 10.0, "pitch": 0, "bearing": 0}
 
+    def _fake_identify_geoglows_river_feature(lat, lon, return_geometry=False):
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "properties": {"river_id": 12345678, "reach_id": 12345678},
+                "geometry": {"type": "LineString", "coordinates": [[2.3, 48.85], [2.35, 48.86]]}
+            }]
+        } if return_geometry else None
+        return 12345678, geojson
+
     monkeypatch.setattr(streamflow_mod, "get_city_bbox", _fake_get_city_bbox)
+    monkeypatch.setattr(streamflow_mod, "_identify_geoglows_river_feature", _fake_identify_geoglows_river_feature)
     monkeypatch.setattr(streamflow_mod, "view_state_from_points", _fake_view_state_from_points)
     monkeypatch.setattr(streamflow_mod, "_river_id_exists", lambda rid: True)
     monkeypatch.setattr(

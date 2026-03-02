@@ -27,3 +27,18 @@ output "mcp_server_dns_name" {
   description = "DNS name for the MCP server"
   value       = "mcp-server.${var.namespace}"
 }
+
+output "agent_server_service_id" {
+  description = "ID of the Agent server service discovery service"
+  value       = aws_service_discovery_service.agent_server.id
+}
+
+output "agent_server_service_arn" {
+  description = "ARN of the Agent server service discovery service"
+  value       = aws_service_discovery_service.agent_server.arn
+}
+
+output "agent_server_dns_name" {
+  description = "DNS name for the Agent server"
+  value       = "agent-server.${var.namespace}"
+}

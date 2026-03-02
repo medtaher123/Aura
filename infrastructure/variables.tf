@@ -142,6 +142,55 @@ variable "maptiler_api_key_arn" {
   default     = ""
 }
 
+# Agent Server Configuration
+variable "agent_server_enabled" {
+  description = "Whether to create agent server resources"
+  type        = bool
+  default     = true
+}
+
+variable "agent_server_cpu" {
+  description = "CPU units for Agent server task"
+  type        = string
+  default     = "4096"
+}
+
+variable "agent_server_memory" {
+  description = "Memory for Agent server task"
+  type        = string
+  default     = "8192"
+}
+
+variable "agent_server_desired_count" {
+  description = "Desired number of Agent server tasks"
+  type        = number
+  default     = 1
+}
+
+variable "agent_server_log_level" {
+  description = "Log level for Agent server"
+  type        = string
+  default     = "info"
+}
+
+variable "agent_server_workers" {
+  description = "Number of workers for Agent server"
+  type        = string
+  default     = "1"
+}
+
+variable "agent_server_bedrock_model_id" {
+  description = "Bedrock model ID for Agent server"
+  type        = string
+  default     = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+}
+
+variable "agent_server_bedrock_max_tokens" {
+  description = "Bedrock max tokens for Agent server"
+  type        = string
+  default     = "4096"
+}
+
 # Service Discovery
 variable "service_discovery_namespace" {
   description = "Service discovery namespace"

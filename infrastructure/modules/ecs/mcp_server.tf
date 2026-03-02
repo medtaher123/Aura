@@ -89,8 +89,8 @@ resource "aws_ecs_task_definition" "mcp_server" {
   requires_compatibilities = ["FARGATE"]
   cpu                      = var.mcp_server_cpu
   memory                   = var.mcp_server_memory
-  execution_role_arn       = var.mcp_server_execution_role_arn
-  task_role_arn            = var.mcp_server_task_role_arn
+  execution_role_arn       = var.execution_role_arn
+  task_role_arn            = var.mcp_task_role_arn
 
   container_definitions = jsonencode(local.mcp_container_definitions)
 

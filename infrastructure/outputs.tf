@@ -57,6 +57,22 @@ output "streamlit_cloudwatch_log_group" {
   value       = module.ecs.streamlit_cloudwatch_log_group
 }
 
+# Agent Server Outputs
+output "agent_service_name" {
+  description = "Agent server service name"
+  value       = module.ecs.agent_service_name
+}
+
+output "agent_task_definition_arn" {
+  description = "Agent server task definition ARN"
+  value       = module.ecs.agent_task_definition_arn
+}
+
+output "agent_cloudwatch_log_group" {
+  description = "CloudWatch log group for Agent server"
+  value       = module.ecs.agent_cloudwatch_log_group
+}
+
 # ALB Outputs
 output "streamlit_url" {
   description = "Public URL for Streamlit service"
@@ -95,6 +111,11 @@ output "streamlit_ecr_repository_url" {
   value       = module.ecr.streamlit_repository_url
 }
 
+output "agent_ecr_repository_url" {
+  description = "ECR repository URL for Agent server"
+  value       = module.ecr.agent_repository_url
+}
+
 output "github_actions_role_arn" {
   description = "IAM role ARN for GitHub Actions"
   value       = module.ecr.github_actions_role_arn
@@ -102,27 +123,21 @@ output "github_actions_role_arn" {
 
 # IAM Outputs
 output "ecs_task_execution_role_arn" {
-  description = "ECS Task Execution Role ARN"
+  description = "ECS Task Execution Role ARN (shared)"
   value       = module.iam.ecs_task_execution_role_arn
 }
 
-output "ecs_task_role_arn" {
-  description = "ECS Task Role ARN"
-  value       = module.iam.ecs_task_role_arn
+output "mcp_task_role_arn" {
+  description = "MCP Server Task Role ARN"
+  value       = module.iam.mcp_task_role_arn
 }
 
-# Legacy Outputs (for backward compatibility)
-output "ecr_repository_url" {
-  description = "ECR repository URL for MCP server (legacy)"
-  value       = module.ecr.mcp_repository_url
+output "agent_task_role_arn" {
+  description = "Agent Server Task Role ARN"
+  value       = module.iam.agent_task_role_arn
 }
 
-output "ecr_repository_arn" {
-  description = "ECR repository ARN for MCP server (legacy)"
-  value       = module.ecr.mcp_repository_arn
-}
-
-output "cloudwatch_log_group" {
-  description = "CloudWatch log group for MCP server (legacy)"
-  value       = module.ecs.mcp_cloudwatch_log_group
+output "streamlit_task_role_arn" {
+  description = "Streamlit Task Role ARN"
+  value       = module.iam.streamlit_task_role_arn
 }

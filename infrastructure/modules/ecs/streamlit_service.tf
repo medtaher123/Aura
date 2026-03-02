@@ -21,8 +21,8 @@ locals {
           value = "1"
         },
         {
-          name  = "MCP_SERVER_URL"
-          value = var.mcp_server_url
+          name  = "AGENT_SERVER_URL"
+          value = var.agent_server_url
         },
         {
           name  = "FIRE_ARCHIVE_DIR"
@@ -74,7 +74,7 @@ resource "aws_ecs_task_definition" "streamlit" {
   cpu                      = var.streamlit_cpu
   memory                   = var.streamlit_memory
   execution_role_arn       = var.execution_role_arn
-  task_role_arn            = var.task_role_arn
+  task_role_arn            = var.streamlit_task_role_arn
 
   container_definitions = jsonencode(local.streamlit_container_definitions)
 

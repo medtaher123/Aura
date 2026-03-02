@@ -21,6 +21,7 @@ module "iam" {
   aws_account_id       = var.aws_account_id
   opentopo_api_key_arn = var.opentopo_api_key_arn
   map_key_arn          = var.map_key_arn
+  maptiler_api_key_arn = var.maptiler_api_key_arn
 }
 
 # ECR Module
@@ -54,7 +55,7 @@ module "alb" {
   subnet_ids   = module.vpc.public_subnet_ids
 }
 
-# ECS Module with both MCP and Streamlit services
+# ECS Module with MCP, Streamlit, and Agent services
 module "ecs" {
   source = "./modules/ecs"
 
@@ -65,18 +66,19 @@ module "ecs" {
   subnet_ids         = module.vpc.public_subnet_ids
   security_group_ids = [module.vpc.security_group_id]
 
+  execution_role_arn     = module.iam.ecs_task_execution_role_arn
+  mcp_task_role_arn      = module.iam.mcp_task_role_arn
+  agent_task_role_arn    = module.iam.agent_task_role_arn
+  streamlit_task_role_arn = module.iam.streamlit_task_role_arn
+
   # MCP Server configuration
-  task_cpu        = var.mcp_server_cpu
-  task_memory     = var.mcp_server_memory
-  desired_count   = var.mcp_server_desired_count
-  container_image = "${module.ecr.mcp_repository_url}:latest"
-  container_port  = 8000
-
-  log_level = var.mcp_log_level
-  workers   = var.mcp_workers
-
-  execution_role_arn = module.iam.ecs_task_execution_role_arn
-  task_role_arn      = module.iam.ecs_task_role_arn
+  mcp_server_container_image = "${module.ecr.mcp_repository_url}:latest"
+  mcp_server_container_port  = 8000
+  mcp_server_cpu             = var.mcp_server_cpu
+  mcp_server_memory          = var.mcp_server_memory
+  mcp_server_desired_count   = var.mcp_server_desired_count
+  mcp_server_log_level       = var.mcp_log_level
+  mcp_server_workers         = var.mcp_workers
 
   opentopo_api_key_arn = var.opentopo_api_key_arn
   map_key_arn          = var.map_key_arn
@@ -85,7 +87,6 @@ module "ecs" {
   geoserver_risk_layer = var.geoserver_risk_layer
   fire_archive_dir     = var.fire_archive_dir
 
-  # Service Discovery
   service_discovery_registry_arn = module.service_discovery.mcp_server_service_arn
 
   # Streamlit configuration
@@ -94,8 +95,22 @@ module "ecs" {
   streamlit_memory          = var.streamlit_memory
   streamlit_desired_count   = var.streamlit_desired_count
   target_group_arn          = module.alb.target_group_arn
-  mcp_server_url            = "http://${module.service_discovery.mcp_server_dns_name}:8000"
+  agent_server_url          = "ws://${module.service_discovery.agent_server_dns_name}:8080"
   maptiler_api_key_arn      = var.maptiler_api_key_arn
+
+  # Agent Server configuration
+  agent_server_enabled         = var.agent_server_enabled
+  agent_server_container_image = "${module.ecr.agent_repository_url}:latest"
+  agent_server_container_port  = 8080
+  agent_server_task_cpu        = var.agent_server_cpu
+  agent_server_task_memory     = var.agent_server_memory
+  agent_server_desired_count   = var.agent_server_desired_count
+  agent_server_log_level       = var.agent_server_log_level
+  agent_server_workers         = var.agent_server_workers
+  agent_server_mcp_server_url  = "http://${module.service_discovery.mcp_server_dns_name}:8000"
+  agent_server_bedrock_model_id    = var.agent_server_bedrock_model_id
+  agent_server_bedrock_max_tokens  = var.agent_server_bedrock_max_tokens
+  agent_service_discovery_registry_arn = module.service_discovery.agent_server_service_arn
 
   depends_on = [module.ecr, module.service_discovery, module.alb]
 }

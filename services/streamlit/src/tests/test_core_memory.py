@@ -183,7 +183,7 @@ class TestFormatChatHistory:
 
     def test_max_chars_none_or_zero_no_truncation(self):
         messages = [{"role": "user", "content": "A" * 100}]
-        result1 = format_chat_history(messages, max_chars=None)
+        result1 = format_chat_history(messages)
         result2 = format_chat_history(messages, max_chars=0)
         assert len(result1) > 100
         assert len(result2) > 100

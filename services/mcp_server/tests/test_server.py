@@ -121,9 +121,14 @@ async def test_call_tool_method_success(mcp_server):
     # Verify result is not None
     assert result is not None
 
+<<<<<<< test_tools_KPIs
     # Result may be (list of TextContent,) or (list, dict); normalize to dict
     normalized = _normalize_call_tool_result(result)
     assert isinstance(normalized, dict)
+=======
+    # Raw MCP call_tool returns a list of content objects (or tuple)
+    assert isinstance(result, (list, tuple))
+>>>>>>> main
 
 
 @pytest.mark.integration
@@ -136,9 +141,14 @@ async def test_call_tool_method_with_arguments(mcp_server):
     # Verify result is not None
     assert result is not None
 
+<<<<<<< test_tools_KPIs
     # Result may be (list of TextContent,) or (list, dict); normalize to dict
     normalized = _normalize_call_tool_result(result)
     assert isinstance(normalized, dict)
+=======
+    # Raw MCP call_tool returns a list of content objects (or tuple)
+    assert isinstance(result, (list, tuple))
+>>>>>>> main
 
 
 @pytest.mark.integration
