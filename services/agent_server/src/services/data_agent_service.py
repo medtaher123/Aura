@@ -275,6 +275,30 @@ def _coerce_tool_response(obj: Any, *, tool_name: str) -> ToolResponse:
     return resp
 
 
+def _coerce_steps(raw_steps: Any) -> list[ToolResponse]:
+    """Normalize serialized/mixed step entries into ToolResponse objects."""
+    logger.debug("Coercing steps:")
+    logger.debug(raw_steps)
+    if not isinstance(raw_steps, list):
+        return []
+
+    coerced_steps: list[ToolResponse] = []
+    for raw in raw_steps:
+        if isinstance(raw, ToolResponse):
+            coerced_steps.append(raw)
+            continue
+
+        fallback_tool_name = "unknown_tool"
+        if isinstance(raw, dict):
+            candidate = raw.get("tool_name")
+            if isinstance(candidate, str) and candidate.strip():
+                fallback_tool_name = candidate.strip()
+
+        coerced_steps.append(_coerce_tool_response(raw, tool_name=fallback_tool_name))
+
+    return coerced_steps
+
+
 def _merge_steps_into_response(
     user_text: str, steps: list[ToolResponse], final_message: Optional[str]
 ) -> ToolResponse:
@@ -495,7 +519,7 @@ def create_data_agent_executor(
 ) -> MultiStepDataAgentExecutor:
     """Create a MultiStepDataAgentExecutor instance."""
     # DataAgent should focus on data/tools, not chit-chat or utilities.
-    excluded = {"general_question_tool", "calculator", "get_date", "get_time"}
+    excluded = {"general_question_tool", "calculator"}
     if tools is None:
         tools = [t for t in get_all_tools() if getattr(t, "name", None) not in excluded]
     else:
@@ -552,7 +576,8 @@ def create_data_agent_executor(
 
         user_text = next_state.get("input", "") or ""
         context = next_state.get("context") or ""
-        steps: list[ToolResponse] = next_state.get("steps", []) or []
+        steps: list[ToolResponse] = _coerce_steps(next_state.get("steps", []) or [])
+        next_state["steps"] = steps
         step_count = int(next_state.get("step_count", 0))
 
         confirmed_locations = next_state.get("confirmed_locations")
@@ -744,7 +769,8 @@ def create_data_agent_executor(
         next_state = dict(state)
 
         user_text = next_state.get("input", "") or ""
-        steps: list[ToolResponse] = next_state.get("steps", []) or []
+        steps: list[ToolResponse] = _coerce_steps(next_state.get("steps", []) or [])
+        next_state["steps"] = steps
         step_count = int(next_state.get("step_count", 0))
         required_tools: list[str] = next_state.get("required_tools") or []
         completed_tools: list[str] = next_state.get("completed_tools") or []
@@ -945,14 +971,16 @@ def create_data_agent_executor(
         # directly (do not merge as final answer), and attach a resumable state blob.
         pause = state.get("pause", {})
         if isinstance(pause.get("pause"), dict):
-            tool_resp: ToolResponse = pause.get("tool_response")
+            tool_resp = _coerce_tool_response(
+                pause.get("tool_response"), tool_name="data_agent"
+            )
             tool_resp.data["pause"] = pause["pause"]
             next_state = dict(state)
             next_state["output"] = tool_resp
             return next_state
 
         user_text = state.get("input", "") or ""
-        steps: list[ToolResponse] = state.get("steps", []) or []
+        steps: list[ToolResponse] = _coerce_steps(state.get("steps", []) or [])
         final_message = state.get("final_message")
         output = _merge_steps_into_response(user_text, steps, final_message)
         # Preserve the rest of the state for easier debugging.

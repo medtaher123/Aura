@@ -43,6 +43,67 @@ logger = get_logger("websocket")
 router = APIRouter()
 
 
+def _patch_resume_state_with_confirmed_location(
+    *,
+    pause_state: dict[str, Any],
+    resume_state: dict[str, Any],
+    confirmed_location: LocationOption,
+) -> tuple[dict[str, str], str | None]:
+    """
+    Add confirmed location mapping and patch resume_state["next_input"] safely.
+
+    If next_input is not a dict (legacy paused state), prefer pause_state["tool_input"]
+    as the base payload so required structured fields are preserved.
+    """
+    confirmed_locations = resume_state.get("confirmed_locations", {})
+    if not isinstance(confirmed_locations, dict):
+        confirmed_locations = {}
+
+    prefix = confirmed_location.osm_type_prefix
+    osm_id = confirmed_location.osm_id
+    place_id = confirmed_location.place_id
+    location_key = confirmed_location.name
+
+    confirmed_value = ""
+    if prefix and osm_id:
+        confirmed_value = f"@osm_id:{prefix}{osm_id}"
+    elif place_id:
+        confirmed_value = f"@place_id:{place_id}"
+
+    if confirmed_value:
+        confirmed_locations[location_key] = confirmed_value
+    else:
+        logger.warning(
+            f"Confirmed location is missing osm_type or osm_id or place_id: {confirmed_location}"
+        )
+
+    resume_state["confirmed_locations"] = confirmed_locations
+
+    resume_patch = pause_state.get("resume_patch", {})
+    patch_field = resume_patch.get("field") if isinstance(resume_patch, dict) else None
+    next_input = resume_state.get("next_input")
+    tool_input = pause_state.get("tool_input")
+
+    if patch_field and confirmed_value:
+        if isinstance(next_input, dict):
+            patched_input = dict(next_input)
+        elif isinstance(tool_input, dict):
+            patched_input = dict(tool_input)
+        else:
+            patched_input = {}
+
+        patched_input[patch_field] = confirmed_value
+        resume_state["next_input"] = patched_input
+    elif isinstance(next_input, dict):
+        # No resume_patch available; leave next_input as-is and rely on
+        # confirmed_locations + _apply_confirmed_locations in the DataAgent.
+        pass
+    else:
+        resume_state["next_input"] = next_input
+
+    return confirmed_locations, patch_field
+
+
 class WebSocketConnection:
     """
     Manages a single WebSocket connection and message handling.
@@ -332,53 +393,14 @@ async def handle_chat_resume(
 
         # Add confirmed location to the resume state
         if resume_payload.get("resume_state"):
-            confirmed_locations = resume_payload["resume_state"].get(
-                "confirmed_locations", {}
-            )
             logger.debug(f"Resume payload: {json.dumps(resume_payload, indent=2)}")
-            # CONFIRMED LOCATION should be of format: name: osmid or place_id
-            prefix = confirmed_location.osm_type_prefix
-            osm_id = confirmed_location.osm_id
-            place_id = confirmed_location.place_id
-            location_key = confirmed_location.name
-            if prefix and osm_id:
-                confirmed_locations[location_key] = f"@osm_id:{prefix}{osm_id}"
-            elif place_id:
-                confirmed_locations[location_key] = f"@place_id:{place_id}"
-            else:
-                logger.warning(
-                    f"Confirmed location is missing osm_type or osm_id or place_id: {confirmed_location}"
+            confirmed_locations, patch_field = (
+                _patch_resume_state_with_confirmed_location(
+                    pause_state=pause_state,
+                    resume_state=resume_payload["resume_state"],
+                    confirmed_location=confirmed_location,
                 )
-
-            resume_payload["resume_state"]["confirmed_locations"] = confirmed_locations
-
-            # Use resume_patch from the tool response to know which field
-            # in next_input to patch (e.g. "city_name"), instead of a
-            # hardcoded "location" key that the tool may not accept.
-            resume_patch = pause_state.get("resume_patch", {})
-            patch_field = (
-                resume_patch.get("field")
-                if isinstance(resume_patch, dict)
-                else None
             )
-
-            confirmed_value = confirmed_locations.get(location_key, "")
-            next_input = resume_payload["resume_state"].get("next_input")
-
-            if patch_field:
-                if isinstance(next_input, dict):
-                    next_input[patch_field] = confirmed_value
-                else:
-                    resume_payload["resume_state"]["next_input"] = {
-                        patch_field: confirmed_value
-                    }
-            elif isinstance(next_input, dict):
-                # No resume_patch available; leave next_input as-is and
-                # rely on confirmed_locations + _apply_confirmed_locations
-                # in the DataAgent to perform substitution at plan time.
-                pass
-            else:
-                resume_payload["resume_state"]["next_input"] = next_input
 
             logger.debug(
                 f"Added confirmed location to resume state: {confirmed_locations}, patch_field={patch_field}"
