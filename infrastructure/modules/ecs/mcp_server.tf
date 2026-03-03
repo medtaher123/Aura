@@ -45,11 +45,13 @@ locals {
       secrets = [
         {
           name      = "OPENTOPO_API_KEY"
-          valueFrom = var.opentopo_api_key_arn
+          # Inject only the JSON key from SecretString, not the full object.
+          valueFrom = "${var.opentopo_api_key_arn}:OPENTOPO_API_KEY::"
         },
         {
           name      = "MAP_KEY"
-          valueFrom = var.map_key_arn
+          # Inject only the JSON key from SecretString, not the full object.
+          valueFrom = "${var.map_key_arn}:MAP_KEY::"
         }
       ]
 

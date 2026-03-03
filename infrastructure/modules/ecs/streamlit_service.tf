@@ -33,7 +33,8 @@ locals {
       secrets = [
         {
           name      = "MAPTILER_API_KEY"
-          valueFrom = var.maptiler_api_key_arn
+          # Inject only the JSON key from SecretString, not the full object.
+          valueFrom = "${var.maptiler_api_key_arn}:MAPTILER_API_KEY::"
         }
       ]
 

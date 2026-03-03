@@ -138,15 +138,15 @@ def _read_firms_api_csv(url: str) -> str:
     except HTTPError as e:
         if e.code in (401, 403):
             raise FireDataUnavailableError(
-                f"NASA FIRMS API rejected the MAP key (unauthorized) at url: {url}. "
+                "NASA FIRMS API rejected the MAP key (unauthorized). "
                 "Verify the MAP_KEY secret value in production and remove any extra whitespace."
             ) from e
         raise FireDataUnavailableError(
-            f"NASA FIRMS API HTTP error ({e.code}) at url: {url}. Please retry."
+            f"NASA FIRMS API HTTP error ({e.code}). Please retry."
         ) from e
     except URLError as e:
         raise FireDataUnavailableError(
-            f"Could not reach NASA FIRMS API at url: {url}. Please retry. Error: {e}"
+            "Could not reach NASA FIRMS API. Please retry."
         ) from e
 
 
@@ -231,21 +231,20 @@ def detect_fire_near_city(
                 "MAP_KEY is not configured in the MCP server environment."
             )
         url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
-        logger.info(f"Using API for fire data at url: {url}")
         csv_text = _read_firms_api_csv(url)
         if not csv_text.strip():
             raise FireDataUnavailableError(
-                f"NASA FIRMS API returned an empty response at url: {url}."
+                "NASA FIRMS API returned an empty response."
             )
         if "invalid map_key" in csv_text.strip().lower():
             raise FireDataUnavailableError(
-                f"NASA FIRMS API rejected the MAP key (Invalid MAP_KEY) at url: {url}. "
+                "NASA FIRMS API rejected the MAP key (Invalid MAP_KEY). "
                 "Verify the MAP_KEY secret value in production and remove any extra whitespace."
             )
         df = pd.read_csv(io.StringIO(csv_text))
         if len(df.columns) == 1 and "invalid map_key" in str(df.columns[0]).lower():
             raise FireDataUnavailableError(
-                f"NASA FIRMS API rejected the MAP key (Invalid MAP_KEY) at url: {url}. "
+                "NASA FIRMS API rejected the MAP key (Invalid MAP_KEY). "
                 "Verify the MAP_KEY secret value in production and remove any extra whitespace."
             )
     else:
