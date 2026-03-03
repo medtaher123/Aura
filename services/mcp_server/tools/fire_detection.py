@@ -217,6 +217,7 @@ def detect_fire_near_city(
     # Ensure date column exists
     if "acq_date" not in df.columns:
         logger.error("Date column 'acq_date' not found in data.")
+        logger.error(df.columns)
         return {
             "points": [],
             "nb_fires": 0,
