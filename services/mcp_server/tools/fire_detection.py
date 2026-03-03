@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, date
 from pathlib import Path
 import io
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 from core.logger import get_logger
 from config import get_config
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
@@ -17,9 +19,12 @@ logger = get_logger(__name__)
 config = get_config()
 
 # Use centralized config for API key and archive directory
-MAP_KEY = config.map_key
+MAP_KEY = (config.map_key or "").strip()
 if not MAP_KEY:
     logger.error("MAP_KEY is not set")
+elif MAP_KEY != (config.map_key or ""):
+    # Some secret stores append trailing newlines; FIRMS rejects those keys.
+    logger.warning("MAP_KEY had surrounding whitespace and was trimmed")
 ARCHIVE_DIR = config.fire_archive_dir
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,6 +130,26 @@ def should_use_api(start_date, end_date):
     return end_date_obj >= (date.today() - timedelta(days=7))
 
 
+def _read_firms_api_csv(url: str) -> str:
+    try:
+        with urlopen(url, timeout=30) as response:
+            body = response.read()
+        return body.decode("utf-8", errors="replace")
+    except HTTPError as e:
+        if e.code in (401, 403):
+            raise FireDataUnavailableError(
+                f"NASA FIRMS API rejected the MAP key (unauthorized) at url: {url}. "
+                "Verify the MAP_KEY secret value in production and remove any extra whitespace."
+            ) from e
+        raise FireDataUnavailableError(
+            f"NASA FIRMS API HTTP error ({e.code}) at url: {url}. Please retry."
+        ) from e
+    except URLError as e:
+        raise FireDataUnavailableError(
+            f"Could not reach NASA FIRMS API at url: {url}. Please retry. Error: {e}"
+        ) from e
+
+
 # Detect fires near a city for a given date and radius (km)
 def detect_fire_near_city(
     start_date,
@@ -201,8 +226,25 @@ def detect_fire_near_city(
 
     if use_api:
         print("Using API for fire data")
+        if not MAP_KEY:
+            raise FireDataUnavailableError(
+                "MAP_KEY is not configured in the MCP server environment."
+            )
         url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
-        df = pd.read_csv(url)
+        csv_text = _read_firms_api_csv(url)
+        if not csv_text.strip():
+            raise FireDataUnavailableError(f"NASA FIRMS API returned an empty response at url: {url}.")
+        if "invalid map_key" in csv_text.strip().lower():
+            raise FireDataUnavailableError(
+                f"NASA FIRMS API rejected the MAP key (Invalid MAP_KEY) at url: {url}. "
+                "Verify the MAP_KEY secret value in production and remove any extra whitespace."
+            )
+        df = pd.read_csv(io.StringIO(csv_text))
+        if len(df.columns) == 1 and "invalid map_key" in str(df.columns[0]).lower():
+            raise FireDataUnavailableError(
+                f"NASA FIRMS API rejected the MAP key (Invalid MAP_KEY) at url: {url}. "
+                "Verify the MAP_KEY secret value in production and remove any extra whitespace."
+            )
     else:
         file_paths = find_archive_files_for_range(start_date_obj, end_date_obj)
         logger.info(f"Using archive files for fire data: {', '.join(file_paths)}")
@@ -330,14 +372,24 @@ def detect_fire_tool(
         except Exception:
             radius_km_f = 100.0
 
-        result = detect_fire_near_city(
-            start_date,
-            end_date,
-            location or "",
-            radius_km_f,
-            lat=lat,
-            lon=lon,
-        )
+        try:
+            result = detect_fire_near_city(
+                start_date,
+                end_date,
+                location or "",
+                radius_km_f,
+                lat=lat,
+                lon=lon,
+            )
+        except FireDataUnavailableError as e:
+            return ToolResponse(
+                tool_name="detect_fire_tool",
+                message=str(e),
+                start_date=start_date,
+                end_date=end_date,
+                city=location,
+                error=True,
+            )
         print("Detection result:", result)
         points = result.get("points") if isinstance(result, dict) else None
         print("points:", points)
