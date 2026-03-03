@@ -231,9 +231,12 @@ def detect_fire_near_city(
                 "MAP_KEY is not configured in the MCP server environment."
             )
         url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
+        logger.info(f"Using API for fire data at url: {url}")
         csv_text = _read_firms_api_csv(url)
         if not csv_text.strip():
-            raise FireDataUnavailableError(f"NASA FIRMS API returned an empty response at url: {url}.")
+            raise FireDataUnavailableError(
+                f"NASA FIRMS API returned an empty response at url: {url}."
+            )
         if "invalid map_key" in csv_text.strip().lower():
             raise FireDataUnavailableError(
                 f"NASA FIRMS API rejected the MAP key (Invalid MAP_KEY) at url: {url}. "
