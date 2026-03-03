@@ -25,17 +25,17 @@ class MCPServerConfig(BaseSettings):
 
     # API keys
     opentopo_api_key: str = Field(
-        ...,
+        default="",
         description="OpenTopography API key - REQUIRED from environment",
     )
     map_key: str = Field(
-        ...,
+        default="",
         description="NASA FIRMS Map key - REQUIRED from environment",
     )
 
     # GeoServer settings
     geoserver_base_url: str = Field(
-        ...,
+        default="",
         description="GeoServer base URL - REQUIRED from environment",
     )
     geoserver_risk_layer: str = Field(

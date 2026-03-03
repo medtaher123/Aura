@@ -18,6 +18,8 @@ config = get_config()
 
 # Use centralized config for API key and archive directory
 MAP_KEY = config.map_key
+if not MAP_KEY:
+    logger.error("MAP_KEY is not set")
 ARCHIVE_DIR = config.fire_archive_dir
 MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
