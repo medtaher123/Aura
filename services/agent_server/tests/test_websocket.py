@@ -3,9 +3,10 @@ Tests for WebSocket endpoint.
 """
 
 import pytest
-import json
 from fastapi.testclient import TestClient
 from src.main import app
+from src.api.models import LocationOption
+from src.api.websocket import _patch_resume_state_with_confirmed_location
 
 
 def test_websocket_connection():
@@ -18,6 +19,46 @@ def test_websocket_connection():
         
         assert data["type"] == "connection_ack"
         assert "server_version" in data
+
+
+def test_resume_patch_preserves_structured_tool_input():
+    """When resuming, patch only location while preserving required fields."""
+    pause_state = {
+        "tool_input": {
+            "start_date": "2026-02-24",
+            "end_date": "2026-03-03",
+            "location": "Dubai, United Arab Emirates",
+            "radius_km": None,
+        },
+        "resume_patch": {"field": "location"},
+    }
+    resume_state = {
+        "next_tool": "detect_fire_tool",
+        # Legacy state shape can carry only a string marker.
+        "next_input": "@osm_id:R4479752",
+    }
+    confirmed_location = LocationOption(
+        name="دبي, الإمارات العربية المتحدة",
+        coordinates=[25.0742823, 55.1885387],
+        place_id=397136633,
+        osm_id=4479752,
+        osm_type="relation",
+        osm_type_prefix="R",
+    )
+
+    _, patch_field = _patch_resume_state_with_confirmed_location(
+        pause_state=pause_state,
+        resume_state=resume_state,
+        confirmed_location=confirmed_location,
+    )
+
+    assert patch_field == "location"
+    assert isinstance(resume_state["next_input"], dict)
+    next_input = resume_state["next_input"]
+    assert next_input.get("start_date") == "2026-02-24"
+    assert next_input.get("end_date") == "2026-03-03"
+    assert next_input.get("radius_km") is None
+    assert next_input.get("location") == "@osm_id:R4479752"
 
 
 @pytest.mark.integration
