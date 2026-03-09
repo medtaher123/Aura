@@ -276,6 +276,18 @@ class OrchestratorExecutor:
                 "map",
                 "route",
                 "itinerary",
+                "bdtopo",
+                "commune",
+                "insee",
+                "zoning",
+                "regulated",
+                "intersection",
+                "named place",
+                "toponym",
+                "coverage",
+                "completeness",
+                "edition",
+                "change snapshot",
             )
             analysis_keywords = (
                 "analyze",
