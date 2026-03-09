@@ -15,7 +15,9 @@ def _detect_entry_archive(archives: Iterable[Path]) -> Path:
     return ordered[0]
 
 
-def extract_archives(archives: list[Path], output_dir: Path) -> list[Path]:
+def extract_archives(
+    archives: list[Path], output_dir: Path, *, timeout_seconds: int = 7200
+) -> list[Path]:
     if not archives:
         raise ValueError("No archives provided for extraction.")
 
@@ -28,7 +30,9 @@ def extract_archives(archives: list[Path], output_dir: Path) -> list[Path]:
         f"-o{output_dir}",
         str(entry_archive),
     ]
-    process = subprocess.run(command, capture_output=True, text=True, check=False)
+    process = subprocess.run(
+        command, capture_output=True, text=True, check=False, timeout=timeout_seconds
+    )
     if process.returncode != 0:
         raise RuntimeError(
             "7z extraction failed.\n"

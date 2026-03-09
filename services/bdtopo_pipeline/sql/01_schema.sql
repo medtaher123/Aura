@@ -19,3 +19,6 @@ CREATE TABLE IF NOT EXISTS bdtopo_meta.ingestion_log (
 CREATE INDEX IF NOT EXISTS idx_ingestion_log_edition
     ON bdtopo_meta.ingestion_log (edition_date);
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ingestion_log_layer
+    ON bdtopo_meta.ingestion_log (edition_date, source_file, layer_name);
+

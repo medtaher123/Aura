@@ -2,67 +2,139 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-import os
+from typing import Literal, Optional
+
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ModeOptions = Literal["full", "express", "differential"]
+
+_UNSET_PATH = Path("__UNSET__")
 
 
-@dataclass(slots=True)
-class PipelineConfig:
-    mode: str
-    edition_date: str
-    work_dir: Path
-    download_dir: Path
-    extract_dir: Path
-    report_dir: Path
-    postgis_dsn: str
-    source_template: str
-    source_urls_inline: str
-    source_urls_file: str
-    full_france_part_count: int
-    keep_downloads: bool
-    keep_extracted: bool
-    download_timeout_seconds: int
-    download_max_retries: int
-    download_chunk_size: int
-    quality_invalid_ratio_threshold: float
+class PipelineConfig(BaseSettings):
+    """BDTOPO pipeline configuration with automatic environment variable loading.
 
+    All fields map to ``BDTOPO_*`` env vars (case-insensitive) thanks to
+    ``env_prefix``.  ``mode`` and ``edition_date`` have no env-var default and
+    are expected to be supplied at construction time (CLI args, ECS overrides…).
+    """
 
-def _bool_env(var_name: str, default: bool) -> bool:
-    raw = os.getenv(var_name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def load_config(mode: str, edition_date: str) -> PipelineConfig:
-    work_dir = Path(os.getenv("BDTOPO_WORK_DIR", "/tmp/bdtopo")).resolve()
-    return PipelineConfig(
-        mode=mode,
-        edition_date=edition_date,
-        work_dir=work_dir,
-        download_dir=work_dir / "downloads" / edition_date,
-        extract_dir=work_dir / "extracted" / edition_date,
-        report_dir=work_dir / "reports" / edition_date,
-        postgis_dsn=os.getenv("BDTOPO_DATABASE_URL", "").strip(),
-        source_template=os.getenv(
-            "BDTOPO_SOURCE_TEMPLATE",
-            (
-                "https://data.geopf.fr/telechargement/download/BDTOPO/"
-                "BDTOPO_3-5_TOUSTHEMES_GPKG_WGS84G_FRA_{edition_date}/"
-                "BDTOPO_3-5_TOUSTHEMES_GPKG_WGS84G_FRA_{edition_date}.7z.{part}"
-            ),
-        ).strip(),
-        source_urls_inline=os.getenv("BDTOPO_SOURCE_URLS", "").strip(),
-        source_urls_file=os.getenv("BDTOPO_SOURCE_URLS_FILE", "").strip(),
-        full_france_part_count=int(os.getenv("BDTOPO_PART_COUNT", "9")),
-        keep_downloads=_bool_env("BDTOPO_KEEP_DOWNLOADS", True),
-        keep_extracted=_bool_env("BDTOPO_KEEP_EXTRACTED", True),
-        download_timeout_seconds=int(os.getenv("BDTOPO_DOWNLOAD_TIMEOUT_SECONDS", "90")),
-        download_max_retries=int(os.getenv("BDTOPO_DOWNLOAD_MAX_RETRIES", "5")),
-        download_chunk_size=int(os.getenv("BDTOPO_DOWNLOAD_CHUNK_SIZE", "1048576")),
-        quality_invalid_ratio_threshold=float(
-            os.getenv("BDTOPO_QUALITY_INVALID_RATIO_THRESHOLD", "0.01")
-        ),
+    mode: ModeOptions = Field(default="full", description="Ingestion mode")
+    edition_date: str = Field(
+        default="latest",
+        description="BDTOPO edition date (YYYY-MM-DD or 'latest')",
     )
 
+    work_dir: Path = Field(
+        default=Path("/tmp/bdtopo"),
+        description="Root working directory for pipeline artifacts",
+    )
+    download_dir: Path = Field(
+        default=_UNSET_PATH,
+        description="Override download directory (default: work_dir/downloads/<edition_date>)",
+    )
+    extract_dir: Path = Field(
+        default=_UNSET_PATH,
+        description="Override extraction directory (default: work_dir/extracted/<edition_date>)",
+    )
+    report_dir: Path = Field(
+        default=_UNSET_PATH,
+        description="Override report directory (default: work_dir/reports/<edition_date>)",
+    )
+
+    postgis_dsn: str = Field(
+        default="", alias="database_url", description="PostGIS connection string"
+    )
+
+    source_template: str = Field(
+        default=(
+            "https://data.geopf.fr/telechargement/download/BDTOPO/"
+            "BDTOPO_3-5_TOUSTHEMES_GPKG_WGS84G_FRA_{edition_date}/"
+            "BDTOPO_3-5_TOUSTHEMES_GPKG_WGS84G_FRA_{edition_date}.7z.{part}"
+        ),
+        description="URL template for archive parts",
+    )
+    source_urls_inline: str = Field(
+        default="",
+        alias="source_urls",
+        description="Inline comma-separated source URLs",
+    )
+    source_urls_file: str = Field(
+        default="",
+        description="Path to a file listing source URLs",
+    )
+    full_france_part_count: int = Field(
+        default=9,
+        alias="part_count",
+        description="Number of archive parts for full-France download",
+    )
+    diff_api_resource_url: str = Field(
+        default="https://data.geopf.fr/telechargement/resource/BDTOPO-DIFF",
+        description="API resource URL for differential discovery",
+    )
+
+    keep_downloads: bool = Field(
+        default=True, description="Keep downloaded archives after extraction"
+    )
+    keep_extracted: bool = Field(
+        default=True, description="Keep extracted files after loading"
+    )
+
+    download_timeout_seconds: int = Field(
+        default=90, description="Per-file download timeout"
+    )
+    download_max_retries: int = Field(
+        default=5, description="Max download retry attempts"
+    )
+    download_chunk_size: int = Field(
+        default=1_048_576, description="Download chunk size in bytes"
+    )
+    extraction_timeout_seconds: int = Field(
+        default=7200, description="Extraction timeout"
+    )
+    quality_invalid_ratio_threshold: float = Field(
+        default=0.01,
+        description="Max acceptable ratio of invalid geometries",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="BDTOPO_",
+        env_file=Path(__file__).resolve().parent / ".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    @model_validator(mode="after")
+    def _resolve_dirs(self) -> "PipelineConfig":
+        self.work_dir = self.work_dir.resolve()
+        if self.download_dir == _UNSET_PATH:
+            self.download_dir = self.work_dir / "downloads" / self.edition_date
+        if self.extract_dir == _UNSET_PATH:
+            self.extract_dir = self.work_dir / "extracted" / self.edition_date
+        if self.report_dir == _UNSET_PATH:
+            self.report_dir = self.work_dir / "reports" / self.edition_date
+        return self
+
+
+_config_instance: Optional[PipelineConfig] = None
+
+
+def get_config(**overrides) -> PipelineConfig:
+    """Get or create a singleton config instance.
+
+    Keyword arguments are forwarded to ``PipelineConfig()`` on first call
+    (e.g. ``mode="full"``, ``edition_date="2025-06-01"``).
+    """
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = PipelineConfig(**overrides)
+    return _config_instance
+
+
+def load_config(mode: ModeOptions, edition_date: str) -> PipelineConfig:
+    """Legacy helper – delegates to ``get_config``."""
+    return get_config(mode=mode, edition_date=edition_date)

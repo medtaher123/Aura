@@ -12,7 +12,7 @@ if __package__ is None or __package__ == "":
     # Allow direct execution: python services/bdtopo_pipeline/run_pipeline.py
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from bdtopo_pipeline.config import load_config
+from bdtopo_pipeline.config import get_config
 from bdtopo_pipeline.pipeline import run_pipeline
 from bdtopo_pipeline.logger import get_logger
 
@@ -37,7 +37,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    config = load_config(mode=args.mode, edition_date=args.edition_date)
+    config = get_config(mode=args.mode, edition_date=args.edition_date)
     summary = run_pipeline(config)
     logger.info(json.dumps(summary, indent=2))
 

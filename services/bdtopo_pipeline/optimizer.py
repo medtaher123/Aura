@@ -193,6 +193,12 @@ def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
                     )
                     indexed_tables += 1
 
+        for table_name in tables:
+            with connection.cursor() as cursor:
+                cursor.execute(sql.SQL("ANALYZE bdtopo_raw.{t}").format(
+                    t=sql.Identifier(table_name)
+                ))
+
         admin_table = _pick_table(tables, ("commune",)) or _pick_table(tables, ("admin",))
         transport_table = _pick_table(tables, ("troncon", "route")) or _pick_table(tables, ("route",))
         regulated_table = _pick_table(tables, ("zone", "reglement")) or _pick_table(tables, ("servitude",))
@@ -253,6 +259,17 @@ def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
                         view=sql.Identifier(view),
                     )
                 )
+
+        for view in (
+            "mv_admin_latest",
+            "mv_transport_latest",
+            "mv_regulated_latest",
+            "mv_places_latest",
+        ):
+            with connection.cursor() as cursor:
+                cursor.execute(sql.SQL("ANALYZE bdtopo_curated.{v}").format(
+                    v=sql.Identifier(view)
+                ))
 
         connection.commit()
 

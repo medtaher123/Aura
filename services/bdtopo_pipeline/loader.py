@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import subprocess
@@ -296,6 +296,9 @@ def _merge_tmp_into_raw(
             INSERT INTO bdtopo_meta.ingestion_log
                 (edition_date, source_file, layer_name, target_table, theme, row_count, loaded_at)
             VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (edition_date, source_file, layer_name)
+            DO UPDATE SET row_count = EXCLUDED.row_count,
+                          loaded_at = EXCLUDED.loaded_at
             """,
             (
                 edition_date,
@@ -322,6 +325,35 @@ def _merge_tmp_into_raw(
     )
 
 
+def _layer_already_loaded(
+    conn: psycopg.Connection, edition_date: str, source_file: str, layer_name: str
+) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM bdtopo_meta.ingestion_log "
+            "WHERE edition_date = %s AND source_file = %s AND layer_name = %s "
+            "LIMIT 1",
+            (edition_date, source_file, layer_name),
+        )
+        return cur.fetchone() is not None
+
+
+def _cleanup_orphaned_stage_tables(connection: psycopg.Connection) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'bdtopo_stage'
+        """)
+        for (table_name,) in cursor.fetchall():
+            logger.info(f"Dropping orphaned stage table: bdtopo_stage.{table_name}")
+            cursor.execute(
+                sql.SQL("DROP TABLE IF EXISTS bdtopo_stage.{t} CASCADE").format(
+                    t=sql.Identifier(table_name)
+                )
+            )
+    connection.commit()
+
+
 def load_gpkg_files(
     config: PipelineConfig, gpkg_files: list[Path]
 ) -> list[LayerLoadResult]:
@@ -340,14 +372,18 @@ def load_gpkg_files(
     with psycopg.connect(config.postgis_dsn, autocommit=False) as connection:
         logger.info("Connecting to PostGIS")
         _apply_schema(connection, schema_file)
+        _cleanup_orphaned_stage_tables(connection)
         logger.info(f"Parsing {len(gpkg_files)} GeoPackages...")
         for gpkg_path in gpkg_files:
             source_file = gpkg_path.name
             layers = _list_gpkg_layers(gpkg_path)
             logger.info(f"    Found {len(layers)} layers in {gpkg_path}")
             for layer_name in layers:
+                if _layer_already_loaded(connection, config.edition_date, source_file, layer_name):
+                    logger.info(f"        Skipping {layer_name} (already loaded)")
+                    continue
                 layer_slug = _normalize_identifier(layer_name) or "layer"
-                tmp_table = f"tmp_{layer_slug}_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-10:]}"
+                tmp_table = f"tmp_{layer_slug}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[-10:]}"
                 logger.info(
                     f"        Creating temporary table {tmp_table} for {layer_name}"
                 )
