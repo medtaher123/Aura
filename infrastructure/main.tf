@@ -4,11 +4,12 @@
 module "vpc" {
   source = "./modules/vpc"
 
-  project_name        = var.project_name
-  environment         = var.environment
-  vpc_cidr            = var.vpc_cidr
-  availability_zones  = var.availability_zones
-  public_subnet_cidrs = var.public_subnet_cidrs
+  project_name         = var.project_name
+  environment          = var.environment
+  vpc_cidr             = var.vpc_cidr
+  availability_zones   = var.availability_zones
+  public_subnet_cidrs  = var.public_subnet_cidrs
+  private_subnet_cidrs = var.private_subnet_cidrs
 }
 
 # IAM Module
@@ -65,7 +66,7 @@ module "postgis" {
   project_name               = var.project_name
   environment                = var.environment
   vpc_id                     = module.vpc.vpc_id
-  subnet_ids                 = module.vpc.public_subnet_ids
+  subnet_ids                 = module.vpc.private_subnet_ids
   allowed_security_group_ids = [module.vpc.security_group_id]
   instance_class             = var.postgis_instance_class
   allocated_storage          = var.postgis_allocated_storage
@@ -136,14 +137,22 @@ module "ecs" {
   agent_service_discovery_registry_arn = module.service_discovery.agent_server_service_arn
 
   # BDTOPO Pipeline configuration
-  bdtopo_pipeline_enabled               = var.bdtopo_pipeline_enabled
-  bdtopo_pipeline_container_image       = "${module.ecr.bdtopo_pipeline_repository_url}:latest"
-  bdtopo_pipeline_cpu                   = var.bdtopo_pipeline_cpu
-  bdtopo_pipeline_memory                = var.bdtopo_pipeline_memory
-  bdtopo_pipeline_ephemeral_storage_gib = var.bdtopo_pipeline_ephemeral_storage_gib
-  bdtopo_pipeline_task_role_arn         = module.iam.bdtopo_pipeline_task_role_arn
-  eventbridge_scheduler_role_arn        = module.iam.eventbridge_scheduler_role_arn
-  bdtopo_pipeline_schedule_enabled      = var.bdtopo_pipeline_schedule_enabled
+  bdtopo_pipeline_enabled                    = var.bdtopo_pipeline_enabled
+  bdtopo_pipeline_container_image            = "${module.ecr.bdtopo_pipeline_repository_url}:latest"
+  bdtopo_pipeline_cpu                        = var.bdtopo_pipeline_cpu
+  bdtopo_pipeline_memory                     = var.bdtopo_pipeline_memory
+  bdtopo_pipeline_ephemeral_storage_gib      = var.bdtopo_pipeline_ephemeral_storage_gib
+  bdtopo_pipeline_task_role_arn              = module.iam.bdtopo_pipeline_task_role_arn
+  eventbridge_scheduler_role_arn             = module.iam.eventbridge_scheduler_role_arn
+  bdtopo_pipeline_schedule_enabled           = var.bdtopo_pipeline_schedule_enabled
+  bdtopo_pipeline_work_dir                   = var.bdtopo_pipeline_work_dir
+  bdtopo_pipeline_part_count                 = var.bdtopo_pipeline_part_count
+  bdtopo_pipeline_download_timeout_seconds   = var.bdtopo_pipeline_download_timeout_seconds
+  bdtopo_pipeline_download_max_retries       = var.bdtopo_pipeline_download_max_retries
+  bdtopo_pipeline_extraction_timeout_seconds = var.bdtopo_pipeline_extraction_timeout_seconds
+  bdtopo_pipeline_quality_threshold          = var.bdtopo_pipeline_quality_threshold
+  bdtopo_pipeline_keep_downloads             = var.bdtopo_pipeline_keep_downloads
+  bdtopo_pipeline_keep_extracted             = var.bdtopo_pipeline_keep_extracted
 
   depends_on = [module.ecr, module.service_discovery, module.alb]
 }
