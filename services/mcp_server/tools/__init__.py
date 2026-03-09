@@ -22,6 +22,7 @@ from tools.floods_and_droughts import drought_flood_risk_tool
 from tools.nasa_power import nasa_power_daily_tool, nasa_power_hourly_tool
 from tools.infrastructure import infrastructure_query_tool
 from tools.tools_info import tools_info_tool
+from tools.maxar_open_data import maxar_open_data_imagery_tool
 
 __all__ = [
     "detect_fire_tool",
@@ -43,4 +44,5 @@ __all__ = [
     "tools_info_tool",
     "flood_depth_damage_tool",
     "flood_damage_city_tool",
+    "maxar_open_data_imagery_tool",
 ]

@@ -18,6 +18,7 @@ from ..core.prompts import get_orchestrator_prompt
 from ..core.memory import format_chat_history
 from ..tools.contracts import ToolResponse
 from ..api.models import OrchestratorInputs, OrchestratorTrace, ResumeState
+from .agent_runner import coerce_tool_response
 from .data_agent_service import create_data_agent_executor
 from .analysis_agent_service import create_analysis_agent_executor
 
@@ -345,6 +346,14 @@ class OrchestratorExecutor:
             )
             logger.debug(f"OrchestratorAgentService invoke: raw type={type(raw)}")
             data_response = raw.get("output")
+            if isinstance(data_response, dict):
+                data_response = coerce_tool_response(data_response)
+            elif data_response is None:
+                data_response = ToolResponse(
+                    tool_name="data_agent",
+                    message="No response from data agent.",
+                    error=True,
+                )
 
             logger.debug(f"DataAgent completed - response type: {type(data_response)}")
         else:
