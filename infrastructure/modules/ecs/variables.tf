@@ -278,6 +278,54 @@ variable "bdtopo_pipeline_ephemeral_storage_gib" {
   default     = 100
 }
 
+variable "bdtopo_pipeline_work_dir" {
+  description = "Working directory for BDTOPO pipeline inside the container"
+  type        = string
+  default     = "/tmp/bdtopo"
+}
+
+variable "bdtopo_pipeline_part_count" {
+  description = "Number of archive parts for full-France download"
+  type        = number
+  default     = 9
+}
+
+variable "bdtopo_pipeline_download_timeout_seconds" {
+  description = "HTTP timeout (seconds) for each archive download chunk"
+  type        = number
+  default     = 90
+}
+
+variable "bdtopo_pipeline_download_max_retries" {
+  description = "Max retry attempts per archive download"
+  type        = number
+  default     = 5
+}
+
+variable "bdtopo_pipeline_extraction_timeout_seconds" {
+  description = "Timeout (seconds) for 7z extraction subprocess"
+  type        = number
+  default     = 7200
+}
+
+variable "bdtopo_pipeline_quality_threshold" {
+  description = "Max ratio of invalid geometries before quality check fails"
+  type        = number
+  default     = 0.01
+}
+
+variable "bdtopo_pipeline_keep_downloads" {
+  description = "Whether to keep downloaded archives after ingestion"
+  type        = bool
+  default     = false
+}
+
+variable "bdtopo_pipeline_keep_extracted" {
+  description = "Whether to keep extracted GPKG files after ingestion"
+  type        = bool
+  default     = false
+}
+
 variable "bdtopo_pipeline_task_role_arn" {
   description = "ARN of the BDTOPO pipeline task role"
   type        = string

@@ -35,6 +35,38 @@ resource "aws_ecs_task_definition" "bdtopo_pipeline" {
         {
           name  = "PYTHONUNBUFFERED"
           value = "1"
+        },
+        {
+          name  = "BDTOPO_WORK_DIR"
+          value = var.bdtopo_pipeline_work_dir
+        },
+        {
+          name  = "BDTOPO_PART_COUNT"
+          value = tostring(var.bdtopo_pipeline_part_count)
+        },
+        {
+          name  = "BDTOPO_DOWNLOAD_TIMEOUT_SECONDS"
+          value = tostring(var.bdtopo_pipeline_download_timeout_seconds)
+        },
+        {
+          name  = "BDTOPO_DOWNLOAD_MAX_RETRIES"
+          value = tostring(var.bdtopo_pipeline_download_max_retries)
+        },
+        {
+          name  = "BDTOPO_EXTRACTION_TIMEOUT_SECONDS"
+          value = tostring(var.bdtopo_pipeline_extraction_timeout_seconds)
+        },
+        {
+          name  = "BDTOPO_QUALITY_INVALID_RATIO_THRESHOLD"
+          value = tostring(var.bdtopo_pipeline_quality_threshold)
+        },
+        {
+          name  = "BDTOPO_KEEP_DOWNLOADS"
+          value = var.bdtopo_pipeline_keep_downloads ? "true" : "false"
+        },
+        {
+          name  = "BDTOPO_KEEP_EXTRACTED"
+          value = var.bdtopo_pipeline_keep_extracted ? "true" : "false"
         }
       ]
 
