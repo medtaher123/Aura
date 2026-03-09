@@ -180,9 +180,10 @@ def discover_differential_urls(config: PipelineConfig) -> list[str]:
 
 
 # ── Public API ─────────────────────────────────────────────────────────
-def collect_urls(config, max_parts: int = 50, timeout: float = 5.0) -> list[str]:
+def collect_urls(config: PipelineConfig, timeout: float = 5.0) -> list[str]:
     """Collect URLs for the given configuration."""
     urls: list[str] = []
+    max_parts = config.max_parts or 50
 
     with requests.Session() as session:
         for index in range(1, max_parts + 1):
@@ -215,19 +216,23 @@ def build_manifest(config: PipelineConfig) -> list[str]:
          - full:            collect URLs from the template
          - differential:    auto-discover URLs from the data.geopf.fr Atom API
     """
-    if config.source_urls_inline:
-        urls = _parse_inline_urls(config.source_urls_inline)
+    if config.source_urls:
+        urls = _parse_inline_urls(config.source_urls)
+        logger.info("Using inline URLs from BDTOPO_SOURCE_URLS")
         if not urls:
             raise ValueError("BDTOPO_SOURCE_URLS was set but no valid URL was parsed.")
         return urls
 
     if config.source_urls_file:
+        logger.info("Using URLs from file: %s", config.source_urls_file)
         return _read_urls_file(config.source_urls_file)
 
     if config.mode == "differential":
+        logger.info("Using differential mode")
         return discover_differential_urls(config)
 
     # Full mode
+    logger.info("Using full mode")
     return collect_urls(config)
 
 

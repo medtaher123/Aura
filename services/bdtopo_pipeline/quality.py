@@ -43,13 +43,13 @@ def _list_geometry_tables(connection: psycopg.Connection) -> list[tuple[str, str
 
 
 def run_quality_checks(config: PipelineConfig) -> QualityReport:
-    if not config.postgis_dsn:
+    if not config.database_url:
         raise ValueError("BDTOPO_DATABASE_URL is required to run quality checks.")
 
     table_metrics: list[TableQuality] = []
     failing_tables: list[str] = []
 
-    with psycopg.connect(config.postgis_dsn, autocommit=False) as connection:
+    with psycopg.connect(config.database_url, autocommit=False) as connection:
         for table_name, geometry_column in _list_geometry_tables(connection):
             with connection.cursor() as cursor:
                 cursor.execute(

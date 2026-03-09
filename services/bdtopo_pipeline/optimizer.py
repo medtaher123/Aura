@@ -154,10 +154,10 @@ def _create_or_replace_view(
 
 
 def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
-    if not config.postgis_dsn:
+    if not config.database_url:
         raise ValueError("BDTOPO_DATABASE_URL is required for optimization.")
 
-    with psycopg.connect(config.postgis_dsn, autocommit=False) as connection:
+    with psycopg.connect(config.database_url, autocommit=False) as connection:
         with connection.cursor() as cursor:
             cursor.execute("CREATE SCHEMA IF NOT EXISTS bdtopo_curated")
 

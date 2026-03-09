@@ -33,7 +33,7 @@ This service ingests BDTOPO full-France GeoPackage archives into PostGIS and pre
 - `BDTOPO_SOURCE_TEMPLATE` (default full-France WGS84G pattern)
 - `BDTOPO_SOURCE_URLS` (optional inline URL list, comma/newline separated)
 - `BDTOPO_SOURCE_URLS_FILE` (optional path with one URL per line)
-- `BDTOPO_PART_COUNT` (default: `9`)
+- `BDTOPO_MAX_PARTS` (default: `50`)
 - `BDTOPO_DOWNLOAD_TIMEOUT_SECONDS` (default: `90`)
 - `BDTOPO_DOWNLOAD_MAX_RETRIES` (default: `5`)
 - `BDTOPO_QUALITY_INVALID_RATIO_THRESHOLD` (default: `0.01`)
@@ -44,7 +44,7 @@ This service ingests BDTOPO full-France GeoPackage archives into PostGIS and pre
 python services/bdtopo_pipeline/run_pipeline.py --mode full --edition-date 2025-12-15
 ```
 
-For differential or express mode, provide URLs directly or via a text file:
+For express mode, provide URLs directly or via a text file:
 
 ```bash
 export BDTOPO_SOURCE_URLS="https://.../part1.7z.001,https://.../part1.7z.002"

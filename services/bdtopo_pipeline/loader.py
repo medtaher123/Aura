@@ -192,6 +192,69 @@ def _drop_stage_bound_defaults(
             )
 
 
+def _fetch_pk_columns(
+    connection: psycopg.Connection,
+    schema_name: str,
+    table_name: str,
+) -> list[str]:
+    """Return primary-key column names for the given table (empty if none)."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            JOIN pg_class c ON c.oid = i.indrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE i.indisprimary
+              AND n.nspname = %s
+              AND c.relname = %s
+            ORDER BY array_position(i.indkey, a.attnum)
+            """,
+            (schema_name, table_name),
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+
+def _align_columns(
+    connection: psycopg.Connection,
+    tmp_table_name: str,
+    target_table_name: str,
+) -> None:
+    """Add any columns present in the stage table but missing from the raw table."""
+    stage_cols = set(_fetch_columns(connection, "bdtopo_stage", tmp_table_name))
+    raw_cols = set(_fetch_columns(connection, "bdtopo_raw", target_table_name))
+    missing = stage_cols - raw_cols
+    if not missing:
+        return
+    with connection.cursor() as cursor:
+        for col in missing:
+            cursor.execute(
+                sql.SQL(
+                    """
+                    SELECT data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'bdtopo_stage'
+                      AND table_name = %s
+                      AND column_name = %s
+                    """
+                ),
+                (tmp_table_name, col),
+            )
+            row = cursor.fetchone()
+            col_type = row[0] if row else "TEXT"
+            logger.info(f"Adding missing column {col} ({col_type}) to bdtopo_raw.{target_table_name}")
+            cursor.execute(
+                sql.SQL(
+                    "ALTER TABLE bdtopo_raw.{target} ADD COLUMN {col} {type}"
+                ).format(
+                    target=sql.Identifier(target_table_name),
+                    col=sql.Identifier(col),
+                    type=sql.SQL(col_type),
+                )
+            )
+
+
 def _merge_tmp_into_raw(
     *,
     connection: psycopg.Connection,
@@ -260,26 +323,52 @@ def _merge_tmp_into_raw(
         )
 
     _drop_stage_bound_defaults(connection, target_table_name)
+    _align_columns(connection, tmp_table_name, target_table_name)
 
     columns = _fetch_columns(connection, "bdtopo_stage", tmp_table_name)
     column_identifiers = sql.SQL(", ").join(
         sql.Identifier(column) for column in columns
     )
 
+    pk_cols = _fetch_pk_columns(connection, "bdtopo_raw", target_table_name)
+
     with connection.cursor() as cursor:
-        cursor.execute(
-            sql.SQL(
-                """
-                INSERT INTO bdtopo_raw.{target} ({columns})
-                SELECT {columns}
-                  FROM bdtopo_stage.{tmp}
-                """
-            ).format(
-                target=sql.Identifier(target_table_name),
-                tmp=sql.Identifier(tmp_table_name),
-                columns=column_identifiers,
+        if pk_cols:
+            non_pk = [c for c in columns if c not in pk_cols]
+            update_set = sql.SQL(", ").join(
+                sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c))
+                for c in non_pk
             )
-        )
+            cursor.execute(
+                sql.SQL(
+                    """
+                    INSERT INTO bdtopo_raw.{target} ({columns})
+                    SELECT {columns}
+                      FROM bdtopo_stage.{tmp}
+                    ON CONFLICT ({pk}) DO UPDATE SET {update_set}
+                    """
+                ).format(
+                    target=sql.Identifier(target_table_name),
+                    tmp=sql.Identifier(tmp_table_name),
+                    columns=column_identifiers,
+                    pk=sql.SQL(", ").join(sql.Identifier(c) for c in pk_cols),
+                    update_set=update_set,
+                )
+            )
+        else:
+            cursor.execute(
+                sql.SQL(
+                    """
+                    INSERT INTO bdtopo_raw.{target} ({columns})
+                    SELECT {columns}
+                      FROM bdtopo_stage.{tmp}
+                    """
+                ).format(
+                    target=sql.Identifier(target_table_name),
+                    tmp=sql.Identifier(tmp_table_name),
+                    columns=column_identifiers,
+                )
+            )
 
         cursor.execute(
             sql.SQL("SELECT COUNT(*) FROM bdtopo_stage.{tmp}").format(
@@ -357,7 +446,7 @@ def _cleanup_orphaned_stage_tables(connection: psycopg.Connection) -> None:
 def load_gpkg_files(
     config: PipelineConfig, gpkg_files: list[Path]
 ) -> list[LayerLoadResult]:
-    if not config.postgis_dsn:
+    if not config.database_url:
         raise ValueError(
             "BDTOPO_DATABASE_URL is required to load GeoPackages into PostGIS."
         )
@@ -366,10 +455,10 @@ def load_gpkg_files(
     if not schema_file.exists():
         raise FileNotFoundError(f"Schema file missing: {schema_file}")
     logger.info(f"Applying schema from {schema_file}")
-    ogr_pg_dsn = _to_ogr_pg_dsn(config.postgis_dsn)
+    ogr_pg_dsn = _to_ogr_pg_dsn(config.database_url)
     results: list[LayerLoadResult] = []
 
-    with psycopg.connect(config.postgis_dsn, autocommit=False) as connection:
+    with psycopg.connect(config.database_url, autocommit=False) as connection:
         logger.info("Connecting to PostGIS")
         _apply_schema(connection, schema_file)
         _cleanup_orphaned_stage_tables(connection)
@@ -377,26 +466,23 @@ def load_gpkg_files(
         for gpkg_path in gpkg_files:
             source_file = gpkg_path.name
             layers = _list_gpkg_layers(gpkg_path)
-            logger.info(f"    Found {len(layers)} layers in {gpkg_path}")
-            for layer_name in layers:
+            logger.info(f"  Found {len(layers)} layers in {gpkg_path}")
+            for i_la, layer_name in enumerate(layers, start=1):
                 if _layer_already_loaded(connection, config.edition_date, source_file, layer_name):
-                    logger.info(f"        Skipping {layer_name} (already loaded)")
+                    logger.info(f"[{i_la}/{len(layers)}] Skipping {layer_name} (already loaded)")
                     continue
                 layer_slug = _normalize_identifier(layer_name) or "layer"
-                tmp_table = f"tmp_{layer_slug}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[-10:]}"
-                logger.info(
-                    f"        Creating temporary table {tmp_table} for {layer_name}"
-                )
+                tmp_table = f"    tmp_{layer_slug}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[-10:]}"
                 target_table = layer_slug[:55]
                 theme = _infer_theme(layer_name)
-                logger.info(f"        Loading {layer_name} into {tmp_table}")
+                logger.info(f"    [{i_la}/{len(layers)}] Loading {layer_name} into {tmp_table}")
                 _ogr_load_layer(
                     ogr_pg_dsn=ogr_pg_dsn,
                     gpkg_path=gpkg_path,
                     layer_name=layer_name,
                     tmp_table_name=tmp_table,
                 )
-                logger.info(f"        Merging {tmp_table} into {target_table}")
+                logger.info(f"    [{i_la}/{len(layers)}] Merging {tmp_table} into {target_table}")
                 result = _merge_tmp_into_raw(
                     connection=connection,
                     tmp_table_name=tmp_table,
@@ -407,5 +493,5 @@ def load_gpkg_files(
                     layer_name=layer_name,
                 )
                 results.append(result)
-
+    logger.info(f"Loaded {len(results)} layers into {config.edition_date}")
     return results
