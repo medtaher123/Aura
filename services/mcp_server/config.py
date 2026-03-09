@@ -84,6 +84,20 @@ class MCPServerConfig(BaseSettings):
         description="Default AWS region for Athena/S3 clients",
     )
 
+    # BDTOPO / PostGIS settings
+    bdtopo_database_url: str = Field(
+        default="",
+        description="PostGIS connection string for BDTOPO query tool",
+    )
+    bdtopo_query_timeout_seconds: int = Field(
+        default=30,
+        description="Timeout for BDTOPO PostGIS queries",
+    )
+    bdtopo_default_radius_m: int = Field(
+        default=5000,
+        description="Default radius for spatial proximity queries",
+    )
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parent / ".env",
         env_file_encoding="utf-8",

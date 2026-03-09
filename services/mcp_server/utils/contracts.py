@@ -5,7 +5,7 @@ Shared utilities for MCP tools to maintain consistent response format.
 """
 
 from __future__ import annotations
-from typing_extensions import Any, Dict, List, Optional
+from typing_extensions import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -39,3 +39,9 @@ class ToolResponse(BaseModel):
     )
     data: Dict[str, Any] = Field(default={}, description="Data")
     error: bool = Field(default=False, description="Whether an error occurred")
+
+
+BDTOPOQueryType = Literal["admin_lookup", "nearest_transport", "regulated_zones", "named_places"]
+BDTOPOIntersectionInputMode = Literal["point", "road_name"]
+BDTOPOAreaInputMode = Literal["point", "place_name", "bbox"]
+BDTOPOExplainObjective = Literal["site_screening", "mobility_risk", "compliance", "general"]

@@ -57,9 +57,12 @@ def _s3_object_exists(bucket: str, key: str) -> bool:
 
     s3 = boto3.client("s3")
     try:
+        logger.debug(f"Checking if S3 object exists: {bucket}/{key}")
         s3.head_object(Bucket=bucket, Key=key)
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error checking if S3 object exists: {bucket}/{key}")
+        logger.error(e)
         return False
 
 
@@ -233,9 +236,7 @@ def detect_fire_near_city(
         url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_NOAA20_NRT/world/3"
         csv_text = _read_firms_api_csv(url)
         if not csv_text.strip():
-            raise FireDataUnavailableError(
-                "NASA FIRMS API returned an empty response."
-            )
+            raise FireDataUnavailableError("NASA FIRMS API returned an empty response.")
         if "invalid map_key" in csv_text.strip().lower():
             raise FireDataUnavailableError(
                 "NASA FIRMS API rejected the MAP key (Invalid MAP_KEY). "

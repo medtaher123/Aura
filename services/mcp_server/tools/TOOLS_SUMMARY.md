@@ -5,16 +5,20 @@ This document summarizes each tool in the `services/mcp_server/tools/` directory
 ---
 
 ## 0. tools_info.py (NEW)
+
 **Purpose:**
+
 - Provides information about available tools, their capabilities, data sources, and example use cases.
 - Helps users discover what tools are available and how to use them.
 - Acts as a meta-tool that documents the entire tool ecosystem.
 
 **Data Sources:**
+
 - Internal catalog of all registered tools and their metadata
 - No external APIs required
 
 **What It Contains:**
+
 - Tool descriptions, purposes, and capabilities
 - Data sources used by each tool
 - Example questions for each tool
@@ -22,6 +26,7 @@ This document summarizes each tool in the `services/mcp_server/tools/` directory
 - Tool categorization (Fire & Disasters, Weather & Climate, etc.)
 
 **Example Questions:**
+
 - "What tools are available?"
 - "How does the fire detection tool work?"
 - "What data sources does the weather tool use?"
@@ -31,164 +36,295 @@ This document summarizes each tool in the `services/mcp_server/tools/` directory
 ---
 
 ## 1. disaster_detection.py
+
 **Purpose:**
+
 - Search for natural & technological disasters (flood, storm, earthquake, extreme temperature, drought, industrial accident, transport) in a country and for a given date or date range.
 
 **Data Sources:**
+
 - [GDACS EMDAT API](https://www.gdacs.org/gdacsapi/api/Emdat/getemdatbyiso3?iso3=XXX): Returns disaster event data by country ISO3 code.
 - [Nominatim](https://nominatim.openstreetmap.org/): Used for geocoding locations.
 
 **What They Contain:**
+
 - EMDAT: Disaster events with type, location, date, deaths, affected, etc.
 - Nominatim: Geocoding for city/country names to coordinates.
 
 ---
 
 ## 2. fire_detection.py
+
 **Purpose:**
+
 - Detect and analyze fire events using archived and live data.
 
 **Data Sources:**
-- NASA FIRMS API (https://firms.modaps.eosdis.nasa.gov/api/area/csv/): For recent fire data (last 7 days).
+
+- NASA FIRMS API (<https://firms.modaps.eosdis.nasa.gov/api/area/csv/>): For recent fire data (last 7 days).
 - S3 buckets (configurable, e.g., `fire_archive_dir`): For archived CSV files of fire events.
 
 **What They Contain:**
+
 - Fire event data (location, time, intensity, etc.) from NASA VIIRS/NOAA20 NRT and archives.
 
 ---
 
 ## 3. floods_and_droughts.py
+
 **Purpose:**
+
 - Analyze drought and flood risk using global hazard maps.
 
 **Data Sources:**
+
 - Global Drought and Flood Catalogue (GDFC) Hazard Maps (public AWS OpenData S3 bucket):
-	- Drought: `s3://global-drought-flood-catalogue/Hazard-Maps/Drought-Frequency/`
-	- Flood: `s3://global-drought-flood-catalogue/Hazard-Maps/Pluvial-Frequency/`
+- Drought: `s3://global-drought-flood-catalogue/Hazard-Maps/Drought-Frequency/`
+- Flood: `s3://global-drought-flood-catalogue/Hazard-Maps/Pluvial-Frequency/`
 
 **What They Contain:**
+
 - NetCDF files with long-term (1950–2016) hazard frequency and return period data for droughts and pluvial floods.
 
 ---
 
 ## 4. geographic_info.py
+
 **Purpose:**
+
 - Retrieve information about countries and cities.
 
 **Data Sources:**
+
 - [restcountries.com](https://restcountries.com/): Country info.
 - [Nominatim](https://nominatim.openstreetmap.org/): City info.
 - [Wikidata](https://www.wikidata.org/): City population and metadata.
 
 **What They Contain:**
+
 - Country: Name, capital, population, area, region, languages, currency, flag.
 - City: Name, population, coordinates, country, etc.
 
 ---
 
 ## 5. infrastructure.py
+
 **Purpose:**
+
 - Query OpenStreetMap (OSM) data for infrastructure near a location using AWS Athena.
 
 **Data Sources:**
+
 - AWS Athena (OSM tables)
 - S3 bucket for Athena query results
 
 **What They Contain:**
+
 - OSM infrastructure features (amenity, building, landuse) and their counts/types near a location.
 
 ---
 
 ## 6. itinerary.py
+
 **Purpose:**
+
 - Geocode places and compute driving routes between locations.
 
 **Data Sources:**
+
 - [Nominatim](https://nominatim.openstreetmap.org/): Geocoding.
 - [OSRM Project Routing API](http://router.project-osrm.org/): Driving route computation.
 
 **What They Contain:**
+
 - Geocoded coordinates, driving routes, step-by-step directions.
 
 ---
 
 ## 7. nasa_power.py
+
 **Purpose:**
+
 - Query NASA POWER API for climate/energy data (solar, wind, temperature, etc.) at a point.
 
 **Data Sources:**
+
 - [NASA POWER API](https://power.larc.nasa.gov/api/temporal/hourly/point) and [https://power.larc.nasa.gov/api/temporal/daily/point](https://power.larc.nasa.gov/api/temporal/daily/point):
-	- Official NASA Prediction Of Worldwide Energy Resources (POWER) endpoints.
+- Official NASA Prediction Of Worldwide Energy Resources (POWER) endpoints.
 
 **What They Contain:**
+
 - Hourly/daily time series for climate/energy variables at a given location (solar irradiance, wind speed, temperature, precipitation, etc.).
 
 ---
 
 ## 8. risk_geoserver.py
+
 **Purpose:**
+
 - Query a GeoServer instance for risk/geospatial layers.
 
 **Data Sources:**
+
 - GeoServer (URL and layer configurable via config)
 
 **What They Contain:**
+
 - Geospatial risk data (e.g., polygons, attributes) for a region or filtered by risk type, model, etc.
 
 ---
 
-
 ## 9. streamflow.py
+
 **Purpose:**
+
 - Provide river discharge forecasts and flood risk analysis using GEOGLOWS ECMWF global streamflow forecasting system.
 
 **Data Sources:**
+
 - GEOGLOWS ECMWF global streamflow forecasting system:
-	- S3 buckets: `geoglows-v2` (retrospective return periods), `geoglows-v2-forecasts` (ensemble forecasts)
-	- [ArcGIS REST API](https://livefeeds3.arcgis.com/arcgis/rest/services/GEOGLOWS/GlobalWaterModel_Medium/MapServer/0): For river reach identification and geometry.
+- S3 buckets: `geoglows-v2` (retrospective return periods), `geoglows-v2-forecasts` (ensemble forecasts)
+- [ArcGIS REST API](https://livefeeds3.arcgis.com/arcgis/rest/services/GEOGLOWS/GlobalWaterModel_Medium/MapServer/0): For river reach identification and geometry.
 
 **What They Contain:**
+
 - Streamflow forecasts, flood thresholds (return periods), river reach metadata, and river geometries.
 
 ---
 
 ## 10. tools_stac.py
+
 **Purpose:**
+
 - Query the STAC EarthSearch catalog for satellite images.
 
 **Data Sources:**
+
 - [STAC EarthSearch API](https://earth-search.aws.element84.com/v1):
-	- Provides access to satellite imagery metadata and thumbnails for Sentinel-1, Sentinel-2, MODIS, VIIRS, etc.
+- Provides access to satellite imagery metadata and thumbnails for Sentinel-1, Sentinel-2, MODIS, VIIRS, etc.
 
 **What They Contain:**
+
 - Satellite imagery metadata, cloud cover, and thumbnails for selected collections and date ranges.
 
 ---
 
 ## 11. water_ingress.py
+
 **Purpose:**
+
 - Analyze surface water ingress (flooding) using elevation and raster data.
 
 **Data Sources:**
+
 - [OpenTopography GlobalDEM API](https://portal.opentopography.org/API/globaldem): For SRTMGL3 elevation data (API key required)
 - S3/local raster files (for DEM and analysis outputs)
 - [Nominatim](https://nominatim.openstreetmap.org/): Geocoding
 
 **What They Contain:**
+
 - Elevation rasters (GeoTIFF), water ingress risk analysis, geocoded locations, and mitigation recommendations.
 
 ---
 
 ## 12. weather.py
+
 **Purpose:**
+
 - Retrieve current weather and forecasts for a city using Open-Meteo API.
 
 **Data Sources:**
+
 - [Open-Meteo API](https://open-meteo.com/)
 - [Nominatim](https://nominatim.openstreetmap.org/): Geocoding
 
 **What They Contain:**
+
 - Current weather, multi-day forecasts, geocoded city info.
 
 ---
 
+## 13. bdtopo.py
+
+**Purpose:**
+
+- Query curated BDTOPO layers from PostGIS for fast, production-style geospatial lookups.
+
+**Data Sources:**
+
+- IGN BDTOPO GeoPackage downloads ingested into PostGIS
+- Curated materialized views in schema `bdtopo_curated`
+
+**What They Contain:**
+
+- Administrative entities, transport features, regulated zones, and named places with spatial indexes.
+
+---
+
+## 14. bdtopo_intersection.py
+
+**Purpose:**
+
+- Check intersections between transport segments and regulated/zoning areas.
+
+**Data Sources:**
+
+- `bdtopo_raw.troncon_de_route`
+- `bdtopo_raw.parc_ou_reserve`
+- `bdtopo_raw.zone_d_activite_ou_d_interet`
+
+**What It Contains:**
+
+- Point-based and road-name-based intersection results, with regulation types and map artifacts.
+
+---
+
+## 15. bdtopo_quality.py
+
+**Purpose:**
+
+- Measure thematic coverage and naming completeness on an area.
+
+**Data Sources:**
+
+- Raw BDTOPO thematic tables (administrative, transport, regulated, places, hydro, land-use, buildings)
+- Nominatim (for place-name extent resolution)
+
+**What It Contains:**
+
+- Per-indicator counts, named-ratio metrics, sparse-theme detection, and extent artifacts.
+
+---
+
+## 16. bdtopo_change.py
+
+**Purpose:**
+
+- Compare BDTOPO coverage between two loaded editions on the same spatial extent.
+
+**Data Sources:**
+
+- `bdtopo_raw.*` tables with `edition_date`
+- `bdtopo_meta.ingestion_log`
+
+**What It Contains:**
+
+- Baseline vs target counts by key tables, per-table deltas, and global change summary.
+
+---
+
+## 17. bdtopo_explain.py
+
+**Purpose:**
+
+- Build objective-driven explanations (screening, mobility, compliance) using BDTOPO signals.
+
+**Data Sources:**
+
+- Raw BDTOPO administrative, transport, regulated, named-place, and hydro tables
+
+**What It Contains:**
+
+- Structured evidence, compact interpretation, score-style summary, and map/url artifacts.
+
+---

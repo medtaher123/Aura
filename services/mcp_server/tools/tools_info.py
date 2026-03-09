@@ -305,6 +305,140 @@ TOOLS_CATALOG = {
             "infrastructure_types": "Types of infrastructure to query (e.g., ['hospital', 'school'])"
         }
     },
+    "bdtopo_query_tool": {
+        "name": "BDTOPO PostGIS Query Tool",
+        "purpose": "Run low-latency spatial queries against curated/raw BDTOPO layers with structured summaries and map artifacts",
+        "data_sources": [
+            "IGN BDTOPO full-France GeoPackage downloads (file-based, no API)",
+            "PostGIS curated views built from BDTOPO ingestion pipeline",
+            "Raw BDTOPO tables for capability-specific enrichment and fallbacks"
+        ],
+        "capabilities": [
+            "Administrative lookup at a coordinate (name, INSEE, population, postal code when available)",
+            "Nearest transport feature search with mobility attributes (nature, lanes, speed, restrictions)",
+            "Regulated-zone and zoning proximity checks with fallback when curated view is empty",
+            "Named-place proximity search enriched with toponym nature/importance",
+            "Returns renderable map artifact specs and direct map URLs (OSM + IGN)"
+        ],
+        "example_questions": [
+            "At 48.8566, 2.3522, what commune is this point in and what is its INSEE code?",
+            "Find nearest transport segments within 3000m and summarize by transport nature.",
+            "Are there regulated zones near this location? If none in curated view, use zoning fallback.",
+            "List named places within 2km and include their nature and importance."
+        ],
+        "parameters": {
+            "query_type": "admin_lookup | nearest_transport | regulated_zones | named_places",
+            "lat": "Latitude in decimal degrees",
+            "lon": "Longitude in decimal degrees",
+            "radius_m": "Radius in meters for proximity queries",
+            "limit": "Max rows to return (1-50)"
+        }
+    },
+    "bdtopo_intersection_tool": {
+        "name": "BDTOPO Intersection Tool",
+        "purpose": "Check intersections between roads and regulated/zoning features from BDTOPO raw layers",
+        "data_sources": [
+            "PostGIS raw BDTOPO transport layer (troncon_de_route)",
+            "PostGIS raw BDTOPO regulated/zoning layers (parc_ou_reserve, zone_d_activite_ou_d_interet)"
+        ],
+        "capabilities": [
+            "Point-radius based road/regulation intersection checks",
+            "Road-name based intersection checks with optional administrative hint",
+            "Distance and type summaries for intersections",
+            "Renderable map artifacts and map URLs"
+        ],
+        "example_questions": [
+            "Do roads near this point intersect regulated areas?",
+            "For road name 'Avenue des Champs-Elysees', what regulated zones are intersected?"
+        ],
+        "parameters": {
+            "input_mode": "point | road_name",
+            "lat": "Latitude (for point mode)",
+            "lon": "Longitude (for point mode)",
+            "radius_m": "Search radius in meters (point mode)",
+            "road_name": "Road name pattern (road_name mode)",
+            "admin_hint": "Optional city/admin hint to disambiguate road names",
+            "limit": "Max rows to return (1-100)"
+        }
+    },
+    "bdtopo_coverage_quality_tool": {
+        "name": "BDTOPO Coverage Quality Tool",
+        "purpose": "Evaluate BDTOPO thematic coverage and naming completeness on an area",
+        "data_sources": [
+            "PostGIS raw BDTOPO thematic tables",
+            "Nominatim geocoding for place-name extents"
+        ],
+        "capabilities": [
+            "Coverage diagnostics for point radius, place name, or bbox",
+            "Per-indicator feature counts and named-ratio metrics",
+            "Sparse-theme detection for data-quality triage"
+        ],
+        "example_questions": [
+            "How complete is BDTOPO coverage around this point?",
+            "Run a coverage quality check for Paris."
+        ],
+        "parameters": {
+            "input_mode": "point | place_name | bbox",
+            "lat": "Latitude (point mode)",
+            "lon": "Longitude (point mode)",
+            "radius_m": "Search radius in meters (point mode)",
+            "place_name": "Location name to geocode (place_name mode)",
+            "bbox": "Bounding box [min_lon,min_lat,max_lon,max_lat] (bbox mode)"
+        }
+    },
+    "bdtopo_change_snapshot_tool": {
+        "name": "BDTOPO Change Snapshot Tool",
+        "purpose": "Compare BDTOPO feature coverage between two editions on a spatial extent",
+        "data_sources": [
+            "PostGIS raw BDTOPO tables with edition_date lineage",
+            "bdtopo_meta.ingestion_log for edition availability"
+        ],
+        "capabilities": [
+            "Cross-edition count deltas by key thematic tables",
+            "Validation of available editions before comparison",
+            "Area-based change summaries for screening and monitoring"
+        ],
+        "example_questions": [
+            "What changed between 2025-12-15 and 2026-03-15 in this area?",
+            "Compare transport and regulated feature counts across editions."
+        ],
+        "parameters": {
+            "baseline_edition": "Baseline edition date (YYYY-MM-DD)",
+            "target_edition": "Target edition date (YYYY-MM-DD)",
+            "input_mode": "point | place_name | bbox",
+            "lat": "Latitude (point mode)",
+            "lon": "Longitude (point mode)",
+            "radius_m": "Search radius in meters (point mode)",
+            "place_name": "Location name to geocode (place_name mode)",
+            "bbox": "Bounding box [min_lon,min_lat,max_lon,max_lat] (bbox mode)"
+        }
+    },
+    "bdtopo_thematic_explain_tool": {
+        "name": "BDTOPO Thematic Explain Tool",
+        "purpose": "Generate evidence-based thematic explanations (screening, mobility, compliance) from BDTOPO signals",
+        "data_sources": [
+            "PostGIS raw BDTOPO administrative, transport, regulated, place, and hydro layers",
+            "Nominatim geocoding for place-name extents"
+        ],
+        "capabilities": [
+            "Objective-driven explanation profiles",
+            "Structured evidence list with source references",
+            "Compact scoring/signal summaries with artifact outputs"
+        ],
+        "example_questions": [
+            "Explain this location for site screening using BDTOPO.",
+            "Give me a compliance-focused explanation around these coordinates."
+        ],
+        "parameters": {
+            "objective": "site_screening | mobility_risk | compliance | general",
+            "input_mode": "point | place_name | bbox",
+            "lat": "Latitude (point mode)",
+            "lon": "Longitude (point mode)",
+            "radius_m": "Search radius in meters (point mode)",
+            "place_name": "Location name to geocode (place_name mode)",
+            "bbox": "Bounding box [min_lon,min_lat,max_lon,max_lat] (bbox mode)"
+        }
+    },
     "geo_info_tool": {
         "name": "Geographic Information Tool",
         "purpose": "Retrieve information about countries and cities",
@@ -388,7 +522,16 @@ TOOL_CATEGORIES = {
     "Water & Flooding": ["streamflow_forecast_tool", "estimate_surface_water_ingress_tool", "flood_depth_damage_tool"],
     "Satellite Imagery": ["query_stac_catalog"],
     "Risk Analysis": ["geoserver_risk_mask_tool"],
-    "Infrastructure & Geography": ["infrastructure_query_tool", "geo_info_tool", "get_route_info"],
+    "Infrastructure & Geography": [
+        "infrastructure_query_tool",
+        "bdtopo_query_tool",
+        "bdtopo_intersection_tool",
+        "bdtopo_coverage_quality_tool",
+        "bdtopo_change_snapshot_tool",
+        "bdtopo_thematic_explain_tool",
+        "geo_info_tool",
+        "get_route_info",
+    ],
     "Utilities": ["get_time", "get_date", "calculator"]
 }
 

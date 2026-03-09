@@ -22,6 +22,11 @@ from tools.floods_and_droughts import drought_flood_risk_tool
 from tools.nasa_power import nasa_power_daily_tool, nasa_power_hourly_tool
 from tools.infrastructure import infrastructure_query_tool
 from tools.tools_info import tools_info_tool
+from tools.bdtopo import bdtopo_query_tool
+from tools.bdtopo_intersection import bdtopo_intersection_tool
+from tools.bdtopo_quality import bdtopo_coverage_quality_tool
+from tools.bdtopo_change import bdtopo_change_snapshot_tool
+from tools.bdtopo_explain import bdtopo_thematic_explain_tool
 
 __all__ = [
     "detect_fire_tool",
@@ -41,6 +46,11 @@ __all__ = [
     "nasa_power_daily_tool",
     "infrastructure_query_tool",
     "tools_info_tool",
+    "bdtopo_query_tool",
+    "bdtopo_intersection_tool",
+    "bdtopo_coverage_quality_tool",
+    "bdtopo_change_snapshot_tool",
+    "bdtopo_thematic_explain_tool",
     "flood_depth_damage_tool",
     "flood_damage_city_tool",
 ]
