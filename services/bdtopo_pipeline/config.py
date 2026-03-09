@@ -44,8 +44,9 @@ class PipelineConfig(BaseSettings):
         description="Override report directory (default: work_dir/reports/<edition_date>)",
     )
 
-    postgis_dsn: str = Field(
-        default="", alias="database_url", description="PostGIS connection string"
+    database_url: str = Field(
+        default="",
+        description="PostGIS connection string",
     )
 
     source_template: str = Field(
@@ -56,19 +57,17 @@ class PipelineConfig(BaseSettings):
         ),
         description="URL template for archive parts",
     )
-    source_urls_inline: str = Field(
+    source_urls: str = Field(
         default="",
-        alias="source_urls",
         description="Inline comma-separated source URLs",
     )
     source_urls_file: str = Field(
         default="",
         description="Path to a file listing source URLs",
     )
-    full_france_part_count: int = Field(
-        default=9,
-        alias="part_count",
-        description="Number of archive parts for full-France download",
+    max_parts: int = Field(
+        default=50,
+        description="Number of maximum archive parts for full-France download",
     )
     diff_api_resource_url: str = Field(
         default="https://data.geopf.fr/telechargement/resource/BDTOPO-DIFF",
@@ -105,7 +104,6 @@ class PipelineConfig(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
-        populate_by_name=True,
     )
 
     @model_validator(mode="after")
