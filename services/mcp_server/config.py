@@ -98,6 +98,24 @@ class MCPServerConfig(BaseSettings):
         description="Default radius for spatial proximity queries",
     )
 
+    # Maxar Open Data STAC catalog
+    maxar_stac_catalog_url: str = Field(
+        default="https://maxar-opendata.s3.amazonaws.com/events/catalog.json",
+        description="Maxar Open Data STAC catalog URL",
+    )
+    maxar_request_timeout: int = Field(
+        default=25,
+        description="Request timeout in seconds for Maxar STAC requests",
+    )
+    maxar_max_events_list: int = Field(
+        default=100,
+        description="Max number of events to list from catalog",
+    )
+    maxar_max_items_per_event: int = Field(
+        default=10,
+        description="Max STAC items per event",
+    )
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parent / ".env",
         env_file_encoding="utf-8",

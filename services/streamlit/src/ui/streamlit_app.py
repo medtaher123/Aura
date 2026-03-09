@@ -3,12 +3,15 @@
 Renders assistant responses, including map artifacts (HTML or Pydeck specs).
 """
 
-import sys
+import io
 import os
+import sys
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 from typing_extensions import TypedDict
 
+import numpy as np
 import streamlit as st
 import pydeck as pdk
 from PIL import Image
@@ -34,6 +37,83 @@ from src.core.logger import get_logger  # noqa: E402
 from src.services.document_service import extract_text_from_pdf_bytes  # noqa: E402
 
 logger = get_logger(__name__)
+
+
+def _crop_to_valid_region(rgb: np.ndarray, min_fraction: float = 0.05) -> np.ndarray:
+    """Crop to the bounding box of non-black pixels so previews are not mostly black borders."""
+    if rgb.size == 0 or rgb.ndim != 3:
+        return rgb
+    has_data = (rgb > 0).any(axis=-1)
+    if not np.any(has_data):
+        return rgb
+    rows = np.where(has_data.any(axis=1))[0]
+    cols = np.where(has_data.any(axis=0))[0]
+    if rows.size == 0 or cols.size == 0:
+        return rgb
+    r0, r1 = int(rows.min()), int(rows.max()) + 1
+    c0, c1 = int(cols.min()), int(cols.max()) + 1
+    cropped = rgb[r0:r1, c0:c1]
+    if cropped.size < min_fraction * rgb.size:
+        return rgb
+    return cropped
+
+
+
+
+@st.cache_data(ttl=3600, max_entries=256)
+def _cog_url_to_png_bytes(url: str, max_size: int = 400) -> bytes | None:
+    """Fetch a COG from url, read a small overview as RGB, return PNG bytes for in-UI display. Returns None on failure or if URL is not allowlisted."""
+    try:
+        parsed = urlparse(url)
+        if parsed.netloc not in _COG_PREVIEW_ALLOWED_NETLOCS:
+            return None
+        import rasterio
+        with rasterio.open(url) as src:
+            nbands = src.count
+            h, w = src.height, src.width
+            if h <= 0 or w <= 0:
+                return None
+            scale = min(max_size / max(h, w), 1.0)
+            out_h, out_w = max(1, int(h * scale)), max(1, int(w * scale))
+            nodata = getattr(src, "nodata", None)
+            if nbands >= 3:
+                arr = src.read([1, 2, 3], out_shape=(3, out_h, out_w))
+                arr = np.transpose(arr, (1, 2, 0))
+            else:
+                arr = src.read(1, out_shape=(out_h, out_w))
+                arr = np.stack([arr, arr, arr], axis=-1)
+            arr = np.nan_to_num(arr, nan=0, posinf=0, neginf=0).astype(np.float64)
+            mask = None
+            if nodata is not None:
+                mask = (arr == nodata).any(axis=-1)
+            else:
+                mid = arr[:, :, 0] if arr.ndim == 3 else arr
+                if np.sum(mid == 0) > 0.5 * mid.size:
+                    mask = (arr == 0).any(axis=-1) if arr.ndim == 3 else (arr == 0)
+            if mask is not None:
+                arr[mask] = np.nan
+            p_low, p_high = 2.0, 98.0
+            out = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+            for c in range(3):
+                band = arr[:, :, c]
+                valid = band[~np.isnan(band)]
+                if valid.size == 0:
+                    continue
+                lo, hi = np.nanpercentile(band, [p_low, p_high])
+                if hi > lo:
+                    scaled = (255 * (band - lo) / (hi - lo)).clip(0, 255).astype(np.uint8)
+                else:
+                    scaled = np.clip(band.astype(np.uint8), 0, 255)
+                out[:, :, c] = np.where(np.isnan(band), 0, scaled)
+            out = _crop_to_valid_region(out)
+            pil = Image.fromarray(out)
+            buf = io.BytesIO()
+            pil.save(buf, format="PNG")
+            return buf.getvalue()
+    except Exception as e:
+        logger.debug("COG preview failed for %s: %s", url[:80], e)
+        return None
+
 
 MAPS_DIR = PROJECT_ROOT / "src" / "maps"
 MAPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -409,6 +489,34 @@ for msg in st.session_state.messages:
                 for x in maps
             )
 
+            def _is_displayable_image_url(url: str) -> bool:
+                """True if the URL points to an image format browsers can display (not COG/GeoTIFF)."""
+                u = url.lower().split("?")[0]
+                return u.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+
+            def _is_cog_url(url: str) -> bool:
+                """True if the URL is likely a Cloud-Optimized GeoTIFF we can preview."""
+                u = url.lower().split("?")[0]
+                return u.endswith(".tif") or u.endswith(".tiff")
+
+            def _render_thumbnail_or_link(url: str) -> None:
+                if not url.startswith("http://") and not url.startswith("https://"):
+                    st.caption(f"Image: {url}")
+                    return
+                if _is_displayable_image_url(url):
+                    st.image(url, width=300)
+                elif _is_cog_url(url):
+                    png_bytes = _cog_url_to_png_bytes(url)
+                    if png_bytes:
+                        st.image(png_bytes, width=300)
+                        st.caption("Preview (COG). [Open full COG in viewer](%s)" % url)
+                    else:
+                        st.markdown(f"[Open image/COG in viewer]({url})")
+                        st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
+                else:
+                    st.markdown(f"[Open image/COG in viewer]({url})")
+                    st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
+
             if has_map:
                 col_text, col_map = st.columns([2, 3], vertical_alignment="top")
                 with col_text:
@@ -425,14 +533,14 @@ for msg in st.session_state.messages:
                         st.write("### Satellite Images:")
                         for url in thumbnails:
                             if isinstance(url, str) and url:
-                                st.image(url, width=300)
+                                _render_thumbnail_or_link(url)
             else:
                 st.write(content)
                 if thumbnails:
                     st.write("### Satellite Images:")
                     for url in thumbnails:
                         if isinstance(url, str) and url:
-                            st.image(url, width=300)
+                            _render_thumbnail_or_link(url)
 
 
 # ---------------------------------------------------

@@ -27,6 +27,7 @@ from tools.bdtopo_intersection import bdtopo_intersection_tool
 from tools.bdtopo_quality import bdtopo_coverage_quality_tool
 from tools.bdtopo_change import bdtopo_change_snapshot_tool
 from tools.bdtopo_explain import bdtopo_thematic_explain_tool
+from tools.maxar_open_data import maxar_open_data_imagery_tool
 
 __all__ = [
     "detect_fire_tool",
@@ -53,4 +54,5 @@ __all__ = [
     "bdtopo_thematic_explain_tool",
     "flood_depth_damage_tool",
     "flood_damage_city_tool",
+    "maxar_open_data_imagery_tool",
 ]

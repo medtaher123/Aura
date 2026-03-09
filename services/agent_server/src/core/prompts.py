@@ -49,6 +49,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- Use helper tools when needed to complete missing context before a domain tool call (e.g., get_date for relative dates, tools_info_tool for tool discovery questions, geo_info_tool for country/city context).\n"
     "- Prefer tool defaults when reasonable; do not block the user by asking for optional parameters.\n"
     "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
+    "- MAXAR OPEN DATA IMAGERY: Use maxar_open_data_imagery_tool when the user asks for Maxar satellite imagery, high-resolution disaster imagery, pre/post event imagery, or damage assessment imagery for a COUNTRY and YEAR (e.g. 'Maxar imagery for Brazil 2024', 'satellite imagery for the Morocco earthquake 2023', 'show me disaster imagery in Turkey in 2023'). Call it with country (string), year (integer), and optionally month (1-12). Do NOT use it for fires (use detect_fire_tool) or for generic Sentinel/STAC imagery (use query_stac_catalog).\n"
     "- For past events, use the term hazard, for future events, use the term risk.\n"
     "- Use ONLY the listed tools.\n"
     "- If you have enough information to answer, stop.\n"
@@ -340,6 +341,20 @@ Step 1 JSON:
 {"action":"bdtopo_thematic_explain_tool","action_input":{"objective":"compliance","input_mode":"point","lat":48.8566,"lon":2.3522,"radius_m":3000},"commentary":"Calling bdtopo_thematic_explain_tool to build an evidence-based compliance explanation from BDTOPO signals."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I generated a compliance-focused thematic explanation with structured evidence, summary indicators, and map artifacts.","commentary":"Summarizing the thematic explanation."}
+
+Example 33
+User: Show me Maxar satellite imagery for Brazil in 2024
+Step 1 JSON:
+{"action":"maxar_open_data_imagery_tool","action_input":{"country":"Brazil","year":2024},"commentary":"Calling maxar_open_data_imagery_tool to fetch Maxar Open Data disaster imagery for Brazil in 2024."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved Maxar Open Data satellite imagery for Brazil in 2024. See the returned event list, thumbnails, and COG URLs.","commentary":"Summarizing the Maxar imagery results."}
+
+Example 34
+User: Do you have high-resolution disaster imagery for Morocco in September 2023?
+Step 1 JSON:
+{"action":"maxar_open_data_imagery_tool","action_input":{"country":"Morocco","year":2023,"month":9},"commentary":"Calling maxar_open_data_imagery_tool to fetch Maxar imagery for Morocco in September 2023."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I retrieved Maxar Open Data imagery for Morocco in September 2023. See the returned events and image artifacts.","commentary":"Summarizing the Maxar imagery results."}
 """.strip()
 
 
