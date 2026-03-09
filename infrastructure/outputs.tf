@@ -141,3 +141,39 @@ output "streamlit_task_role_arn" {
   description = "Streamlit Task Role ARN"
   value       = module.iam.streamlit_task_role_arn
 }
+
+output "postgis_enabled" {
+  description = "Whether managed PostGIS is enabled"
+  value       = module.postgis.enabled
+}
+
+output "postgis_endpoint" {
+  description = "Managed PostGIS endpoint"
+  value       = module.postgis.endpoint
+}
+
+output "postgis_port" {
+  description = "Managed PostGIS port"
+  value       = module.postgis.port
+}
+
+output "postgis_master_user_secret_arn" {
+  description = "Secrets Manager ARN for managed PostGIS master credentials"
+  value       = module.postgis.master_user_secret_arn
+}
+
+# BDTOPO Pipeline outputs
+output "bdtopo_pipeline_ecr_repository_url" {
+  description = "ECR repository URL for BDTOPO pipeline"
+  value       = module.ecr.bdtopo_pipeline_repository_url
+}
+
+output "bdtopo_pipeline_task_definition_arn" {
+  description = "BDTOPO pipeline task definition ARN"
+  value       = module.ecs.bdtopo_pipeline_task_definition_arn
+}
+
+output "bdtopo_pipeline_cloudwatch_log_group" {
+  description = "BDTOPO pipeline CloudWatch log group name"
+  value       = module.ecs.bdtopo_pipeline_cloudwatch_log_group
+}

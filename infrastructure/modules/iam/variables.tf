@@ -32,3 +32,15 @@ variable "maptiler_api_key_arn" {
   description = "ARN for Maptiler API key secret"
   type        = string
 }
+
+variable "bdtopo_database_url_secret_arn" {
+  description = "Optional ARN containing BDTOPO_DATABASE_URL"
+  type        = string
+  default     = ""
+}
+
+variable "bdtopo_pipeline_enabled" {
+  description = "Whether to create BDTOPO pipeline IAM resources"
+  type        = bool
+  default     = false
+}

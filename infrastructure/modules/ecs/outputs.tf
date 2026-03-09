@@ -55,3 +55,14 @@ output "agent_cloudwatch_log_group" {
   description = "Agent server CloudWatch log group name"
   value       = try(aws_cloudwatch_log_group.agent_server[0].name, "")
 }
+
+# BDTOPO Pipeline outputs
+output "bdtopo_pipeline_task_definition_arn" {
+  description = "BDTOPO pipeline task definition ARN"
+  value       = try(aws_ecs_task_definition.bdtopo_pipeline[0].arn, "")
+}
+
+output "bdtopo_pipeline_cloudwatch_log_group" {
+  description = "BDTOPO pipeline CloudWatch log group name"
+  value       = try(aws_cloudwatch_log_group.bdtopo_pipeline[0].name, "")
+}

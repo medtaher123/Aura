@@ -35,6 +35,7 @@
 # opentopo_api_key_arn = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
 # map_key_arn          = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
 # maptiler_api_key_arn = ""  # Optional, leave empty if not using
+# bdtopo_database_url_secret_arn = "arn:aws:secretsmanager:...:secret:.../BDTOPO_DATABASE_URL-xxxx"
 
 # GeoServer Configuration
 # geoserver_base_url   = "http://geoserver-alb-556624184.eu-west-3.elb.amazonaws.com/geoserver"
@@ -42,3 +43,22 @@
 
 # Fire Archive
 # fire_archive_dir = "s3://metaplanet-fire-archive-firms/"
+
+# Managed PostGIS for full-France BDTOPO (recommended for low-latency agent queries)
+# postgis_enabled                 = true
+# postgis_instance_class          = "db.r7g.xlarge"
+# postgis_allocated_storage       = 500
+# postgis_max_allocated_storage   = 2000
+# postgis_multi_az                = false
+# postgis_backup_retention_period = 7
+# postgis_db_name                 = "bdtopo"
+# postgis_master_username         = "bdtopo_admin"
+# postgis_deletion_protection     = true
+
+# BDTOPO ingestion pipeline (ECS Fargate batch task + EventBridge quarterly schedule)
+# Requires bdtopo_database_url_secret_arn to be set above.
+# bdtopo_pipeline_enabled               = true
+# bdtopo_pipeline_cpu                   = "4096"
+# bdtopo_pipeline_memory                = "16384"
+# bdtopo_pipeline_ephemeral_storage_gib = 100
+# bdtopo_pipeline_schedule_enabled      = true
