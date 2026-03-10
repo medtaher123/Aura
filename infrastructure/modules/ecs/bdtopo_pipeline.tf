@@ -110,7 +110,7 @@ resource "aws_scheduler_schedule" "bdtopo_quarterly" {
   count       = var.bdtopo_pipeline_enabled ? 1 : 0
   name        = "${var.project_name}-bdtopo-quarterly-refresh"
   group_name  = "default"
-  description = "Quarterly BDTOPO full-France ingestion (16th of Jan/Apr/Jul/Oct at 03:00 UTC)"
+  description = "Quarterly BDTOPO full-France ingestion (16th of March/June/Sept/Dec at 03:00 UTC)"
 
   schedule_expression          = "cron(0 3 16 3,6,9,12 ? *)"
   schedule_expression_timezone = "UTC"
