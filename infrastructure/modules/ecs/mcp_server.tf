@@ -12,12 +12,12 @@ locals {
         valueFrom = "${var.map_key_arn}:MAP_KEY::"
       }
     ],
-    [
+    var.bdtopo_database_url_secret_arn != "" ? [
       {
         name      = "BDTOPO_DATABASE_URL"
         valueFrom = "${var.bdtopo_database_url_secret_arn}:BDTOPO_DATABASE_URL::"
       }
-    ]
+    ] : []
   )
 
   mcp_container_definitions = [

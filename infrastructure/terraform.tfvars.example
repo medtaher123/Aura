@@ -46,7 +46,7 @@
 
 # Managed PostGIS for full-France BDTOPO (recommended for low-latency agent queries)
 # postgis_enabled                 = true
-# postgis_instance_class          = "db.r7g.xlarge"
+# postgis_instance_class          = "db.r6g.xlarge"
 # postgis_allocated_storage       = 500
 # postgis_max_allocated_storage   = 2000
 # postgis_multi_az                = false

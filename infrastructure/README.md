@@ -253,7 +253,7 @@ This Terraform configuration creates:
 - **Managed PostgreSQL (RDS)**: Optional baseline sized for full-France BDTOPO serving
 - **Security Group**: Inbound PostgreSQL (5432) restricted to service security groups
 - **Secrets Manager Integration**: Auto-managed master password and optional ECS secret wiring for `BDTOPO_DATABASE_URL`
-- **Recommended baseline**: `db.r7g.xlarge`, 500 GB `gp3`, autoscaling up to 2 TB
+- **Recommended baseline**: `db.r6g.xlarge`, 500 GB `gp3`, autoscaling up to 2 TB
 
 ## 🔧 Troubleshooting
 
@@ -302,7 +302,7 @@ Ensure your AWS IAM user/role has permissions for:
 | `mcp_server_image` | Docker image | ECR image URL |
 | `bdtopo_database_url_secret_arn` | Secret ARN for MCP BDTOPO DB connection | `""` |
 | `postgis_enabled` | Enable managed PostGIS module | `false` |
-| `postgis_instance_class` | Managed PostGIS instance class | `db.r7g.xlarge` |
+| `postgis_instance_class` | Managed PostGIS instance class | `db.r6g.xlarge` |
 | `postgis_allocated_storage` | Initial PostGIS storage (GB) | `500` |
 | `postgis_max_allocated_storage` | Max autoscaled storage (GB) | `2000` |
 

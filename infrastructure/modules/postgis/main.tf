@@ -47,7 +47,7 @@ resource "aws_db_instance" "this" {
 
   identifier                      = "${var.project_name}-postgis"
   engine                          = "postgres"
-  engine_version                  = "16.4"
+  engine_version                  = "16.13"
   instance_class                  = var.instance_class
   db_name                         = var.db_name
   username                        = var.master_username

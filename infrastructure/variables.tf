@@ -220,7 +220,7 @@ variable "postgis_enabled" {
 variable "postgis_instance_class" {
   description = "PostGIS RDS instance class baseline"
   type        = string
-  default     = "db.r7g.xlarge"
+  default     = "db.r6g.xlarge"
 }
 
 variable "postgis_allocated_storage" {

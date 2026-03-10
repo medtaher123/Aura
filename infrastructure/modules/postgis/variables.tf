@@ -33,7 +33,7 @@ variable "allowed_security_group_ids" {
 variable "instance_class" {
   description = "RDS instance class baseline for full-France workload"
   type        = string
-  default     = "db.r7g.xlarge"
+  default     = "db.r6g.xlarge"
 }
 
 variable "allocated_storage" {
