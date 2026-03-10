@@ -174,6 +174,20 @@ def test_infrastructure_category():
     assert result.error is False
     assert "Infrastructure & Geography" in result.data["category"]
     assert "infrastructure_query_tool" in result.data["tools"]
+    assert "bdtopo_query_tool" in result.data["tools"]
+    assert "bdtopo_intersection_tool" in result.data["tools"]
+    assert "bdtopo_coverage_quality_tool" in result.data["tools"]
+    assert "bdtopo_change_snapshot_tool" in result.data["tools"]
+    assert "bdtopo_thematic_explain_tool" in result.data["tools"]
+
+
+def test_bdtopo_tool_info():
+    """Test tool info for BDTOPO query tool."""
+    result = tools_info_tool(tool_name="bdtopo_query_tool")
+
+    assert result.error is False
+    assert "BDTOPO PostGIS Query Tool" in result.message
+    assert "query_type" in result.message
 
 
 def test_utilities_category():

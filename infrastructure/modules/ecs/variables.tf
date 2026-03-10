@@ -119,6 +119,12 @@ variable "fire_archive_dir" {
   default     = "/tmp/fire_archive"
 }
 
+variable "bdtopo_database_url_secret_arn" {
+  description = "Secrets Manager ARN containing BDTOPO_DATABASE_URL connection string"
+  type        = string
+  default     = ""
+}
+
 variable "service_discovery_registry_arn" {
   description = "ARN of the service discovery registry for MCP server"
   type        = string
@@ -239,4 +245,113 @@ variable "agent_server_bedrock_max_tokens" {
   description = "Bedrock max tokens for Agent server"
   type        = string
   default     = "4096"
+}
+
+# BDTOPO Pipeline variables
+variable "bdtopo_pipeline_enabled" {
+  description = "Whether to create BDTOPO pipeline task definition and schedule"
+  type        = bool
+  default     = true
+}
+
+variable "bdtopo_pipeline_container_image" {
+  description = "Docker image for BDTOPO pipeline container"
+  type        = string
+  default     = ""
+}
+
+variable "bdtopo_pipeline_cpu" {
+  description = "CPU units for BDTOPO pipeline task"
+  type        = string
+  default     = "4096"
+}
+
+variable "bdtopo_pipeline_memory" {
+  description = "Memory (MiB) for BDTOPO pipeline task"
+  type        = string
+  default     = "16384"
+}
+
+variable "bdtopo_pipeline_ephemeral_storage_gib" {
+  description = "Ephemeral storage (GiB) for BDTOPO pipeline task"
+  type        = number
+  default     = 100
+}
+
+variable "bdtopo_pipeline_work_dir" {
+  description = "Working directory for BDTOPO pipeline inside the container"
+  type        = string
+  default     = "/tmp/bdtopo"
+}
+
+variable "bdtopo_pipeline_max_parts" {
+  description = "Number of archive parts for full-France download"
+  type        = number
+  default     = 9
+}
+
+variable "bdtopo_pipeline_download_timeout_seconds" {
+  description = "HTTP timeout (seconds) for each archive download chunk"
+  type        = number
+  default     = 90
+}
+
+variable "bdtopo_pipeline_download_max_retries" {
+  description = "Max retry attempts per archive download"
+  type        = number
+  default     = 5
+}
+
+variable "bdtopo_pipeline_extraction_timeout_seconds" {
+  description = "Timeout (seconds) for 7z extraction subprocess"
+  type        = number
+  default     = 7200
+}
+
+variable "bdtopo_pipeline_quality_threshold" {
+  description = "Max ratio of invalid geometries before quality check fails"
+  type        = number
+  default     = 0.01
+}
+
+variable "bdtopo_pipeline_keep_downloads" {
+  description = "Whether to keep downloaded archives after ingestion"
+  type        = bool
+  default     = false
+}
+
+variable "bdtopo_pipeline_keep_extracted" {
+  description = "Whether to keep extracted GPKG files after ingestion"
+  type        = bool
+  default     = false
+}
+
+variable "bdtopo_pipeline_full_api_resource_url" {
+  description = "Atom feed URL for full-mode BDTOPO edition discovery"
+  type        = string
+  default     = "https://data.geopf.fr/telechargement/resource/BDTOPO"
+}
+
+variable "bdtopo_pipeline_diff_api_resource_url" {
+  description = "Atom feed URL for differential BDTOPO edition discovery"
+  type        = string
+  default     = "https://data.geopf.fr/telechargement/resource/BDTOPO-DIFF"
+}
+
+variable "bdtopo_pipeline_task_role_arn" {
+  description = "ARN of the BDTOPO pipeline task role"
+  type        = string
+  default     = ""
+}
+
+variable "eventbridge_scheduler_role_arn" {
+  description = "ARN of the EventBridge Scheduler role for BDTOPO pipeline"
+  type        = string
+  default     = ""
+}
+
+variable "bdtopo_pipeline_schedule_enabled" {
+  description = "Whether the quarterly EventBridge schedule is active"
+  type        = bool
+  default     = true
 }

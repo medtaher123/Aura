@@ -17,3 +17,13 @@ output "streamlit_task_role_arn" {
   description = "Streamlit Task Role ARN"
   value       = aws_iam_role.streamlit_task_role.arn
 }
+
+output "bdtopo_pipeline_task_role_arn" {
+  description = "BDTOPO Pipeline Task Role ARN"
+  value       = try(aws_iam_role.bdtopo_pipeline_task_role[0].arn, null)
+}
+
+output "eventbridge_scheduler_role_arn" {
+  description = "EventBridge Scheduler Role ARN for BDTOPO pipeline"
+  value       = try(aws_iam_role.eventbridge_scheduler[0].arn, null)
+}

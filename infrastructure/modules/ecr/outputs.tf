@@ -31,6 +31,17 @@ output "agent_repository_arn" {
   value       = aws_ecr_repository.agent_server.arn
 }
 
+# BDTOPO Pipeline repository outputs
+output "bdtopo_pipeline_repository_url" {
+  description = "ECR repository URL for BDTOPO pipeline"
+  value       = aws_ecr_repository.bdtopo_pipeline.repository_url
+}
+
+output "bdtopo_pipeline_repository_arn" {
+  description = "ECR repository ARN for BDTOPO pipeline"
+  value       = aws_ecr_repository.bdtopo_pipeline.arn
+}
+
 output "github_actions_role_arn" {
   description = "IAM role ARN for GitHub Actions"
   value       = aws_iam_role.github_actions_ecr.arn

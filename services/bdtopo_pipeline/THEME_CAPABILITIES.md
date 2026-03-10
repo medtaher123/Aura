@@ -1,0 +1,26 @@
+# BDTOPO Theme Capabilities for Agent Tools
+
+- **Administratif**
+  - Jurisdiction lookup from coordinates
+  - Commune/department contextualization for policy rules
+- **Bati**
+  - Built footprint context near user-specified points
+  - Exposure analysis around hazard zones
+- **Hydrographie**
+  - Water proximity checks and hydro context enrichment
+  - River/lake relation for flood-centric prompts
+- **Lieux nommes**
+  - Toponym disambiguation and natural-language grounding
+  - Better matching between user text and map entities
+- **Occupation du sol**
+  - Land cover context for planning and environmental prompts
+  - Vegetation/foreshore filtering around targets
+- **Services et activites**
+  - Utility and activity hotspot lookups
+  - Public-service proximity checks
+- **Transport**
+  - Nearest road network objects and transport context
+  - Route-planning context features for downstream tools
+- **Zones reglementees**
+  - Regulatory overlay checks
+  - Compliance and constraint detection near assets

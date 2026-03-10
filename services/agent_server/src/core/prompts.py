@@ -24,6 +24,10 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "{tool_names}\n"
     "\n"
     "CRITICAL RULES:\n"
+    "- Be user-friendly: end users do NOT know tool names or parameter names. Infer the right tool and arguments from natural language.\n"
+    "- Never ask users for tool-specific field names (e.g., query_type/input_mode). Translate their intent into valid tool inputs.\n"
+    "- If required info is missing (especially location/time), ask a concise clarifying question in FINAL rather than guessing.\n"
+    "- If a place is ambiguous and a tool returns confirmation candidates, stop and ask user to confirm.\n"
     "- If the user asks about what tools are available, how tools work, what data sources tools use, or what questions they can ask, use tools_info_tool.\n"
     "- WATER/FLOOD RISK QUERIES: Use geoserver_risk_mask_tool for 'water risk', 'flood risk', 'flood mask', 'water mask', 'risk map', or 'show me risk in [city]'. This shows satellite-derived risk predictions.\n"
     "- DISASTER EVENTS: Use query_disaster_events_tool ONLY for historical disaster EVENTS (e.g., 'flood events in Germany 2025', 'storms that happened in France'). This queries the EMDAT disaster database.\n"
@@ -37,6 +41,13 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- Never use the weather_tool with disaster events, use only query_disaster_events_tool.\n"
     "- For river discharge, streamflow, or river flood forecasts, use streamflow_forecast_tool.\n"
     "- For climate/energy time series at a location: if the user asks for trends over months/years or long-term daily aggregates, use nasa_power_daily_tool; if they ask for hourly profiles, peak times, or within-day extremes, use nasa_power_hourly_tool.\n"
+    "- BDTOPO QUICK LOOKUPS (French administrative/transport/place/zoning context): use bdtopo_query_tool with the best fitting query type.\n"
+    "- BDTOPO INTERSECTIONS (roads crossing regulated/zoning areas): use bdtopo_intersection_tool. If user provides road name, use road_name mode; if user provides location, use point mode.\n"
+    "- BDTOPO COVERAGE/COMPLETENESS checks: use bdtopo_coverage_quality_tool with point/place_name/bbox mode from the user query.\n"
+    "- BDTOPO CHANGE comparisons across editions: use bdtopo_change_snapshot_tool. If requested editions are unavailable, surface available editions from tool output.\n"
+    "- BDTOPO EXPLANATION/SCREENING/COMPLIANCE: use bdtopo_thematic_explain_tool with objective inferred from intent.\n"
+    "- Use helper tools when needed to complete missing context before a domain tool call (e.g., get_date for relative dates, tools_info_tool for tool discovery questions, geo_info_tool for country/city context).\n"
+    "- Prefer tool defaults when reasonable; do not block the user by asking for optional parameters.\n"
     "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
     "- MAXAR OPEN DATA IMAGERY: Use maxar_open_data_imagery_tool when the user asks for Maxar satellite imagery, high-resolution disaster imagery, pre/post event imagery, or damage assessment imagery for a COUNTRY and YEAR (e.g. 'Maxar imagery for Brazil 2024', 'satellite imagery for the Morocco earthquake 2023', 'show me disaster imagery in Turkey in 2023'). Call it with country (string), year (integer), and optionally month (1-12). Do NOT use it for fires (use detect_fire_tool) or for generic Sentinel/STAC imagery (use query_stac_catalog).\n"
     "- For past events, use the term hazard, for future events, use the term risk.\n"
@@ -297,13 +308,48 @@ Step 2 JSON:
 {"action":"FINAL","action_input":"I queried critical infrastructure facilities near Paris. See the returned infrastructure list and counts.","commentary":"Summarizing the infrastructure query results."}
 
 Example 28
+User: Which commune is this coordinate in and what's its INSEE code? (48.8566, 2.3522)
+Step 1 JSON:
+{"action":"bdtopo_query_tool","action_input":{"query_type":"admin_lookup","lat":48.8566,"lon":2.3522},"commentary":"Calling bdtopo_query_tool to identify the administrative entity and INSEE context for the coordinate."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I looked up the administrative entity for the coordinate and returned the commune context (including INSEE when available). See the returned matches and summary.","commentary":"Summarizing the BDTOPO administrative lookup."}
+
+Example 29
+User: Do roads near this point intersect protected areas? (48.8566, 2.3522)
+Step 1 JSON:
+{"action":"bdtopo_intersection_tool","action_input":{"input_mode":"point","lat":48.8566,"lon":2.3522,"radius_m":3000,"limit":20},"commentary":"Calling bdtopo_intersection_tool to detect road intersections with regulated/zoning features around the point."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I checked road/regulation intersections around the provided point and returned intersections, regulation types, and map artifacts.","commentary":"Summarizing the intersection check."}
+
+Example 30
+User: How complete is BDTOPO coverage for Paris?
+Step 1 JSON:
+{"action":"bdtopo_coverage_quality_tool","action_input":{"input_mode":"place_name","place_name":"Paris"},"commentary":"Calling bdtopo_coverage_quality_tool to evaluate thematic coverage and quality indicators for Paris."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I evaluated BDTOPO coverage quality for Paris and returned indicator counts, named ratios, and sparse themes.","commentary":"Summarizing the coverage quality diagnostics."}
+
+Example 31
+User: Compare BDTOPO changes between 2025-12-15 and 2026-03-15 around Paris
+Step 1 JSON:
+{"action":"bdtopo_change_snapshot_tool","action_input":{"baseline_edition":"2025-12-15","target_edition":"2026-03-15","input_mode":"place_name","place_name":"Paris"},"commentary":"Calling bdtopo_change_snapshot_tool to compare cross-edition BDTOPO coverage on the same area."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I compared the requested BDTOPO editions for Paris. If one or both editions are missing, I returned available editions and what to run next.","commentary":"Summarizing the change snapshot results."}
+
+Example 32
+User: Explain this location for compliance checks (48.8566, 2.3522)
+Step 1 JSON:
+{"action":"bdtopo_thematic_explain_tool","action_input":{"objective":"compliance","input_mode":"point","lat":48.8566,"lon":2.3522,"radius_m":3000},"commentary":"Calling bdtopo_thematic_explain_tool to build an evidence-based compliance explanation from BDTOPO signals."}
+Step 2 JSON:
+{"action":"FINAL","action_input":"I generated a compliance-focused thematic explanation with structured evidence, summary indicators, and map artifacts.","commentary":"Summarizing the thematic explanation."}
+
+Example 33
 User: Show me Maxar satellite imagery for Brazil in 2024
 Step 1 JSON:
 {"action":"maxar_open_data_imagery_tool","action_input":{"country":"Brazil","year":2024},"commentary":"Calling maxar_open_data_imagery_tool to fetch Maxar Open Data disaster imagery for Brazil in 2024."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I retrieved Maxar Open Data satellite imagery for Brazil in 2024. See the returned event list, thumbnails, and COG URLs.","commentary":"Summarizing the Maxar imagery results."}
 
-Example 29
+Example 34
 User: Do you have high-resolution disaster imagery for Morocco in September 2023?
 Step 1 JSON:
 {"action":"maxar_open_data_imagery_tool","action_input":{"country":"Morocco","year":2023,"month":9},"commentary":"Calling maxar_open_data_imagery_tool to fetch Maxar imagery for Morocco in September 2023."}
@@ -340,6 +386,7 @@ Return ONLY valid JSON with EXACT keys:
 Rules:
 - If the user asks to "analyze", "report", "summarize findings", "assess risk", "explain results", set needs_analysis=true.
 - If the user asks about disasters( storms, Extreme weather, Earthquakes, floods...)/events/maps/images/weather/risk mask/fires/floods/routes/rivers/streamflow/discharge or anything requiring external data, set needs_data=true.
+- If the user asks about BDTOPO-related geospatial context (commune/INSEE, named places, roads, intersections, zoning/regulations, coverage completeness, edition changes, thematic explanations), set needs_data=true.
 - For past events, use the term hazard, for future events, use the term risk.
 - If needs_data=false, still set data_query to the original user request (string).
 - If needs_analysis=false, set analysis_goal to "".
@@ -394,7 +441,17 @@ JSON:
 Example 10
 User: How does the weather tool work?
 JSON:
-{"needs_data": true, "needs_analysis": false, "data_query": "How does the weather tool work?", "analysis_goal": ""}""".strip()
+{"needs_data": true, "needs_analysis": false, "data_query": "How does the weather tool work?", "analysis_goal": ""}
+
+Example 11
+User: Which commune is this point in (48.8566, 2.3522)?
+JSON:
+{"needs_data": true, "needs_analysis": false, "data_query": "Which commune is this point in (48.8566, 2.3522)?", "analysis_goal": ""}
+
+Example 12
+User: Explain this site for compliance around Paris
+JSON:
+{"needs_data": true, "needs_analysis": true, "data_query": "Explain this site for compliance around Paris", "analysis_goal": "Provide a compliance-focused explanation using grounded BDTOPO evidence and summarize key constraints."}""".strip()
 
 
 def get_orchestrator_prompt() -> str:

@@ -41,11 +41,12 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ]
-        Resource = [
+        Resource = compact([
           var.opentopo_api_key_arn,
           var.map_key_arn,
-          var.maptiler_api_key_arn
-        ]
+          var.maptiler_api_key_arn,
+          var.bdtopo_database_url_secret_arn
+        ])
       },
       {
         Effect = "Allow"
@@ -218,7 +219,90 @@ resource "aws_iam_role_policy" "streamlit_task_role_policy" {
   role = aws_iam_role.streamlit_task_role.id
 
   policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = local.shared_statements
+  })
+}
+
+# --- BDTOPO Pipeline Task Role ---
+# Needs: CloudWatch, ECS describe only (batch ingestion, connects to RDS via DSN)
+resource "aws_iam_role" "bdtopo_pipeline_task_role" {
+  count              = var.bdtopo_pipeline_enabled ? 1 : 0
+  name               = "${var.project_name}-bdtopo-pipeline-task-role"
+  assume_role_policy = local.ecs_assume_role_policy
+
+  tags = {
+    Name        = "${var.project_name}-bdtopo-pipeline-task-role"
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_iam_role_policy" "bdtopo_pipeline_task_role_policy" {
+  count = var.bdtopo_pipeline_enabled ? 1 : 0
+  name  = "bdtopo-pipeline-task-role-policy"
+  role  = aws_iam_role.bdtopo_pipeline_task_role[0].id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.shared_statements
+  })
+}
+
+# --- EventBridge Scheduler Role ---
+# Allows EventBridge Scheduler to invoke ecs:RunTask and pass the required IAM roles
+resource "aws_iam_role" "eventbridge_scheduler" {
+  count = var.bdtopo_pipeline_enabled ? 1 : 0
+  name  = "${var.project_name}-eventbridge-scheduler-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "scheduler.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "${var.project_name}-eventbridge-scheduler-role"
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_iam_role_policy" "eventbridge_scheduler_policy" {
+  count = var.bdtopo_pipeline_enabled ? 1 : 0
+  name  = "eventbridge-scheduler-ecs-policy"
+  role  = aws_iam_role.eventbridge_scheduler[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "RunTask"
+        Effect = "Allow"
+        Action = "ecs:RunTask"
+        Resource = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${var.project_name}-bdtopo-pipeline:*"
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:cluster/${var.project_name}-cluster"
+          }
+        }
+      },
+      {
+        Sid    = "PassRole"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = [
+          aws_iam_role.ecs_task_execution_role.arn,
+          aws_iam_role.bdtopo_pipeline_task_role[0].arn
+        ]
+      }
+    ]
   })
 }
