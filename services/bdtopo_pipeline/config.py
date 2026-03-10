@@ -49,14 +49,6 @@ class PipelineConfig(BaseSettings):
         description="PostGIS connection string",
     )
 
-    source_template: str = Field(
-        default=(
-            "https://data.geopf.fr/telechargement/download/BDTOPO/"
-            "BDTOPO_3-5_TOUSTHEMES_GPKG_WGS84G_FRA_{edition_date}/"
-            "BDTOPO_3-5_TOUSTHEMES_GPKG_WGS84G_FRA_{edition_date}.7z.{part}"
-        ),
-        description="URL template for archive parts",
-    )
     source_urls: str = Field(
         default="",
         description="Inline comma-separated source URLs",
@@ -72,6 +64,10 @@ class PipelineConfig(BaseSettings):
     diff_api_resource_url: str = Field(
         default="https://data.geopf.fr/telechargement/resource/BDTOPO-DIFF",
         description="API resource URL for differential discovery",
+    )
+    full_api_resource_url: str = Field(
+        default="https://data.geopf.fr/telechargement/resource/BDTOPO",
+        description="API resource URL for full-mode entry discovery",
     )
 
     keep_downloads: bool = Field(

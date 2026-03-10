@@ -1,19 +1,21 @@
 """Build source URL manifests for full-France BDTOPO downloads.
 
-For *full* mode the URLs are generated from a template + part count.
-For *differential* mode the URLs are discovered automatically via the
-data.geopf.fr Atom feed API (no manual URL input required).
-Manual overrides (BDTOPO_SOURCE_URLS / BDTOPO_SOURCE_URLS_FILE) still
-take precedence in any mode.
+Both *full* and *differential* modes discover the edition
+dynamically via the data.geopf.fr Atom feed API, so the product version
+(e.g. ``3-4`` vs ``3-5``) is always resolved automatically.
+Manual overrides (BDTOPO_SOURCE_URLS / BDTOPO_SOURCE_URLS_FILE)
+still take precedence in any mode.
 """
 
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from pathlib import Path
-from typing import Iterable
+from dataclasses import dataclass
+from typing import Callable, Iterable
 
 import requests
+
+from .utils import parse_inline_urls, read_urls_file
 
 from .config import PipelineConfig
 from .logger import get_logger
@@ -22,135 +24,127 @@ logger = get_logger("manifest")
 
 _ATOM_NS = "http://www.w3.org/2005/Atom"
 _GPF_NS = "https://data.geopf.fr/annexes/ressources/xsd/gpf_dl.xsd"
+_PAGE_SIZE = 50  # api limit
+
+# ── Atom feed with pagination ──────────────────────────────────────────
 
 
-def _read_urls_file(path: str) -> list[str]:
-    file_path = Path(path).expanduser().resolve()
-    if not file_path.exists():
-        raise FileNotFoundError(f"Source URL file not found: {file_path}")
-
-    urls: list[str] = []
-    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        urls.append(line)
-    if not urls:
-        raise ValueError(f"Source URL file is empty: {file_path}")
-    return urls
+@dataclass
+class _FeedEntry:
+    title: str
+    edition_date: str
 
 
-def _parse_inline_urls(raw: str) -> list[str]:
-    urls: list[str] = []
-    for chunk in raw.replace(",", "\n").splitlines():
-        line = chunk.strip()
-        if line:
-            urls.append(line)
-    return urls
-
-
-# ── API discovery ──────────────────────────────────────────────────────
-
-
-def _fetch_atom_feed(url: str, params: dict | None = None) -> ET.Element:
+def _fetch_atom_page(url: str, params: dict) -> tuple[ET.Element, int]:
+    """Fetch one page and return (root element, total page count)."""
     resp = requests.get(url, params=params, timeout=30)
     resp.raise_for_status()
-    return ET.fromstring(resp.content)
+    root = ET.fromstring(resp.content)
+    page_count = int(root.get(f"{{{_GPF_NS}}}pagecount", "1"))
+    return root, page_count
 
 
-def _discover_latest_diff_entry(api_url: str) -> str:
-    """Return the entry title of the most recent differential edition.
-
-    The API returns entries sorted by edition date; we pick the one with
-    the highest editionDate.
-    """
-    root = _fetch_atom_feed(
-        api_url,
-        params={
-            "zone": "FRA",
-            "format": "GPKG",
-            "limit": "50",
-        },
-    )
-
-    best_date = ""
-    best_title = ""
+def _parse_entries(
+    root: ET.Element,
+    title_filter: Callable[[str], bool] | None = None,
+) -> list[_FeedEntry]:
+    entries: list[_FeedEntry] = []
     for entry in root.findall(f"{{{_ATOM_NS}}}entry"):
         date_el = entry.find(f"{{{_GPF_NS}}}editionDate")
         title_el = entry.find(f"{{{_ATOM_NS}}}title")
         if date_el is None or title_el is None:
             continue
-        edition_date = (date_el.text or "").strip()
         title = (title_el.text or "").strip()
-        if edition_date > best_date:
-            best_date = edition_date
-            best_title = title
-
-    if not best_title:
-        raise RuntimeError(f"No GPKG/FRA differential entries found at {api_url}")
-    return best_title
-
-
-def _discover_diff_entry_for_date(api_url: str, edition_date: str) -> str:
-    """Return the entry title whose editionDate matches *edition_date*.
-
-    Falls back to a best-effort match: if the exact date isn't found we
-    pick the entry whose editionDate is closest but not after the
-    requested date (i.e. the most recent edition that was available at
-    *edition_date*).
-    """
-    root = _fetch_atom_feed(
-        api_url,
-        params={
-            "zone": "FRA",
-            "format": "GPKG",
-            "limit": "50",
-        },
-    )
-
-    exact: str | None = None
-    best_date = ""
-    best_title = ""
-
-    for entry in root.findall(f"{{{_ATOM_NS}}}entry"):
-        date_el = entry.find(f"{{{_GPF_NS}}}editionDate")
-        title_el = entry.find(f"{{{_ATOM_NS}}}title")
-        if date_el is None or title_el is None:
+        if title_filter and not title_filter(title):
             continue
-        ed = (date_el.text or "").strip()
-        title = (title_el.text or "").strip()
-
-        if ed == edition_date:
-            exact = title
-            break
-        if ed <= edition_date and ed > best_date:
-            best_date = ed
-            best_title = title
-
-    if exact:
-        return exact
-    if best_title:
-        logger.warning(
-            "No exact differential edition for %s; "
-            "falling back to closest earlier edition %s",
-            edition_date,
-            best_date,
+        entries.append(
+            _FeedEntry(
+                title=title,
+                edition_date=(date_el.text or "").strip(),
+            )
         )
-        return best_title
+    return entries
 
-    raise RuntimeError(
-        f"No differential edition found at or before {edition_date} in {api_url}"
+
+def _fetch_all_entries(
+    api_url: str,
+    *,
+    extra_params: dict | None = None,
+    title_filter: Callable[[str], bool] | None = None,
+) -> list[_FeedEntry]:
+    """Fetch all entries across every page of a paginated Atom feed."""
+    params: dict = {"limit": str(_PAGE_SIZE), "page": "1"}
+    if extra_params:
+        params.update(extra_params)
+
+    # first page
+    root, page_count = _fetch_atom_page(api_url, params)
+    all_entries = _parse_entries(root, title_filter)
+
+    for page in range(2, page_count + 1):
+        params["page"] = str(page)
+        root, _ = _fetch_atom_page(api_url, params)
+        all_entries.extend(_parse_entries(root, title_filter))
+
+    return all_entries
+
+
+# ── Entry resolution ───────────────────────────────────────────────────
+
+_FEED_PARAMS_FRA_GPKG = {"zone": "FRA", "format": "GPKG"}
+
+
+def _resolve_entry(
+    api_url: str,
+    edition_date: str,
+    title_filter: Callable[[str], bool] | None = None,
+) -> str:
+    """Find the best-matching entry title for *edition_date*.
+
+    ``"latest"`` picks the entry with the highest editionDate.
+    A concrete date picks the exact match or, failing that, the closest
+    earlier edition.
+    """
+    entries = _fetch_all_entries(
+        api_url,
+        extra_params=_FEED_PARAMS_FRA_GPKG,
+        title_filter=title_filter,
     )
+    if not entries:
+        raise RuntimeError(f"No matching GPKG/FRA entries found at {api_url}")
+
+    if edition_date == "latest":
+        best = max(entries, key=lambda e: e.edition_date)
+        return best.title
+
+    for e in entries:
+        if e.edition_date == edition_date:
+            return e.title
+
+    candidates = [e for e in entries if e.edition_date <= edition_date]
+    if candidates:
+        best = max(candidates, key=lambda e: e.edition_date)
+        logger.warning(
+            "No exact edition for %s; falling back to %s",
+            edition_date,
+            best.edition_date,
+        )
+        return best.title
+
+    raise RuntimeError(f"No edition found at or before {edition_date} in {api_url}")
 
 
-def _discover_diff_download_urls(api_url: str, entry_title: str) -> list[str]:
+# ── Differential mode ─────────────────────────────────────────────────
+
+
+def _fetch_diff_download_urls(api_url: str, entry_title: str) -> list[str]:
     """Fetch the sub-resource feed for *entry_title* and return download URLs."""
-    root = _fetch_atom_feed(f"{api_url}/{entry_title}")
+    resp = requests.get(f"{api_url}/{entry_title}", timeout=30)
+    resp.raise_for_status()
+    root = ET.fromstring(resp.content)
 
     urls: list[str] = []
-    entries = root.findall(f"{{{_ATOM_NS}}}entry")
-    if not entries or len(entries) == 0:
-        entries = [root]
+    entries = root.findall(f"{{{_ATOM_NS}}}entry") or [root]
     for entry in entries:
         link = entry.find(f"{{{_ATOM_NS}}}link")
         if link is not None:
@@ -163,61 +157,77 @@ def _discover_diff_download_urls(api_url: str, entry_title: str) -> list[str]:
     return urls
 
 
-def discover_differential_urls(config: PipelineConfig) -> list[str]:
-    """Auto-discover download URLs for differential mode via the API."""
+def _discover_differential_urls(config: PipelineConfig) -> list[str]:
     api_url = config.diff_api_resource_url
-
-    today_str = config.edition_date
-    if today_str == "latest":
-        entry_title = _discover_latest_diff_entry(api_url)
-    else:
-        entry_title = _discover_diff_entry_for_date(api_url, today_str)
-
+    entry_title = _resolve_entry(api_url, config.edition_date)
     logger.info("Differential edition resolved to: %s", entry_title)
-    urls = _discover_diff_download_urls(api_url, entry_title)
+
+    urls = _fetch_diff_download_urls(api_url, entry_title)
     logger.info("Discovered %d download URL(s) for %s", len(urls), entry_title)
     return urls
 
 
-# ── Public API ─────────────────────────────────────────────────────────
-def collect_urls(config: PipelineConfig, timeout: float = 5.0) -> list[str]:
-    """Collect URLs for the given configuration."""
-    urls: list[str] = []
-    max_parts = config.max_parts or 50
+# ── Full mode ──────────────────────────────────────────────────────────
 
+_FULL_TITLE_REQUIRED_TOKENS = ("TOUSTHEMES", "GPKG")
+
+
+def _is_full_france_entry(title: str) -> bool:
+    return all(tok in title for tok in _FULL_TITLE_REQUIRED_TOKENS)
+
+
+def _probe_part_urls(
+    entry_title: str,
+    max_parts: int,
+    timeout: float = 5.0,
+) -> list[str]:
+    """HEAD-probe multi-part archive URLs and return those that exist."""
+    base = (
+        f"https://data.geopf.fr/telechargement/download/BDTOPO/"
+        f"{entry_title}/{entry_title}.7z"
+    )
+    urls: list[str] = []
     with requests.Session() as session:
         for index in range(1, max_parts + 1):
-            url = config.source_template.format(
-                edition_date=config.edition_date,
-                part=f"{index:03d}",
-            )
-
+            url = f"{base}.{index:03d}"
             try:
-                response = session.head(url, allow_redirects=True, timeout=timeout)
+                resp = session.head(url, allow_redirects=True, timeout=timeout)
             except requests.RequestException:
                 break
-
-            if not response.ok:
+            if not resp.ok:
                 break
-
             urls.append(url)
-
     return urls
 
 
+def _discover_full_urls(config: PipelineConfig, timeout: float = 5.0) -> list[str]:
+    api_url = config.full_api_resource_url
+    entry_title = _resolve_entry(
+        api_url,
+        config.edition_date,
+        title_filter=_is_full_france_entry,
+    )
+    logger.info("Full-mode edition resolved to: %s", entry_title)
+
+    max_parts = config.max_parts or 50
+    urls = _probe_part_urls(entry_title, max_parts, timeout=timeout)
+    logger.info("Discovered %d archive part(s) for %s", len(urls), entry_title)
+    return urls
+
+
+# ── Public API ─────────────────────────────────────────────────────────
+
+
 def build_manifest(config: PipelineConfig) -> list[str]:
-    """
-    Return URLs to download for the selected pipeline mode.
+    """Return URLs to download for the selected pipeline mode.
 
     Priority:
       1. Inline URLs  (BDTOPO_SOURCE_URLS env var)
       2. File URLs    (BDTOPO_SOURCE_URLS_FILE env var)
-      3. Mode-specific auto-discovery:
-         - full:            collect URLs from the template
-         - differential:    auto-discover URLs from the data.geopf.fr Atom API
+      3. Mode-specific auto-discovery via the data.geopf.fr Atom API
     """
     if config.source_urls:
-        urls = _parse_inline_urls(config.source_urls)
+        urls = parse_inline_urls(config.source_urls)
         logger.info("Using inline URLs from BDTOPO_SOURCE_URLS")
         if not urls:
             raise ValueError("BDTOPO_SOURCE_URLS was set but no valid URL was parsed.")
@@ -225,15 +235,14 @@ def build_manifest(config: PipelineConfig) -> list[str]:
 
     if config.source_urls_file:
         logger.info("Using URLs from file: %s", config.source_urls_file)
-        return _read_urls_file(config.source_urls_file)
+        return read_urls_file(config.source_urls_file)
 
     if config.mode == "differential":
-        logger.info("Using differential mode")
-        return discover_differential_urls(config)
+        logger.info("Using differential mode — discovering via Atom API")
+        return _discover_differential_urls(config)
 
-    # Full mode
-    logger.info("Using full mode")
-    return collect_urls(config)
+    logger.info("Using full mode — discovering via Atom API")
+    return _discover_full_urls(config)
 
 
 def infer_archive_name(url: str) -> str:
