@@ -284,7 +284,7 @@ variable "bdtopo_pipeline_work_dir" {
   default     = "/tmp/bdtopo"
 }
 
-variable "bdtopo_pipeline_part_count" {
+variable "bdtopo_pipeline_max_parts" {
   description = "Number of archive parts for full-France download"
   type        = number
   default     = 9
@@ -324,6 +324,18 @@ variable "bdtopo_pipeline_keep_extracted" {
   description = "Whether to keep extracted GPKG files after ingestion"
   type        = bool
   default     = false
+}
+
+variable "bdtopo_pipeline_full_api_resource_url" {
+  description = "Atom feed URL for full-mode BDTOPO edition discovery"
+  type        = string
+  default     = "https://data.geopf.fr/telechargement/resource/BDTOPO"
+}
+
+variable "bdtopo_pipeline_diff_api_resource_url" {
+  description = "Atom feed URL for differential BDTOPO edition discovery"
+  type        = string
+  default     = "https://data.geopf.fr/telechargement/resource/BDTOPO-DIFF"
 }
 
 variable "bdtopo_pipeline_task_role_arn" {

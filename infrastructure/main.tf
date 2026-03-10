@@ -146,13 +146,15 @@ module "ecs" {
   eventbridge_scheduler_role_arn             = module.iam.eventbridge_scheduler_role_arn
   bdtopo_pipeline_schedule_enabled           = var.bdtopo_pipeline_schedule_enabled
   bdtopo_pipeline_work_dir                   = var.bdtopo_pipeline_work_dir
-  bdtopo_pipeline_part_count                 = var.bdtopo_pipeline_part_count
+  bdtopo_pipeline_max_parts                  = var.bdtopo_pipeline_max_parts
   bdtopo_pipeline_download_timeout_seconds   = var.bdtopo_pipeline_download_timeout_seconds
   bdtopo_pipeline_download_max_retries       = var.bdtopo_pipeline_download_max_retries
   bdtopo_pipeline_extraction_timeout_seconds = var.bdtopo_pipeline_extraction_timeout_seconds
   bdtopo_pipeline_quality_threshold          = var.bdtopo_pipeline_quality_threshold
   bdtopo_pipeline_keep_downloads             = var.bdtopo_pipeline_keep_downloads
   bdtopo_pipeline_keep_extracted             = var.bdtopo_pipeline_keep_extracted
+  bdtopo_pipeline_full_api_resource_url      = var.bdtopo_pipeline_full_api_resource_url
+  bdtopo_pipeline_diff_api_resource_url      = var.bdtopo_pipeline_diff_api_resource_url
 
   depends_on = [module.ecr, module.service_discovery, module.alb]
 }
