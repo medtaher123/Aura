@@ -287,7 +287,7 @@ variable "bdtopo_pipeline_work_dir" {
 variable "bdtopo_pipeline_max_parts" {
   description = "Number of archive parts for full-France download"
   type        = number
-  default     = 9
+  default     = 50
 }
 
 variable "bdtopo_pipeline_download_timeout_seconds" {

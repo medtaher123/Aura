@@ -209,7 +209,7 @@ def _discover_full_urls(config: PipelineConfig, timeout: float = 5.0) -> list[st
     )
     logger.info("Full-mode edition resolved to: %s", entry_title)
 
-    max_parts = config.max_parts or 50
+    max_parts = config.max_parts
     urls = _probe_part_urls(entry_title, max_parts, timeout=timeout)
     logger.info("Discovered %d archive part(s) for %s", len(urls), entry_title)
     return urls
