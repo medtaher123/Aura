@@ -22,3 +22,5 @@ Data/
 *.swp
 *.swo
 *~
+create_dummy_data.py
+fixtures/*
