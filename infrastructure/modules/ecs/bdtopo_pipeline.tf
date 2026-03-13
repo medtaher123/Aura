@@ -1,5 +1,62 @@
 # BDTOPO Pipeline – standalone Fargate task (batch job, not a service)
 
+# --------------------------------------------------------------------------
+# EFS – unlimited scratch storage for downloads + extraction
+# --------------------------------------------------------------------------
+
+resource "aws_efs_file_system" "bdtopo" {
+  count            = var.bdtopo_pipeline_enabled ? 1 : 0
+  creation_token   = "${var.project_name}-bdtopo-efs"
+  performance_mode = "generalPurpose"
+  throughput_mode  = "bursting"
+  encrypted        = true
+
+  lifecycle_policy {
+    transition_to_ia = "AFTER_7_DAYS"
+  }
+
+  tags = {
+    Name        = "${var.project_name}-bdtopo-efs"
+    Environment = var.environment
+  }
+}
+
+resource "aws_security_group" "bdtopo_efs" {
+  count       = var.bdtopo_pipeline_enabled ? 1 : 0
+  name        = "${var.project_name}-bdtopo-efs-sg"
+  description = "Allow NFS from ECS tasks to BDTOPO EFS"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description     = "NFS from ECS tasks"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = var.security_group_ids
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "${var.project_name}-bdtopo-efs-sg"
+    Environment = var.environment
+  }
+}
+
+resource "aws_efs_mount_target" "bdtopo" {
+  count           = var.bdtopo_pipeline_enabled ? length(var.subnet_ids) : 0
+  file_system_id  = aws_efs_file_system.bdtopo[0].id
+  subnet_id       = var.subnet_ids[count.index]
+  security_groups = [aws_security_group.bdtopo_efs[0].id]
+}
+
+# --------------------------------------------------------------------------
+
 resource "aws_cloudwatch_log_group" "bdtopo_pipeline" {
   count             = var.bdtopo_pipeline_enabled ? 1 : 0
   name              = "/ecs/${var.project_name}-bdtopo-pipeline"
@@ -25,11 +82,29 @@ resource "aws_ecs_task_definition" "bdtopo_pipeline" {
     size_in_gib = var.bdtopo_pipeline_ephemeral_storage_gib
   }
 
+  volume {
+    name = "bdtopo-work"
+
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.bdtopo[0].id
+      root_directory     = "/"
+      transit_encryption = "ENABLED"
+    }
+  }
+
   container_definitions = jsonencode([
     {
       name      = "bdtopo-pipeline"
       image     = var.bdtopo_pipeline_container_image
       essential = true
+
+      mountPoints = [
+        {
+          sourceVolume  = "bdtopo-work"
+          containerPath = "/tmp/bdtopo"
+          readOnly      = false
+        }
+      ]
 
       environment = [
         {

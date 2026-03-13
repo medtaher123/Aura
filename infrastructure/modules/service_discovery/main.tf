@@ -26,7 +26,7 @@ resource "aws_service_discovery_service" "mcp_server" {
   }
 
   health_check_custom_config {
-    failure_threshold = 2
+    failure_threshold = 1
   }
 
   tags = {
@@ -51,7 +51,7 @@ resource "aws_service_discovery_service" "agent_server" {
   }
 
   health_check_custom_config {
-    failure_threshold = 2
+    failure_threshold = 1
   }
 
   tags = {

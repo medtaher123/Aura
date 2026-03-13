@@ -225,7 +225,7 @@ resource "aws_iam_role_policy" "streamlit_task_role_policy" {
 }
 
 # --- BDTOPO Pipeline Task Role ---
-# Needs: CloudWatch, ECS describe only (batch ingestion, connects to RDS via DSN)
+# Needs: CloudWatch, ECS describe, EFS (batch ingestion, connects to RDS via DSN)
 resource "aws_iam_role" "bdtopo_pipeline_task_role" {
   count              = var.bdtopo_pipeline_enabled ? 1 : 0
   name               = "${var.project_name}-bdtopo-pipeline-task-role"
@@ -244,8 +244,19 @@ resource "aws_iam_role_policy" "bdtopo_pipeline_task_role_policy" {
   role  = aws_iam_role.bdtopo_pipeline_task_role[0].id
 
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = local.shared_statements
+    Version = "2012-10-17"
+    Statement = concat(local.shared_statements, [
+      {
+        Sid    = "EFSAccess"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite",
+          "elasticfilesystem:DescribeMountTargets"
+        ]
+        Resource = "*"
+      }
+    ])
   })
 }
 

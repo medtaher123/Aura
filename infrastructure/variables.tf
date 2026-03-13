@@ -285,9 +285,9 @@ variable "bdtopo_pipeline_memory" {
 }
 
 variable "bdtopo_pipeline_ephemeral_storage_gib" {
-  description = "Ephemeral storage (GiB) for BDTOPO pipeline task"
+  description = "Ephemeral storage (GiB) for BDTOPO pipeline task (data goes to EFS)"
   type        = number
-  default     = 100
+  default     = 30
 }
 
 variable "bdtopo_pipeline_work_dir" {
