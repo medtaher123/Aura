@@ -39,7 +39,12 @@ def _download_one(
                 timeout=timeout_seconds,
                 allow_redirects=True,
             ) as response:
-                if response.status_code not in (200, 206):
+                if response.status_code == 416:
+                    logger.warning(f"Range not supported for {url}, downloading from scratch")
+                    destination.unlink(missing_ok=True)
+                    existing_size = 0
+                    continue
+                elif response.status_code not in (200, 206):
                     raise RuntimeError(
                         f"Unexpected HTTP status {response.status_code} for {url}"
                     )
