@@ -37,9 +37,14 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    config = get_config(mode=args.mode, edition_date=args.edition_date)
-    summary = run_pipeline(config)
-    logger.info(json.dumps(summary, indent=2))
+    logger.info("Pipeline starting: mode=%s, edition_date=%s", args.mode, args.edition_date)
+    try:
+        config = get_config(mode=args.mode, edition_date=args.edition_date)
+        summary = run_pipeline(config)
+        logger.info(json.dumps(summary, indent=2))
+    except Exception:
+        logger.exception("Pipeline failed")
+        raise
 
 
 if __name__ == "__main__":

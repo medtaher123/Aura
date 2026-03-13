@@ -56,9 +56,11 @@ def _infer_theme(layer_name: str) -> str:
 def _to_ogr_pg_dsn(database_url: str) -> str:
     parsed = urlparse(database_url)
     if not parsed.scheme.startswith("postgres"):
+        logger.error("Invalid DB URL scheme: %s", parsed.scheme)
         raise ValueError("BDTOPO_DATABASE_URL must be a PostgreSQL URL.")
     db_name = parsed.path.lstrip("/")
     if not db_name:
+        logger.error("No database name in BDTOPO_DATABASE_URL")
         raise ValueError("Database name is missing in BDTOPO_DATABASE_URL.")
     parts = [
         f"host={parsed.hostname or ''}",
@@ -78,6 +80,7 @@ def _list_gpkg_layers(gpkg_path: Path) -> list[str]:
         check=False,
     )
     if process.returncode != 0:
+        logger.error("ogrinfo failed for %s: %s", gpkg_path.name, process.stderr.strip())
         raise RuntimeError(
             f"Failed to inspect {gpkg_path} with ogrinfo: {process.stderr}"
         )
@@ -88,6 +91,7 @@ def _list_gpkg_layers(gpkg_path: Path) -> list[str]:
         if match:
             layers.append(match.group(1))
     if not layers:
+        logger.error("No layers parsed from ogrinfo output for %s", gpkg_path.name)
         raise RuntimeError(f"No layers found in GeoPackage: {gpkg_path}")
     return layers
 
@@ -128,6 +132,7 @@ def _ogr_load_layer(
     ]
     process = subprocess.run(command, capture_output=True, text=True, check=False)
     if process.returncode != 0:
+        logger.error("ogr2ogr failed for layer %s: %s", layer_name, process.stderr.strip())
         raise RuntimeError(
             f"ogr2ogr failed for layer {layer_name}\n"
             f"stdout:\n{process.stdout}\n"
@@ -449,12 +454,14 @@ def load_gpkg_files(
     config: PipelineConfig, gpkg_files: list[Path]
 ) -> list[LayerLoadResult]:
     if not config.database_url:
+        logger.error("BDTOPO_DATABASE_URL not set, cannot load GeoPackages")
         raise ValueError(
             "BDTOPO_DATABASE_URL is required to load GeoPackages into PostGIS."
         )
 
     schema_file = Path(__file__).resolve().parent / "sql" / "01_schema.sql"
     if not schema_file.exists():
+        logger.error("Schema file not found at %s", schema_file)
         raise FileNotFoundError(f"Schema file missing: {schema_file}")
     logger.info(f"Applying schema from {schema_file}")
     ogr_pg_dsn = _to_ogr_pg_dsn(config.database_url)

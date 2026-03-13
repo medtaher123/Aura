@@ -19,6 +19,7 @@ def _detect_entry_archive(archives: list[Path]) -> Path:
     for archive in ordered:
         if archive.name.endswith(".001"):
             return archive
+    logger.error("No entry archive (.001) found among %d archives", len(archives))
     raise ValueError("No entry archive found.")
 
 
@@ -26,6 +27,7 @@ def extract_archives(
     archives: list[Path], output_dir: Path, *, timeout_seconds: int = 7200
 ) -> list[Path]:
     if not archives:
+        logger.error("extract_archives called with empty archive list")
         raise ValueError("No archives provided for extraction.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -65,10 +67,12 @@ def extract_archives(
 
     returncode = process.wait(timeout=timeout_seconds)
     if returncode != 0:
+        logger.error("7z exited with code %d for %s", returncode, entry_archive.name)
         raise RuntimeError(f"7z extraction failed with exit code {returncode}")
 
     gpkg_files = sorted(output_dir.rglob("*.gpkg"))
     if not gpkg_files:
+        logger.error("No .gpkg files in %s after extracting %s", output_dir, entry_archive.name)
         raise RuntimeError("Extraction completed but no .gpkg files were found.")
 
     logger.info(f"Extracted {len(gpkg_files)} .gpkg file(s)")

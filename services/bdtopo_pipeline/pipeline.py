@@ -20,6 +20,8 @@ logger = get_logger("pipeline")
 
 
 def run_pipeline(config: PipelineConfig) -> dict:
+    logger.info("Starting pipeline: mode=%s, edition=%s, work_dir=%s",
+                config.mode, config.edition_date, config.work_dir)
     urls = build_manifest(config)
     logger.info(f"Downloading {len(urls)} archives")
     archives = download_archives(config, urls)
@@ -60,8 +62,14 @@ def run_pipeline(config: PipelineConfig) -> dict:
         )
 
     if not config.keep_downloads and config.download_dir.exists():
-        shutil.rmtree(config.download_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(config.download_dir)
+        except OSError:
+            logger.warning("Failed to clean up download dir %s", config.download_dir, exc_info=True)
     if not config.keep_extracted and config.extract_dir.exists():
-        shutil.rmtree(config.extract_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(config.extract_dir)
+        except OSError:
+            logger.warning("Failed to clean up extract dir %s", config.extract_dir, exc_info=True)
 
     return summary

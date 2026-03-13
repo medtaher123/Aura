@@ -111,6 +111,7 @@ def _resolve_entry(
         title_filter=title_filter,
     )
     if not entries:
+        logger.error("No matching GPKG/FRA entries found at %s", api_url)
         raise RuntimeError(f"No matching GPKG/FRA entries found at {api_url}")
 
     if edition_date == "latest":
@@ -131,6 +132,7 @@ def _resolve_entry(
         )
         return best.title
 
+    logger.error("No edition found at or before %s in %s", edition_date, api_url)
     raise RuntimeError(f"No edition found at or before {edition_date} in {api_url}")
 
 
@@ -153,6 +155,7 @@ def _fetch_diff_download_urls(api_url: str, entry_title: str) -> list[str]:
                 urls.append(href)
 
     if not urls:
+        logger.error("No download links in sub-resource %s", entry_title)
         raise RuntimeError(f"No download links found in sub-resource {entry_title}")
     return urls
 
@@ -192,7 +195,8 @@ def _probe_part_urls(
             url = f"{base}.{index:03d}"
             try:
                 resp = session.head(url, allow_redirects=True, timeout=timeout)
-            except requests.RequestException:
+            except requests.RequestException as exc:
+                logger.warning("Part probing stopped at part %d for %s: %s", index, entry_title, exc)
                 break
             if not resp.ok:
                 break
@@ -230,6 +234,7 @@ def build_manifest(config: PipelineConfig) -> list[str]:
         urls = parse_inline_urls(config.source_urls)
         logger.info("Using inline URLs from BDTOPO_SOURCE_URLS")
         if not urls:
+            logger.error("BDTOPO_SOURCE_URLS is set but yielded no valid URLs")
             raise ValueError("BDTOPO_SOURCE_URLS was set but no valid URL was parsed.")
         return urls
 

@@ -72,6 +72,7 @@ def _download_one(
                 return
         except Exception as exc:  # noqa: BLE001 - retry block
             if attempt >= max_retries:
+                logger.error("Download failed after %d attempts: %s", max_retries, url)
                 raise RuntimeError(f"Failed to download {url}: {exc}") from exc
             sleep_seconds = min(2**attempt, 30)
             logger.warning(f"Retry {attempt}/{max_retries} for {url} in {sleep_seconds}s")
@@ -85,6 +86,7 @@ def _validate_download(url: str, local_path: Path, timeout: int) -> bool:
         expected = int(resp.headers.get("Content-Length", 0))
         return expected > 0 and local_path.stat().st_size == expected
     except Exception:
+        logger.warning("Could not validate %s against remote", local_path.name, exc_info=True)
         return False
 
 

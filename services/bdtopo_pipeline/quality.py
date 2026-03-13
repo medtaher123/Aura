@@ -47,6 +47,7 @@ def _list_geometry_tables(connection: psycopg.Connection) -> list[tuple[str, str
 
 def run_quality_checks(config: PipelineConfig) -> QualityReport:
     if not config.database_url:
+        logger.error("BDTOPO_DATABASE_URL not set, cannot run quality checks")
         raise ValueError("BDTOPO_DATABASE_URL is required to run quality checks.")
 
     table_metrics: list[TableQuality] = []
@@ -87,6 +88,10 @@ def run_quality_checks(config: PipelineConfig) -> QualityReport:
             )
             table_metrics.append(metric)
             if ratio > config.quality_invalid_ratio_threshold:
+                logger.warning(
+                    "Table %s exceeds threshold: %.4f invalid ratio (%d/%d rows)",
+                    table_name, ratio, invalid_count, row_count,
+                )
                 failing_tables.append(table_name)
 
     report = QualityReport(

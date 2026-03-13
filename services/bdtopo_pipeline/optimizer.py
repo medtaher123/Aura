@@ -91,6 +91,7 @@ def _create_or_replace_view(
         ))
 
         if not source_table or not geometry_column:
+            logger.warning("Creating empty view %s (no matching source table found)", view_name)
             cursor.execute(
                 sql.SQL(
                     """
@@ -159,6 +160,7 @@ def _create_or_replace_view(
 
 def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
     if not config.database_url:
+        logger.error("BDTOPO_DATABASE_URL not set, cannot run optimization")
         raise ValueError("BDTOPO_DATABASE_URL is required for optimization.")
 
     with psycopg.connect(config.database_url, autocommit=False) as connection:
