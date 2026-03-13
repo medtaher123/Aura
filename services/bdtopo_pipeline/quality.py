@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 import json
 
 import psycopg
 from psycopg import sql
+from tqdm import tqdm
 
 from .config import PipelineConfig
+from .logger import get_logger
+
+logger = get_logger("quality")
 
 
 @dataclass(slots=True)
@@ -50,7 +53,9 @@ def run_quality_checks(config: PipelineConfig) -> QualityReport:
     failing_tables: list[str] = []
 
     with psycopg.connect(config.database_url, autocommit=False) as connection:
-        for table_name, geometry_column in _list_geometry_tables(connection):
+        geom_tables = _list_geometry_tables(connection)
+        logger.info(f"Checking geometry validity on {len(geom_tables)} tables")
+        for table_name, geometry_column in tqdm(geom_tables, desc="Quality checks", unit="table"):
             with connection.cursor() as cursor:
                 cursor.execute(
                     sql.SQL("SELECT COUNT(*) FROM bdtopo_raw.{table}").format(
@@ -91,6 +96,9 @@ def run_quality_checks(config: PipelineConfig) -> QualityReport:
         failing_tables=failing_tables,
         table_metrics=table_metrics,
     )
+
+    status = "PASSED" if report.ok else f"FAILED ({len(failing_tables)} tables above threshold)"
+    logger.info(f"Quality: {status} — {report.tables_checked} tables checked")
 
     config.report_dir.mkdir(parents=True, exist_ok=True)
     output_file = config.report_dir / "quality_report.json"

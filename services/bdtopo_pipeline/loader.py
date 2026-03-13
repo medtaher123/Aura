@@ -10,6 +10,8 @@ import subprocess
 from typing_extensions import LiteralString, cast
 from urllib.parse import unquote, urlparse
 
+from tqdm import tqdm
+
 from .logger import get_logger
 import psycopg
 from psycopg import sql
@@ -462,27 +464,31 @@ def load_gpkg_files(
         logger.info("Connecting to PostGIS")
         _apply_schema(connection, schema_file)
         _cleanup_orphaned_stage_tables(connection)
-        logger.info(f"Parsing {len(gpkg_files)} GeoPackages...")
+        all_layers: list[tuple[Path, str]] = []
         for gpkg_path in gpkg_files:
-            source_file = gpkg_path.name
             layers = _list_gpkg_layers(gpkg_path)
-            logger.info(f"  Found {len(layers)} layers in {gpkg_path}")
-            for i_la, layer_name in enumerate(layers, start=1):
+            logger.info(f"Found {len(layers)} layers in {gpkg_path.name}")
+            all_layers.extend((gpkg_path, layer) for layer in layers)
+
+        logger.info(f"Loading {len(all_layers)} layers from {len(gpkg_files)} GeoPackage(s)")
+        with tqdm(total=len(all_layers), desc="Loading layers", unit="layer") as pbar:
+            for gpkg_path, layer_name in all_layers:
+                source_file = gpkg_path.name
                 if _layer_already_loaded(connection, config.edition_date, source_file, layer_name):
-                    logger.info(f"[{i_la}/{len(layers)}] Skipping {layer_name} (already loaded)")
+                    pbar.set_postfix_str(f"skip {layer_name}")
+                    pbar.update(1)
                     continue
                 layer_slug = _normalize_identifier(layer_name) or "layer"
-                tmp_table = f"    tmp_{layer_slug}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[-10:]}"
+                tmp_table = f"tmp_{layer_slug}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[-10:]}"
                 target_table = layer_slug[:55]
                 theme = _infer_theme(layer_name)
-                logger.info(f"    [{i_la}/{len(layers)}] Loading {layer_name} into {tmp_table}")
+                pbar.set_postfix_str(f"{layer_name} -> {target_table}")
                 _ogr_load_layer(
                     ogr_pg_dsn=ogr_pg_dsn,
                     gpkg_path=gpkg_path,
                     layer_name=layer_name,
                     tmp_table_name=tmp_table,
                 )
-                logger.info(f"    [{i_la}/{len(layers)}] Merging {tmp_table} into {target_table}")
                 result = _merge_tmp_into_raw(
                     connection=connection,
                     tmp_table_name=tmp_table,
@@ -492,6 +498,9 @@ def load_gpkg_files(
                     theme=theme,
                     layer_name=layer_name,
                 )
+                logger.info(f"Loaded {layer_name} -> bdtopo_raw.{target_table} ({result.row_count} rows)")
                 results.append(result)
-    logger.info(f"Loaded {len(results)} layers into {config.edition_date}")
+                pbar.update(1)
+
+    logger.info(f"Loaded {len(results)} layers for edition {config.edition_date}")
     return results

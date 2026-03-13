@@ -6,8 +6,12 @@ from dataclasses import dataclass
 
 import psycopg
 from psycopg import sql
+from tqdm import tqdm
 
 from .config import PipelineConfig
+from .logger import get_logger
+
+logger = get_logger("optimizer")
 
 
 @dataclass(slots=True)
@@ -163,7 +167,8 @@ def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
 
         tables = _list_raw_tables(connection)
         indexed_tables = 0
-        for table_name in tables:
+        logger.info(f"Indexing {len(tables)} raw tables")
+        for table_name in tqdm(tables, desc="Indexing", unit="table"):
             geometry_column = _find_geometry_column(connection, table_name)
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -193,12 +198,14 @@ def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
                     )
                     indexed_tables += 1
 
-        for table_name in tables:
+        logger.info(f"Analyzing {len(tables)} tables")
+        for table_name in tqdm(tables, desc="Analyzing", unit="table"):
             with connection.cursor() as cursor:
                 cursor.execute(sql.SQL("ANALYZE bdtopo_raw.{t}").format(
                     t=sql.Identifier(table_name)
                 ))
 
+        logger.info("Building curated materialized views")
         admin_table = _pick_table(tables, ("commune",)) or _pick_table(tables, ("admin",))
         transport_table = _pick_table(tables, ("troncon", "route")) or _pick_table(tables, ("route",))
         regulated_table = _pick_table(tables, ("zone", "reglement")) or _pick_table(tables, ("servitude",))
@@ -273,6 +280,7 @@ def optimize_postgis(config: PipelineConfig) -> OptimizationSummary:
 
         connection.commit()
 
+    logger.info(f"Optimization complete: {indexed_tables} spatial indexes, 4 curated views")
     return OptimizationSummary(
         indexed_tables=indexed_tables,
         curated_views=[

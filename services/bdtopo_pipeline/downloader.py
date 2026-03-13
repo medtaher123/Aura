@@ -7,9 +7,13 @@ import time
 from typing import Iterable
 
 import requests
+from tqdm import tqdm
 
 from .config import PipelineConfig
+from .logger import get_logger
 from .manifest import infer_archive_name
+
+logger = get_logger("downloader")
 
 
 def _download_one(
@@ -40,6 +44,7 @@ def _download_one(
                         f"Unexpected HTTP status {response.status_code} for {url}"
                     )
 
+                total_size = int(response.headers.get("Content-Length", 0))
                 mode = (
                     "ab"
                     if (existing_size > 0 and response.status_code == 206)
@@ -48,15 +53,28 @@ def _download_one(
                 if mode == "wb" and existing_size > 0:
                     existing_size = 0
 
-                with destination.open(mode) as file_handle:
+                with (
+                    destination.open(mode) as file_handle,
+                    tqdm(
+                        total=total_size + existing_size,
+                        initial=existing_size,
+                        unit="B",
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        desc=destination.name,
+                        leave=False,
+                    ) as pbar,
+                ):
                     for chunk in response.iter_content(chunk_size=chunk_size):
                         if chunk:
                             file_handle.write(chunk)
+                            pbar.update(len(chunk))
                 return
         except Exception as exc:  # noqa: BLE001 - retry block
             if attempt >= max_retries:
                 raise RuntimeError(f"Failed to download {url}: {exc}") from exc
             sleep_seconds = min(2**attempt, 30)
+            logger.warning(f"Retry {attempt}/{max_retries} for {url} in {sleep_seconds}s")
             time.sleep(sleep_seconds)
 
 
@@ -72,12 +90,15 @@ def _validate_download(url: str, local_path: Path, timeout: int) -> bool:
 
 def download_archives(config: PipelineConfig, urls: Iterable[str]) -> list[Path]:
     config.download_dir.mkdir(parents=True, exist_ok=True)
+    url_list = list(urls)
     local_files: list[Path] = []
-    for url in urls:
+
+    for i, url in enumerate(url_list, 1):
         target = config.download_dir / infer_archive_name(url)
         if target.exists() and _validate_download(url, target, config.download_timeout_seconds):
-            pass
+            logger.info(f"[{i}/{len(url_list)}] Skipping {target.name} (already downloaded)")
         else:
+            logger.info(f"[{i}/{len(url_list)}] Downloading {target.name}")
             _download_one(
                 url=url,
                 destination=target,
@@ -86,4 +107,6 @@ def download_archives(config: PipelineConfig, urls: Iterable[str]) -> list[Path]
                 max_retries=config.download_max_retries,
             )
         local_files.append(target)
+
+    logger.info(f"All {len(local_files)} archives downloaded")
     return local_files
