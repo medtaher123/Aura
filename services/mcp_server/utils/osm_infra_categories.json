@@ -5,6 +5,7 @@
     "landuse",
     "industrial",
     "shop",
+    "supermarket",
     "leisure",
     "tourism",
     "office",
@@ -41,6 +42,11 @@
     "shop": {
       "shop": [
         "agrarian", "alcohol", "anime", "antiques", "appliance", "art", "atv", "baby_goods", "bag", "bags", "bakery", "bathroom_furnishing", "beauty", "bed", "beverages", "bicycle", "books", "boutique", "brewing_supplies", "butcher", "candles", "car", "car_parts", "car_repair", "carpet", "charity", "cheese", "chemist", "chocolate", "clothes", "coffee", "comic_goods", "computer", "confectionery", "convenience", "copyshop", "cosmetics", "cosplay", "costume", "country_store", "craft", "curtain", "dairy", "deli", "department_store", "doityourself", "doors", "electrical", "electronics", "energy", "erotic", "fabric", "farm", "fashion", "fashion_accessories", "fireplace", "fish", "florist", "flooring", "food", "frozen_food", "furniture", "gallery", "game", "games", "garden_centre", "garden_furniture", "gas", "general", "gift", "glaziery", "greengrocer", "groundskeeping", "hairdresser", "hairdresser_supply", "hardware", "health_food", "hearing_aids", "herbalist", "herbs", "hifi", "hobby", "houseware", "household_linen", "ice_cream", "interior_decoration", "jewelry", "kiosk", "kitchen", "laundry", "leather", "lighting", "locksmith", "lottery", "mall", "massage", "medical_supply", "mobile_phone", "moneylender", "motorcycle", "music", "musical_instrument", "newsagent", "newspaper", "nutrition_supplements", "nuts", "office_supplies", "optician", "outdoor", "outpost", "paint", "pasta", "pastry", "pawnbroker", "perfumery", "pet", "photo", "piercing", "plumbing", "pottery", "printer_ink", "radiotechnics", "repair", "seafood", "second_hand", "security", "sewing", "shoes", "shoe_repair", "showroom", "spices", "sports", "stationery", "supermarket", "tailor", "tattoo", "tea", "telecommunication", "tiles", "tobacco", "toys", "tractor", "tool_hire", "trade", "travel_agent", "tortilla", "vacuum_cleaner", "variety_store", "vending_machine", "video", "video_games", "watches", "water", "wholesale", "window_blind", "wine", "wool", "yes"
+      ]
+    },
+    "supermarket":{
+      "supermarket": [
+        "agrarian", "alcohol", "anime", "antiques", "appliance", "art", "atv", "baby_goods", "bag", "bags", "bakery", "bathroom_furnishing", "beauty", "bed", "beverages", "bicycle", "books", "boutique", "brewing_supplies", "butcher", "candles", "car", "car_parts", "car_repair", "carpet", "charity", "cheese", "chemist", "chocolate", "clothes", "coffee", "comic_goods", "computer", "confectionery", "convenience", "copyshop", "cosmetics", "cosplay", "costume", "country_store", "craft", "curtain", "dairy", "deli", "department_store", "doityourself", "doors", "electrical", "electronics", "energy", "erotic", "fabric", "farm", "fashion", "fashion_accessories", "fireplace", "fish", "florist", "flooring", "food", "frozen_food", "furniture", "gallery", "game", "games", "garden_centre", "garden_furniture", "gas", "general", "gift", "glaziery", "greengrocer", "groundskeeping", "hairdresser", "hairdresser_supply", "hardware", "health_food", "hearing_aids", "herbalist", "herbs", "hifi", "hobby", "houseware", "household_linen", "ice_cream", "interior_decoration", "jewelry", "kiosk", "kitchen", "laundry", "leather", "lighting", "locksmith", "lottery", "mall", "massage", "medical_supply", "mobile_phone", "moneylender", "motorcycle", "music", "musical_instrument", "newsagent", "newspaper", "nutrition_supplements", "nuts", "office_supplies", "optician", "outdoor", "outpost", "paint", "pasta", "pastry", "pawnbroker", "perfumery", "pet", "photo", "piercing", "plumbing", "pottery", "printer_ink", "radiotechnics", "repair", "seafood", "second_hand", "security", "sewing", "shoes", "shoe_repair", "showroom", "spices", "sports", "stationery", "supermarket", "tailor", "tattoo", "tea", "telecommunication", "tiles", "tobacco", "toys", "tractor", "trade", "travel_agent", "tortilla", "vacuum_cleaner", "variety_store", "vending_machine", "video", "video_games", "watches", "water", "wholesale", "window_blind", "wine", "wool", "yes"
       ]
     },
     "leisure": {
@@ -105,6 +111,7 @@
     "commercial": "commercial",
     "shops": "shop",
     "retail": "shop",
+    "supermarket": "shop",
     "leisure": "leisure",
     "tourism": "tourism",
     "offices": "office",
