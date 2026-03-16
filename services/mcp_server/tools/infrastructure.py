@@ -304,11 +304,7 @@ def infrastructure_query_tool(
         athena_output = os.environ.get("ATHENA_OUTPUT") or getattr(
             config, "athena_output", None
         )
-        if not athena_output:
-            athena_output = "s3://your-athena-query-results/"
-        region = os.environ.get("AWS_REGION") or getattr(
-            config, "aws_region", "us-east-1"
-        )
+        region = "us-east-1"
         table = os.environ.get("ATHENA_OSM_TABLE", "planet")
 
         if not isinstance(athena_output, str) or not athena_output.strip():
