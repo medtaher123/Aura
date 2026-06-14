@@ -29,6 +29,9 @@ logger = get_logger(__name__)
 
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
+DEFAULT_AGENT_SERVER_AUTH_TOKEN = os.getenv("AGENT_SERVER_AUTH_TOKEN") or os.getenv(
+    "COGNITO_ACCESS_TOKEN"
+)
 DEFAULT_RECONNECT_ATTEMPTS = 3
 DEFAULT_RECONNECT_DELAY = 1.0
 DEFAULT_TIMEOUT = 300
@@ -105,11 +108,15 @@ class AgentWebSocketClient:
         reconnect_attempts: int = DEFAULT_RECONNECT_ATTEMPTS,
         reconnect_delay: float = DEFAULT_RECONNECT_DELAY,
         timeout: float = DEFAULT_TIMEOUT,
+        auth_token: Optional[str] = None,
     ):
         self.url = url or DEFAULT_AGENT_SERVER_URL
         if not self.url.endswith("/ws/chat"):
             self.url = self.url.rstrip("/") + "/ws/chat"
 
+        self.auth_token = self._clean_auth_token(
+            auth_token if auth_token is not None else DEFAULT_AGENT_SERVER_AUTH_TOKEN
+        )
         self.reconnect_attempts = reconnect_attempts
         self.reconnect_delay = reconnect_delay
         self.timeout = timeout
@@ -120,6 +127,31 @@ class AgentWebSocketClient:
         self._loop_id: Optional[int] = None
 
         logger.info(f"Initialized WebSocket client for URL: {self.url}")
+
+    @staticmethod
+    def _clean_auth_token(auth_token: Optional[str]) -> Optional[str]:
+        if not auth_token:
+            return None
+
+        token = auth_token.strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        return token or None
+
+    def set_auth_token(self, auth_token: Optional[str]) -> None:
+        """Update the bearer token used for future WebSocket handshakes."""
+        next_token = self._clean_auth_token(auth_token)
+        if next_token == self.auth_token:
+            return
+
+        self.auth_token = next_token
+        if self._connected:
+            self.close()
+
+    def _connection_headers(self) -> Optional[dict[str, str]]:
+        if not self.auth_token:
+            return None
+        return {"Authorization": f"Bearer {self.auth_token}"}
 
     def _run_sync(self, coro: Any) -> Any:
         """Run an async coroutine from sync code, handling Streamlit's event loop."""
@@ -152,6 +184,7 @@ class AgentWebSocketClient:
                 )
                 self._websocket = await websockets.connect(
                     self.url,
+                    additional_headers=self._connection_headers(),
                     ping_interval=30,
                     ping_timeout=10,
                     close_timeout=5,

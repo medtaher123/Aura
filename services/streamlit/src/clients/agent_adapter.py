@@ -26,6 +26,9 @@ logger = get_logger(__name__)
 
 # Agent server configuration
 AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
+AGENT_SERVER_AUTH_TOKEN = os.getenv("AGENT_SERVER_AUTH_TOKEN") or os.getenv(
+    "COGNITO_ACCESS_TOKEN"
+)
 
 
 @dataclass
@@ -41,11 +44,24 @@ class AgentResponse:
     raw_data: dict = field(default_factory=dict)
 
 
+def _clean_auth_token(auth_token: Optional[str]) -> Optional[str]:
+    if not auth_token:
+        return None
+
+    token = auth_token.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token or None
+
+
 class RemoteAgentAdapter:
     """Adapter for remote Agent Server via WebSocket."""
 
-    def __init__(self, url: Optional[str] = None):
+    def __init__(self, url: Optional[str] = None, auth_token: Optional[str] = None):
         self.url = url or AGENT_SERVER_URL
+        self.auth_token = _clean_auth_token(
+            auth_token if auth_token is not None else AGENT_SERVER_AUTH_TOKEN
+        )
         self._client = None
         logger.info(f"RemoteAgentAdapter initialized with URL: {self.url}")
 
@@ -54,8 +70,21 @@ class RemoteAgentAdapter:
         if self._client is None:
             from src.clients.agent_ws_client import AgentWebSocketClient
 
-            self._client = AgentWebSocketClient(url=self.url)
+            self._client = AgentWebSocketClient(
+                url=self.url,
+                auth_token=self.auth_token,
+            )
         return self._client
+
+    def set_auth_token(self, auth_token: Optional[str]) -> None:
+        """Update the bearer token used by the underlying WebSocket client."""
+        next_token = _clean_auth_token(auth_token)
+        if next_token == self.auth_token:
+            return
+
+        self.auth_token = next_token
+        if self._client:
+            self._client.set_auth_token(next_token)
 
     def invoke(
         self,
@@ -214,7 +243,7 @@ class RemoteAgentAdapter:
 
 def get_agent_adapter() -> RemoteAgentAdapter:
     """Get the remote agent adapter."""
-    return RemoteAgentAdapter(url=AGENT_SERVER_URL)
+    return RemoteAgentAdapter(url=AGENT_SERVER_URL, auth_token=AGENT_SERVER_AUTH_TOKEN)
 
 
 # Singleton instance for session reuse

@@ -350,6 +350,15 @@ def _augment_with_document(english_query: str) -> str:
     return english_query
 
 
+def _configured_agent_server_auth_token() -> str:
+    """Read the default Agent Server bearer token from the environment."""
+    return (
+        os.getenv("AGENT_SERVER_AUTH_TOKEN")
+        or os.getenv("COGNITO_ACCESS_TOKEN")
+        or ""
+    ).strip()
+
+
 # ---------------------------------------------------
 # SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
@@ -391,6 +400,9 @@ if "document_name" not in st.session_state:
 if "use_document" not in st.session_state:
     st.session_state.use_document = True
 
+if "agent_server_auth_token" not in st.session_state:
+    st.session_state.agent_server_auth_token = ""
+
 agent_executor = st.session_state.agent_executor
 
 
@@ -402,6 +414,28 @@ with st.sidebar:
     st.success("Agent Mode: Remote (Agent Server)")
     agent_url = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
     st.caption(f"Connected to: {agent_url}")
+
+    env_auth_token = _configured_agent_server_auth_token()
+    st.subheader("Agent Auth")
+    if env_auth_token:
+        st.caption("Default bearer token is configured from the environment.")
+
+    manual_auth_token = st.text_input(
+        "Cognito access token override",
+        value=st.session_state.agent_server_auth_token,
+        type="password",
+        help="Used as the Agent Server WebSocket bearer token. Leave empty to use environment config.",
+    ).strip()
+    st.session_state.agent_server_auth_token = manual_auth_token
+
+    effective_auth_token = manual_auth_token or env_auth_token
+    if hasattr(agent_executor, "set_auth_token"):
+        agent_executor.set_auth_token(effective_auth_token or None)
+
+    if effective_auth_token:
+        st.caption("Agent auth token is set.")
+    else:
+        st.caption("No Agent Server auth token configured.")
 
     st.divider()
     st.subheader("Document (PDF)")
