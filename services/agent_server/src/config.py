@@ -61,6 +61,36 @@ class AgentServerConfig(BaseSettings):
         description="Maximum WebSocket message size in bytes",
     )
 
+    # Authentication settings
+    auth_enabled: bool = Field(
+        default=False,
+        description="Enable authentication for protected API endpoints",
+    )
+    auth_provider: str = Field(
+        default="cognito",
+        description="Authentication provider to use when auth is enabled",
+    )
+    cognito_region: Optional[str] = Field(
+        default=None,
+        description="AWS region for the Cognito user pool",
+    )
+    cognito_user_pool_id: Optional[str] = Field(
+        default=None,
+        description="Cognito user pool ID used to validate JWT issuers",
+    )
+    cognito_app_client_id: Optional[str] = Field(
+        default=None,
+        description="Cognito app client ID used to validate JWT audience/client_id",
+    )
+    cognito_token_use: Optional[str] = Field(
+        default=None,
+        description="Expected Cognito token_use claim, for example 'access' or 'id'",
+    )
+    cognito_jwt_leeway_seconds: int = Field(
+        default=0,
+        description="Clock skew leeway in seconds when validating Cognito JWTs",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

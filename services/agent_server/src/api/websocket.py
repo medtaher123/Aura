@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from ..auth import AuthConfigurationError, AuthError, authenticate_websocket
 from ..config import get_config
 from ..core.logger import get_logger
 from ..core.memory import normalize_chat_messages
@@ -541,6 +542,10 @@ async def websocket_chat(websocket: WebSocket) -> None:
     conn = WebSocketConnection(websocket)
 
     try:
+        user = await authenticate_websocket(websocket)
+        if user:
+            logger.info(f"Authenticated WebSocket user: {user.user_id}")
+
         await conn.accept()
         logger.info("WebSocket connection established")
 
@@ -599,7 +604,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     f"Unknown message type: {msg_type}", recoverable=True
                 )
 
-    except WebSocketDisconnect:
+    except AuthError as e:
+        logger.warning(f"WebSocket authentication failed: {e.message}")
+    except AuthConfigurationError as e:
+        logger.exception("WebSocket authentication is misconfigured")
+    except WebSocketDisconnect as e:
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.exception("WebSocket error")

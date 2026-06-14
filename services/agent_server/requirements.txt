@@ -19,6 +19,7 @@ langgraph-checkpoint>=2.1.0
 
 # AWS SDK (for Bedrock LLM)
 boto3>=1.41.0
+PyJWT[crypto]>=2.10.0
 
 # MCP Client (for tool integration)
 mcp>=1.25.0
@@ -39,3 +40,5 @@ requests>=2.32.0
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
+
+debugpy
