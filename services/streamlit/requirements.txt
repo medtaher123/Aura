@@ -146,3 +146,5 @@ pytest-cov>=4.0.0
 pypdf>=5.1.0
 # WebSocket client for Agent Server (used when AGENT_MODE=remote)
 websockets>=14.0
+
+debugpy

@@ -15,6 +15,26 @@ from .api import health_router, websocket_router
 logger = get_logger()
 
 
+import os
+
+if os.getenv("DEBUG", "false").lower() == "true":
+    import debugpy
+    try:
+        # Listen on 0.0.0.0 so it's accessible from outside the container
+        debugpy.listen(("0.0.0.0", 5678))
+        print("✨ debugpy is listening on port 5678...")
+        
+        # Optional: Pause execution until the debugger attaches
+        if os.getenv("DEBUG_WAIT_FOR_CLIENT", "false").lower() == "true":
+            print("⏳ Waiting for debugger to attach...")
+            debugpy.wait_for_client()
+    except RuntimeError as e:
+        # Catch the "Address already in use" error gracefully
+        if "Address already in use" in str(e):
+            print("⚡ debugpy is already active in the parent process. Skipping dual-binding.")
+        else:
+            raise e
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
