@@ -29,9 +29,6 @@ logger = get_logger(__name__)
 
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
-DEFAULT_AGENT_SERVER_AUTH_TOKEN = os.getenv("AGENT_SERVER_AUTH_TOKEN") or os.getenv(
-    "COGNITO_ACCESS_TOKEN"
-)
 DEFAULT_RECONNECT_ATTEMPTS = 3
 DEFAULT_RECONNECT_DELAY = 1.0
 DEFAULT_TIMEOUT = 300
@@ -114,9 +111,7 @@ class AgentWebSocketClient:
         if not self.url.endswith("/ws/chat"):
             self.url = self.url.rstrip("/") + "/ws/chat"
 
-        self.auth_token = self._clean_auth_token(
-            auth_token if auth_token is not None else DEFAULT_AGENT_SERVER_AUTH_TOKEN
-        )
+        self.auth_token = self._clean_auth_token(auth_token)
         self.reconnect_attempts = reconnect_attempts
         self.reconnect_delay = reconnect_delay
         self.timeout = timeout

@@ -26,9 +26,6 @@ logger = get_logger(__name__)
 
 # Agent server configuration
 AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
-AGENT_SERVER_AUTH_TOKEN = os.getenv("AGENT_SERVER_AUTH_TOKEN") or os.getenv(
-    "COGNITO_ACCESS_TOKEN"
-)
 
 
 @dataclass
@@ -59,9 +56,7 @@ class RemoteAgentAdapter:
 
     def __init__(self, url: Optional[str] = None, auth_token: Optional[str] = None):
         self.url = url or AGENT_SERVER_URL
-        self.auth_token = _clean_auth_token(
-            auth_token if auth_token is not None else AGENT_SERVER_AUTH_TOKEN
-        )
+        self.auth_token = _clean_auth_token(auth_token)
         self._client = None
         logger.info(f"RemoteAgentAdapter initialized with URL: {self.url}")
 
@@ -243,7 +238,7 @@ class RemoteAgentAdapter:
 
 def get_agent_adapter() -> RemoteAgentAdapter:
     """Get the remote agent adapter."""
-    return RemoteAgentAdapter(url=AGENT_SERVER_URL, auth_token=AGENT_SERVER_AUTH_TOKEN)
+    return RemoteAgentAdapter(url=AGENT_SERVER_URL)
 
 
 # Singleton instance for session reuse

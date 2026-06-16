@@ -35,6 +35,11 @@ from src.clients.agent_adapter import (  # noqa: E402
 )
 from src.core.logger import get_logger  # noqa: E402
 from src.services.document_service import extract_text_from_pdf_bytes  # noqa: E402
+from src.auth import (  # noqa: E402
+    auth_enabled,
+    render_login_gate,
+    render_logout_control,
+)
 
 logger = get_logger(__name__)
 
@@ -332,6 +337,10 @@ def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
 # ---------------------------------------------------
 st.set_page_config(page_title="STAC & Fire Chatbot", layout="wide")
 
+# Enforce Cognito Hosted UI login before rendering the app. When Cognito is
+# not configured this is a no-op so local/dev usage keeps working.
+cognito_tokens = render_login_gate()
+
 logo = Image.open(
     Path(__file__).resolve().parent / "assets" / "metaplanet_sas_logo.jpeg"
 )
@@ -348,15 +357,6 @@ def _augment_with_document(english_query: str) -> str:
     if use_doc and isinstance(doc, str) and doc.strip():
         return f"document:\n{doc}\n\nuser question:\n{english_query}".strip()
     return english_query
-
-
-def _configured_agent_server_auth_token() -> str:
-    """Read the default Agent Server bearer token from the environment."""
-    return (
-        os.getenv("AGENT_SERVER_AUTH_TOKEN")
-        or os.getenv("COGNITO_ACCESS_TOKEN")
-        or ""
-    ).strip()
 
 
 # ---------------------------------------------------
@@ -400,9 +400,6 @@ if "document_name" not in st.session_state:
 if "use_document" not in st.session_state:
     st.session_state.use_document = True
 
-if "agent_server_auth_token" not in st.session_state:
-    st.session_state.agent_server_auth_token = ""
-
 agent_executor = st.session_state.agent_executor
 
 
@@ -415,27 +412,27 @@ with st.sidebar:
     agent_url = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
     st.caption(f"Connected to: {agent_url}")
 
-    env_auth_token = _configured_agent_server_auth_token()
     st.subheader("Agent Auth")
-    if env_auth_token:
-        st.caption("Default bearer token is configured from the environment.")
 
-    manual_auth_token = st.text_input(
-        "Cognito access token override",
-        value=st.session_state.agent_server_auth_token,
-        type="password",
-        help="Used as the Agent Server WebSocket bearer token. Leave empty to use environment config.",
-    ).strip()
-    st.session_state.agent_server_auth_token = manual_auth_token
+    if auth_enabled() and cognito_tokens:
+        # Logged in via Cognito Hosted UI: forward the access token.
+        claims = cognito_tokens.get("claims") or {}
+        user_label = (
+            claims.get("email")
+            or claims.get("cognito:username")
+            or claims.get("username")
+            or "Authenticated user"
+        )
+        st.caption(f"Signed in as: {user_label}")
+        effective_auth_token = cognito_tokens.get("access_token") or ""
+        render_logout_control()
+    else:
+        # Cognito login not configured (e.g. local dev with backend auth off).
+        effective_auth_token = ""
+        st.caption("Cognito login is not configured.")
 
-    effective_auth_token = manual_auth_token or env_auth_token
     if hasattr(agent_executor, "set_auth_token"):
         agent_executor.set_auth_token(effective_auth_token or None)
-
-    if effective_auth_token:
-        st.caption("Agent auth token is set.")
-    else:
-        st.caption("No Agent Server auth token configured.")
 
     st.divider()
     st.subheader("Document (PDF)")

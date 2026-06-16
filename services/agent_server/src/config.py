@@ -51,6 +51,24 @@ class AgentServerConfig(BaseSettings):
         description="Default LLM temperature",
     )
 
+    # Database settings
+    database_url: str = Field(
+        default="postgresql+asyncpg://metaplanet:metaplanet@localhost:5432/metaplanet",
+        description="SQLAlchemy database URL (async driver). Loaded from DATABASE_URL.",
+    )
+    database_echo: bool = Field(
+        default=False,
+        description="Echo SQL statements (useful for debugging)",
+    )
+    database_pool_size: int = Field(
+        default=5,
+        description="Connection pool size for the database engine",
+    )
+    database_max_overflow: int = Field(
+        default=10,
+        description="Maximum overflow connections beyond the pool size",
+    )
+
     # WebSocket settings
     ws_heartbeat_interval: int = Field(
         default=30,

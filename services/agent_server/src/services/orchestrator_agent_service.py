@@ -17,7 +17,7 @@ from ..core.logger import get_logger
 from ..core.prompts import get_orchestrator_prompt
 from ..core.memory import format_chat_history
 from ..tools.contracts import ToolResponse
-from ..api.models import OrchestratorInputs, OrchestratorTrace, ResumeState
+from ..schemas.websocket import OrchestratorInputs, OrchestratorTrace, ResumeState
 from .agent_runner import coerce_tool_response
 from .data_agent_service import create_data_agent_executor
 from .analysis_agent_service import create_analysis_agent_executor

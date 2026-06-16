@@ -10,6 +10,12 @@ websockets>=14.0
 pydantic>=2.5.3
 pydantic-settings>=2.5.2
 
+# Database (async SQLAlchemy + Postgres/Aurora + migrations)
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0
+alembic>=1.13.0
+pgvector>=0.3.0
+
 # LangChain / LangGraph (Agent framework)
 langchain>=0.3.26
 langchain-aws>=0.2.27

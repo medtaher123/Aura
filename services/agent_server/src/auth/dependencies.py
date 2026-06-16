@@ -79,6 +79,40 @@ async def authenticate_http_request(
         ) from exc
 
 
+async def get_current_user_from_token(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+) -> AuthenticatedUser:
+    """FastAPI dependency that requires a valid bearer token.
+
+    Unlike :func:`authenticate_http_request`, this never returns ``None``: the
+    endpoints that depend on it are inherently user-scoped, so a missing or
+    invalid token is always rejected with HTTP 401 (independent of the global
+    ``auth_enabled`` flag).
+    """
+    token = extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        return await get_auth_provider().authenticate_token(token)
+    except AuthConfigurationError:
+        logger.exception("Authentication provider is misconfigured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication provider is misconfigured",
+        )
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
 async def authenticate_websocket(websocket: WebSocket) -> Optional[AuthenticatedUser]:
     """Authenticate a WebSocket handshake when auth is enabled."""
     config = get_config()

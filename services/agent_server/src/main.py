@@ -8,9 +8,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.db.database import init_db
+
 from .config import get_config
 from .core.logger import get_logger, configure_log_level
-from .api import health_router, websocket_router
+from .api import health_router, sessions_router, websocket_router
 
 logger = get_logger()
 
@@ -45,6 +47,10 @@ async def lifespan(app: FastAPI):
     # Startup
     config = get_config()
     configure_log_level(config.log_level)
+
+    logger.info("Initializing database")
+    await init_db()
+    logger.info("Database initialized")
     
     logger.info(f"Starting {config.name} v{config.version}")
     logger.info(f"MCP Server URL: {config.mcp_server_url}")
@@ -79,6 +85,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health_router)
+app.include_router(sessions_router)
 app.include_router(websocket_router)
 
 
@@ -91,5 +98,6 @@ async def root():
         "endpoints": {
             "health": "/health",
             "websocket": "/ws/chat",
+            "sessions": "/sessions",
         },
     }

@@ -6,8 +6,12 @@ Provides HTTP health check for ECS/ALB monitoring.
 
 import time
 from datetime import datetime, timezone
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
+
+from src.api.deps import get_current_user
+from src.db import User
+from src.schemas.chat import UserRead
 
 from ..config import get_config
 
@@ -44,3 +48,9 @@ async def health_check() -> HealthResponse:
         timestamp=datetime.now(timezone.utc).isoformat(),
         mcp_server_url=config.mcp_server_url,
     )
+
+@router.get("/me", response_model=UserRead)
+async def get_me(user: User = Depends(get_current_user)) -> UserRead:
+    """Get the current user."""
+    return UserRead.from_model(user)
+    
