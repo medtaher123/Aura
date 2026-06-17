@@ -4,10 +4,11 @@ from typing import Optional
 
 from fastapi import Header, HTTPException, WebSocket, status
 
+from src.auth.router import AuthRouter
+
 from ..config import get_config
 from ..core.logger import get_logger
-from .cognito_provider import CognitoAuthProvider
-from .provider import AuthConfigurationError, AuthError, AuthProvider, AuthenticatedUser
+from .provider import AuthConfigurationError, AuthContext, AuthError, AuthProvider, AuthenticatedUser
 
 logger = get_logger("auth")
 
@@ -15,49 +16,16 @@ _auth_provider: Optional[AuthProvider] = None
 
 
 def get_auth_provider() -> AuthProvider:
-    """Build the configured auth provider."""
-    global _auth_provider
-
-    if _auth_provider is not None:
-        return _auth_provider
-
-    config = get_config()
-    provider_name = config.auth_provider.lower()
-    if provider_name == "cognito":
-        _auth_provider = CognitoAuthProvider(
-            region=config.cognito_region or "",
-            user_pool_id=config.cognito_user_pool_id or "",
-            cognito_domain=config.cognito_domain or "",
-            app_client_id=config.cognito_app_client_id,
-            expected_token_use=config.cognito_token_use,
-            leeway_seconds=config.cognito_jwt_leeway_seconds,
-        )
-        return _auth_provider
-
-    raise AuthConfigurationError(f"Unsupported auth provider: {config.auth_provider}")
-
-
-def extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
-    """Extract a bearer token from an Authorization header."""
-    if not authorization:
-        return None
-
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        return None
-    return token.strip()
+    """ throw not implemented error """
+    raise NotImplementedError("get_auth_provider is not implemented")
 
 async def get_current_user_from_token(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
-) -> AuthenticatedUser:
-    """FastAPI dependency that requires a valid bearer token.
-
-    Unlike :func:`authenticate_http_request`, this never returns ``None``: the
-    endpoints that depend on it are inherently user-scoped, so a missing or
-    invalid token is always rejected with HTTP 401 (independent of the global
-    ``auth_enabled`` flag).
+) -> AuthContext:
+    """FastAPI dependency that extracts, routes, and validates a bearer token 
+    against the appropriate enabled authentication provider.
     """
-    token = extract_bearer_token(authorization)
+    token = AuthRouter.extract_bearer_token(authorization)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,16 +34,15 @@ async def get_current_user_from_token(
         )
 
     try:
-        return await get_auth_provider().authenticate_token(token)
-    except AuthConfigurationError:
-        logger.exception("Authentication provider is misconfigured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Authentication provider is misconfigured",
-        )
+        # 1. Dynamically route the token to the correct auth provider based on its issuer
+        provider = AuthRouter.get_provider_by_token(token)
+        
+        user = await provider.authenticate_token(token)
+        return AuthContext(user=user, provider=provider)
+        
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=exc.message,
+            detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc

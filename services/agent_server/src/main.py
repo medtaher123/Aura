@@ -8,11 +8,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.auth.router import AuthRouter
 from src.db.database import init_db
 
 from .config import get_config
 from .core.logger import get_logger, configure_log_level
-from .api import health_router, sessions_router, websocket_router
+from .api import health_router, conversations_router, websocket_router
 
 logger = get_logger()
 
@@ -85,8 +86,10 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health_router)
-app.include_router(sessions_router)
+app.include_router(conversations_router)
 app.include_router(websocket_router)
+
+AuthRouter.initialize()
 
 
 @app.get("/")
@@ -98,6 +101,6 @@ async def root():
         "endpoints": {
             "health": "/health",
             "websocket": "/ws/chat",
-            "sessions": "/sessions",
+            "conversations": "/conversations",
         },
     }

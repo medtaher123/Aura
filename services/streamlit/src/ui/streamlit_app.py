@@ -426,13 +426,14 @@ with st.sidebar:
         st.caption(f"Signed in as: {user_label}")
         effective_auth_token = cognito_tokens.get("access_token") or ""
         render_logout_control()
-    else:
-        # Cognito login not configured (e.g. local dev with backend auth off).
-        effective_auth_token = ""
-        st.caption("Cognito login is not configured.")
 
     if hasattr(agent_executor, "set_auth_token"):
         agent_executor.set_auth_token(effective_auth_token or None)
+
+    if effective_auth_token:
+        st.caption("Agent auth token is set.")
+    else:
+        st.caption("No Agent Server auth token configured.")
 
     st.divider()
     st.subheader("Document (PDF)")

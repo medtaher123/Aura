@@ -4,8 +4,10 @@ Tests for WebSocket endpoint.
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+from src.config import get_config
 from src.main import app
-from src.api.models import LocationOption
+from src.schemas.websocket import LocationOption
 from src.api.websocket import _patch_resume_state_with_confirmed_location
 
 
@@ -19,6 +21,23 @@ def test_websocket_connection():
         
         assert data["type"] == "connection_ack"
         assert "server_version" in data
+
+
+def test_websocket_requires_auth_when_enabled():
+    """Auth-enabled WebSocket connections reject missing credentials."""
+    config = get_config()
+    previous_auth_enabled = config.auth_enabled
+    config.auth_enabled = True
+    client = TestClient(app)
+
+    try:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/chat"):
+                pass
+
+        assert exc_info.value.code == 1008
+    finally:
+        config.auth_enabled = previous_auth_enabled
 
 
 def test_resume_patch_preserves_structured_tool_input():

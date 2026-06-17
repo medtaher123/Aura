@@ -20,6 +20,7 @@ class AgentServerConfig(BaseSettings):
 
     # Fargate-specific settings
     workers: int = Field(default=1, description="Number of worker processes")
+    dev_mode: bool = Field(default=False, description="Enable development mode")
     log_level: str = Field(default="info", description="Logging level")
     timeout_seconds: int = Field(default=300, description="Request timeout in seconds")
 
@@ -84,9 +85,9 @@ class AgentServerConfig(BaseSettings):
         default=False,
         description="Enable authentication for protected API endpoints",
     )
-    auth_provider: str = Field(
+    auth_providers: str = Field(
         default="cognito",
-        description="Authentication provider to use when auth is enabled",
+        description="Comma-separated list of authentication providers to use when auth is enabled",
     )
     cognito_region: Optional[str] = Field(
         default=None,
@@ -95,6 +96,10 @@ class AgentServerConfig(BaseSettings):
     cognito_user_pool_id: Optional[str] = Field(
         default=None,
         description="Cognito user pool ID used to validate JWT issuers",
+    )
+    cognito_domain: Optional[str] = Field(
+        default=None,
+        description="Cognito domain used to fetch user info",
     )
     cognito_app_client_id: Optional[str] = Field(
         default=None,

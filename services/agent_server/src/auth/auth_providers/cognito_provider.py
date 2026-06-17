@@ -6,28 +6,23 @@ import urllib.request
 import urllib.error
 from typing import Any, Optional
 
-from .provider import AuthConfigurationError, AuthError, AuthProvider, AuthenticatedUser
+from src.config import get_config
 
+from src.auth.provider import (
+    AuthConfigurationError, 
+    AuthError, 
+    AuthProvider, 
+    AuthenticatedUser, 
+    UserProfile
+)
 
 class CognitoAuthProvider(AuthProvider):
     """Validate AWS Cognito JWTs using the user pool JWKS."""
+    name = "cognito"
 
-    def __init__(
-        self,
-        *,
-        region: str,
-        user_pool_id: str,
-        cognito_domain: str,
-        app_client_id: Optional[str] = None,
-        expected_token_use: Optional[str] = None,
-        leeway_seconds: int = 0,
-    ):
-        if not region:
-            raise AuthConfigurationError("COGNITO_REGION is required")
-        if not user_pool_id:
-            raise AuthConfigurationError("COGNITO_USER_POOL_ID is required")
-        if not cognito_domain:
-            raise AuthConfigurationError("COGNITO_DOMAIN is required")
+    def __init__(self):
+
+        config = get_config()
 
         try:
             import jwt
@@ -37,18 +32,23 @@ class CognitoAuthProvider(AuthProvider):
             ) from exc
 
         self._jwt = jwt
-        self.region = region
-        self.user_pool_id = user_pool_id
-        self.app_client_id = app_client_id
-        self.expected_token_use = expected_token_use
-        self.leeway_seconds = leeway_seconds
+        self.region = config.cognito_region or ""
+        self.user_pool_id = config.cognito_user_pool_id or ""
+        self.app_client_id = config.cognito_app_client_id
+        self.expected_token_use = config.cognito_token_use
+        self.leeway_seconds = config.cognito_jwt_leeway_seconds
         
-        self.cognito_domain = cognito_domain.rstrip("/")
+        self.cognito_domain = config.cognito_domain or ""
+        self.cognito_domain = self.cognito_domain.rstrip("/")
         self.userinfo_url = f"{self.cognito_domain}/oauth2/userInfo"
         
-        self.issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
+        #self.issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
         self.jwks_url = f"{self.issuer}/.well-known/jwks.json"
         self._jwks_client = jwt.PyJWKClient(self.jwks_url)
+
+    @property
+    def issuer(self) -> str:
+        return f"https://cognito-idp.{self.region}.amazonaws.com/{self.user_pool_id}"
 
     async def authenticate_token(self, token: str) -> AuthenticatedUser:
         """Validate a JWT and return Cognito user claims."""
@@ -57,10 +57,10 @@ class CognitoAuthProvider(AuthProvider):
 
         return await asyncio.to_thread(self._decode_token, token)
 
-    async def fetch_user_info(self, access_token: Optional[str]=None) -> dict[str, Any]:
+    async def fetch_user_info(self, access_token: Optional[str] = None) -> UserProfile:
         """Fetch the user's profile claims from Cognito UserInfo endpoint."""
         if not access_token:
-            raise AuthError("Missing access token")
+            raise AuthError("Cannot fetch user profile without an access token")
 
         def _fetch() -> dict[str, Any]:
             req = urllib.request.Request(
@@ -73,7 +73,28 @@ class CognitoAuthProvider(AuthProvider):
             except urllib.error.URLError as exc:
                 raise AuthError(f"Failed to fetch user info from Cognito: {exc}")
 
-        return await asyncio.to_thread(_fetch)
+        raw_claims = await asyncio.to_thread(_fetch)
+        
+        # Extract and map standard Cognito/OIDC claims to the strict UserProfile schema
+        user_id = raw_claims.get("sub")
+        if not user_id:
+            raise AuthError("UserInfo response is missing required 'sub' attribute")
+
+        # Handle string-to-boolean conversion safely for email_verified if returned as a string
+        email_verified_raw = raw_claims.get("email_verified")
+        email_verified = (
+            email_verified_raw 
+            if isinstance(email_verified_raw, bool) 
+            else str(email_verified_raw).lower() == "true" if email_verified_raw is not None else None
+        )
+
+        return UserProfile(
+            user_id=user_id,
+            email=self._string_claim(raw_claims, "email"),
+            username=self._string_claim(raw_claims, "cognito:username") or self._string_claim(raw_claims, "username"),
+            email_verified=email_verified,
+            additional_claims=raw_claims,
+        )
 
     def _decode_token(self, token: str) -> AuthenticatedUser:
         try:
@@ -110,13 +131,12 @@ class CognitoAuthProvider(AuthProvider):
 
         return AuthenticatedUser(
             user_id=user_id,
-            username=self._string_claim(claims, "cognito:username")
-            or self._string_claim(claims, "username"),
+            username=self._string_claim(claims, "cognito:username") or self._string_claim(claims, "username"),
             email=self._string_claim(claims, "email"),
             groups=tuple(str(group) for group in groups),
             token_use=str(token_use) if token_use else None,
             claims=claims,
-            access_token=token,  # Retain token for UserInfo fetching
+            access_token=token,
         )
 
     def _matches_app_client(self, claims: dict[str, Any]) -> bool:
@@ -131,4 +151,3 @@ class CognitoAuthProvider(AuthProvider):
     def _string_claim(claims: dict[str, Any], key: str) -> Optional[str]:
         value = claims.get(key)
         return value if isinstance(value, str) else None
-        
