@@ -9,10 +9,12 @@ import json
 from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from src.api.deps import get_current_user
 from src.api.websocket_connection import WebSocketConnection
+from src.db import User
 from src.schemas.websocket import (
     AgentStage,
     ToolArtifacts,
@@ -30,7 +32,7 @@ from src.schemas.websocket import (
     ToolStartMessage,
     get_osm_type_prefix,
 )
-from ..auth import AuthConfigurationError, AuthError, authenticate_websocket
+from ..auth import AuthConfigurationError, AuthError
 from ..config import get_config
 from ..core.logger import get_logger
 from ..core.memory import normalize_chat_messages
@@ -436,7 +438,7 @@ async def handle_chat_resume(
 
 
 @router.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket) -> None:
+async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_user)) -> None:
     """
     WebSocket endpoint for real-time chat with the agent.
 
@@ -449,10 +451,6 @@ async def websocket_chat(websocket: WebSocket) -> None:
     conn = WebSocketConnection(websocket)
 
     try:
-        user = await authenticate_websocket(websocket)
-        if user:
-            logger.info(f"Authenticated WebSocket user: {user.user_id}")
-
         await conn.accept()
         logger.info("WebSocket connection established")
 

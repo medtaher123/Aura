@@ -17,9 +17,9 @@ class MessageRepository(BaseRepository[Message]):
 
     model = Message
 
-    async def create_for_session(
+    async def create_for_conversation(
         self,
-        session_id: uuid.UUID,
+        converation_id: uuid.UUID,
         data: Mapping[str, Any],
         *,
         commit: bool = True,
@@ -27,15 +27,15 @@ class MessageRepository(BaseRepository[Message]):
         """Create a message, mapping API ``metadata`` to ORM ``message_metadata``."""
         payload = dict(data)
         metadata = payload.pop("metadata", None)
-        payload["session_id"] = session_id
+        payload["conversation_id"] = converation_id
         payload["message_metadata"] = metadata or {}
         return await self.create(payload, commit=commit)
 
-    async def list_for_session(self, session_id: uuid.UUID) -> list[Message]:
+    async def list_for_conversation(self, conversation_id: uuid.UUID) -> list[Message]:
         """Return messages in insertion order."""
         stmt = (
             select(Message)
-            .where(Message.session_id == session_id)
+            .where(Message.conversation_id == conversation_id)
             .order_by(Message.id.asc())
         )
         return await self.list(statement=stmt)

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..base import BaseModel
 
 if TYPE_CHECKING:
-    from src.db.models.session import Session
+    from src.db.models.conversation import Conversation
 
 class User(BaseModel):
     """An application user, keyed by the identity provider's subject id."""
@@ -26,7 +26,7 @@ class User(BaseModel):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    sessions: Mapped[list["Session"]] = relationship(
+    conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,

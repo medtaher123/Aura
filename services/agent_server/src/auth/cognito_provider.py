@@ -1,6 +1,9 @@
 """AWS Cognito authentication provider."""
 
 import asyncio
+import json
+import urllib.request
+import urllib.error
 from typing import Any, Optional
 
 from .provider import AuthConfigurationError, AuthError, AuthProvider, AuthenticatedUser
@@ -14,6 +17,7 @@ class CognitoAuthProvider(AuthProvider):
         *,
         region: str,
         user_pool_id: str,
+        cognito_domain: str,
         app_client_id: Optional[str] = None,
         expected_token_use: Optional[str] = None,
         leeway_seconds: int = 0,
@@ -22,6 +26,8 @@ class CognitoAuthProvider(AuthProvider):
             raise AuthConfigurationError("COGNITO_REGION is required")
         if not user_pool_id:
             raise AuthConfigurationError("COGNITO_USER_POOL_ID is required")
+        if not cognito_domain:
+            raise AuthConfigurationError("COGNITO_DOMAIN is required")
 
         try:
             import jwt
@@ -36,6 +42,10 @@ class CognitoAuthProvider(AuthProvider):
         self.app_client_id = app_client_id
         self.expected_token_use = expected_token_use
         self.leeway_seconds = leeway_seconds
+        
+        self.cognito_domain = cognito_domain.rstrip("/")
+        self.userinfo_url = f"{self.cognito_domain}/oauth2/userInfo"
+        
         self.issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
         self.jwks_url = f"{self.issuer}/.well-known/jwks.json"
         self._jwks_client = jwt.PyJWKClient(self.jwks_url)
@@ -46,6 +56,24 @@ class CognitoAuthProvider(AuthProvider):
             raise AuthError("Missing authentication token")
 
         return await asyncio.to_thread(self._decode_token, token)
+
+    async def fetch_user_info(self, access_token: Optional[str]=None) -> dict[str, Any]:
+        """Fetch the user's profile claims from Cognito UserInfo endpoint."""
+        if not access_token:
+            raise AuthError("Missing access token")
+
+        def _fetch() -> dict[str, Any]:
+            req = urllib.request.Request(
+                self.userinfo_url,
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            try:
+                with urllib.request.urlopen(req) as response:
+                    return json.loads(response.read())
+            except urllib.error.URLError as exc:
+                raise AuthError(f"Failed to fetch user info from Cognito: {exc}")
+
+        return await asyncio.to_thread(_fetch)
 
     def _decode_token(self, token: str) -> AuthenticatedUser:
         try:
@@ -88,6 +116,7 @@ class CognitoAuthProvider(AuthProvider):
             groups=tuple(str(group) for group in groups),
             token_use=str(token_use) if token_use else None,
             claims=claims,
+            access_token=token,  # Retain token for UserInfo fetching
         )
 
     def _matches_app_client(self, claims: dict[str, Any]) -> bool:
@@ -102,3 +131,4 @@ class CognitoAuthProvider(AuthProvider):
     def _string_claim(claims: dict[str, Any], key: str) -> Optional[str]:
         value = claims.get(key)
         return value if isinstance(value, str) else None
+        

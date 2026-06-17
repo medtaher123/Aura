@@ -5,7 +5,7 @@ Alembic autogenerate.
 """
 
 from .message import Message
-from .session import Session
+from .conversation import Conversation
 from .user import User
 
-__all__ = ["User", "Session", "Message"]
+__all__ = ["User", "Conversation", "Message"]

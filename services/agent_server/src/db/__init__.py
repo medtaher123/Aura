@@ -2,9 +2,9 @@
 
 from .base import BaseModel
 from .database import AsyncSessionLocal, engine, get_db
-from .models import Message, Session, User
-from .repositories import BaseRepository, MessageRepository, SessionRepository, UserRepository
-from .services import MessageService, SessionService, UserService
+from .models import Message, Conversation, User
+from .repositories import BaseRepository, MessageRepository, ConversationRepository, UserRepository
+from .services import MessageService, ConversationService, UserService
 
 __all__ = [
     "BaseModel",
@@ -12,13 +12,13 @@ __all__ = [
     "AsyncSessionLocal",
     "get_db",
     "User",
-    "Session",
+    "Conversation",
     "Message",
     "BaseRepository",
     "UserRepository",
-    "SessionRepository",
+    "ConversationRepository",
     "MessageRepository",
     "UserService",
-    "SessionService",
+    "ConversationService",
     "MessageService",
 ]

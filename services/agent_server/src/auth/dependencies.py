@@ -27,6 +27,7 @@ def get_auth_provider() -> AuthProvider:
         _auth_provider = CognitoAuthProvider(
             region=config.cognito_region or "",
             user_pool_id=config.cognito_user_pool_id or "",
+            cognito_domain=config.cognito_domain or "",
             app_client_id=config.cognito_app_client_id,
             expected_token_use=config.cognito_token_use,
             leeway_seconds=config.cognito_jwt_leeway_seconds,
@@ -45,39 +46,6 @@ def extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
     if scheme.lower() != "bearer" or not token:
         return None
     return token.strip()
-
-
-async def authenticate_http_request(
-    authorization: Optional[str] = Header(default=None),
-) -> Optional[AuthenticatedUser]:
-    """FastAPI dependency for HTTP routes that should respect configured auth."""
-    config = get_config()
-    if not config.auth_enabled:
-        return None
-
-    token = extract_bearer_token(authorization)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        return await get_auth_provider().authenticate_token(token)
-    except AuthConfigurationError:
-        logger.exception("Authentication provider is misconfigured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Authentication provider is misconfigured",
-        )
-    except AuthError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=exc.message,
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-
 
 async def get_current_user_from_token(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
@@ -111,29 +79,3 @@ async def get_current_user_from_token(
             detail=exc.message,
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
-
-
-async def authenticate_websocket(websocket: WebSocket) -> Optional[AuthenticatedUser]:
-    """Authenticate a WebSocket handshake when auth is enabled."""
-    config = get_config()
-    #if not config.auth_enabled:
-    #    return None
-
-    token = extract_bearer_token(websocket.headers.get("authorization"))
-    if not token:
-        token = websocket.query_params.get("access_token")
-
-    if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        raise AuthError("Missing bearer token")
-
-    try:
-        return await get_auth_provider().authenticate_token(token)
-    except AuthConfigurationError:
-        logger.exception("Authentication provider is misconfigured")
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-        raise
-    except AuthError as e:
-        logger.error(f"Authentication error: {e}")
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        raise

@@ -10,18 +10,22 @@ from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from typing import TYPE_CHECKING
 from ..base import BaseModel
+
+if TYPE_CHECKING:
+    from src.db.models.conversation import Conversation
 
 
 class Message(BaseModel):
-    """A single message within a chat session."""
+    """A single message within a chat conversation."""
 
     __tablename__ = "messages"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    session_id: Mapped[uuid.UUID] = mapped_column(
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sessions.id", ondelete="CASCADE"),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )
@@ -36,4 +40,4 @@ class Message(BaseModel):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    session: Mapped["Session"] = relationship(back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")

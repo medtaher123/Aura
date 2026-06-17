@@ -25,7 +25,7 @@ from src.schemas.websocket import (
     get_osm_type_prefix,
 )
 
-from ..auth import AuthConfigurationError, AuthError, authenticate_websocket
+from ..auth import AuthConfigurationError, AuthError
 from ..config import get_config
 from ..core.logger import get_logger
 from ..core.memory import normalize_chat_messages

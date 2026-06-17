@@ -3,15 +3,15 @@
 from .chat import (
     MessageCreate,
     MessageRead,
-    SessionCreate,
-    SessionRead,
-    SessionWithMessages,
+    ConversationCreate,
+    ConversationRead,
+    ConversationWithMessages,
 )
 
 __all__ = [
-    "SessionCreate",
-    "SessionRead",
-    "SessionWithMessages",
+    "ConversationCreate",
+    "ConversationRead",
+    "ConversationWithMessages",
     "MessageCreate",
     "MessageRead",
 ]

@@ -15,6 +15,7 @@ class AuthenticatedUser:
     groups: tuple[str, ...]
     token_use: Optional[str]
     claims: Mapping[str, Any]
+    access_token: Optional[str]
 
 
 class AuthError(Exception):
@@ -35,3 +36,7 @@ class AuthProvider(ABC):
     @abstractmethod
     async def authenticate_token(self, token: str) -> AuthenticatedUser:
         """Validate an access token and return the authenticated user."""
+    
+    @abstractmethod
+    async def fetch_user_info(self, access_token: Optional[str]=None) -> dict[str, Any]:
+        """Fetch full user profile from the OAuth2 UserInfo endpoint."""

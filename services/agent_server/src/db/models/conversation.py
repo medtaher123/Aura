@@ -1,7 +1,8 @@
-"""Chat session ORM model."""
+"""Chat conversation ORM model."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import uuid
 from datetime import datetime
 
@@ -9,17 +10,19 @@ from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.db.models.message import Message
 from src.db.models.user import User
+
+if TYPE_CHECKING:
+    from src.db.models.message import Message
 
 
 from ..base import BaseModel
 
 
-class Session(BaseModel):
-    """A chat session belonging to a single user."""
+class Conversation(BaseModel):
+    """A chat conversation belonging to a single user."""
 
-    __tablename__ = "sessions"
+    __tablename__ = "conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -35,9 +38,9 @@ class Session(BaseModel):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="sessions")
+    user: Mapped["User"] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(
-        back_populates="session",
+        back_populates="conversation",
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="Message.id",

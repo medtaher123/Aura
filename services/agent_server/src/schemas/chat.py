@@ -1,4 +1,4 @@
-"""Schemas for chat session and message endpoints."""
+"""Schemas for chat conversation and message endpoints."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.db.models import User
 
 if TYPE_CHECKING:
-    from ..db.models import Message, Session
-    from ..db.services import SessionWithMessagesResult
+    from ..db.models import Message, Conversation
+    from ..db.services import ConversationWithMessagesResult
 
 
 class UserRead(BaseModel):
@@ -34,14 +34,14 @@ class UserRead(BaseModel):
         )
     
 
-class SessionCreate(BaseModel):
-    """Payload to create a new chat session."""
+class ConversationCreate(BaseModel):
+    """Payload to create a new chat conversation."""
 
     title: str | None = Field(default=None, max_length=255)
 
 
-class SessionRead(BaseModel):
-    """A chat session as returned by the API."""
+class ConversationRead(BaseModel):
+    """A chat conversation as returned by the API."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -51,13 +51,13 @@ class SessionRead(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_model(cls, session: "Session") -> "SessionRead":
-        """Map an ORM session to the public API schema."""
+    def from_model(cls, conversation: "Conversation") -> "ConversationRead":
+        """Map an ORM conversation to the public API schema."""
         return cls(
-            id=session.id,
-            user_id=session.user_id,
-            title=session.title,
-            created_at=session.created_at,
+            id=conversation.id,
+            user_id=conversation.user_id,
+            title=conversation.title,
+            created_at=conversation.created_at,
         )
 
 
@@ -79,7 +79,7 @@ class MessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    session_id: uuid.UUID
+    conversation_id: uuid.UUID
     role: str
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -90,7 +90,7 @@ class MessageRead(BaseModel):
         """Map ORM message attributes to the public API schema."""
         return cls(
             id=message.id,
-            session_id=message.session_id,
+            conversation_id=message.conversation_id,
             role=message.role,
             content=message.content,
             metadata=message.message_metadata,
@@ -98,19 +98,19 @@ class MessageRead(BaseModel):
         )
 
 
-class SessionWithMessages(SessionRead):
-    """A chat session including its messages."""
+class ConversationWithMessages(ConversationRead):
+    """A chat conversation including its messages."""
 
     messages: list[MessageRead] = Field(default_factory=list)
 
     @classmethod
-    def from_domain(cls, result: "SessionWithMessagesResult") -> "SessionWithMessages":
+    def from_domain(cls, result: "ConversationWithMessagesResult") -> "ConversationWithMessages":
         """Build a response from a service-layer domain result."""
-        session = result.session
+        conversation = result.conversation
         return cls(
-            id=session.id,
-            user_id=session.user_id,
-            title=session.title,
-            created_at=session.created_at,
+            id=conversation.id,
+            user_id=conversation.user_id,
+            title=conversation.title,
+            created_at=conversation.created_at,
             messages=[MessageRead.from_model(message) for message in result.messages],
         )
