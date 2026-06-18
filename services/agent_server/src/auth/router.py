@@ -6,6 +6,7 @@ import jwt
 from typing import Optional, Any
 from fastapi import Header, HTTPException, status
 
+from src.auth.auth_providers.test_povider import TestProvider
 from src.config import get_config
 
 # Import your base components and specific providers
@@ -28,10 +29,7 @@ class AuthRouter:
 
         config = get_config()
         enabled_providers = [p.strip().lower() for p in config.auth_providers.split(",") if p.strip()]
-
-        print("config.dev_mode: ", config.dev_mode)
-        if config.dev_mode:
-            enabled_providers.append("test")
+        enabled_providers.append(TestProvider.name)
 
 
         providers_dir = Path(__file__).resolve().parent / "auth_providers"

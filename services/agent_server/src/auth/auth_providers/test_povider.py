@@ -1,11 +1,15 @@
 from typing import Optional
-from src.auth.provider import AuthProvider, AuthenticatedUser, UserProfile
+from src.auth.provider import AuthConfigurationError, AuthProvider, AuthenticatedUser, UserProfile
+from src.config import get_config
+
 
 class TestProvider(AuthProvider):
     name = "test"
 
     def __init__(self):
-        pass
+        config = get_config()
+        if not config.dev_mode:
+            raise AuthConfigurationError("Test provider is only available in development mode")
 
     @property
     def issuer(self) -> str:

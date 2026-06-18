@@ -24,6 +24,9 @@ class AgentServerConfig(BaseSettings):
     log_level: str = Field(default="info", description="Logging level")
     timeout_seconds: int = Field(default=300, description="Request timeout in seconds")
 
+    ws_traffic_log_enabled: bool = Field(default=False, description="Enable WebSocket traffic logging")
+    ws_traffic_log_file: str = Field(default="logs/websocket_traffic.jsonl", description="WebSocket traffic log file")
+
     # MCP Server connection
     mcp_server_url: str = Field(
         default="http://localhost:8000",

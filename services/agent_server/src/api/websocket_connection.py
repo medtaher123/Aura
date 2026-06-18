@@ -30,6 +30,7 @@ from src.schemas.websocket import (
 from ..auth import AuthConfigurationError, AuthError
 from ..config import get_config
 from ..core.logger import get_logger
+from ..core.websocket_traffic_logger import log_websocket_traffic
 from ..core.memory import normalize_chat_messages
 from ..services.orchestrator_agent_service import create_orchestrator_executor
 from ..services.agent_runner import invoke_agent, coerce_tool_response
@@ -39,6 +40,7 @@ from ..services.translate_service import (
 )
 
 logger = get_logger("websocket")
+config = get_config()
 
 
 class WebSocketConnection:
@@ -59,14 +61,23 @@ class WebSocketConnection:
         """Accept the WebSocket connection and send acknowledgment."""
         await self.websocket.accept()
         await self.send(ConnectionAckMessage(server_version=self.config.version))
-        logger.info("WebSocket connection accepted")
+        logger.info(f"WebSocket connection accepted - connection_id: {self.connection_id}")
 
     async def send(self, message: Any) -> None:
         """Send a typed message to the client."""
         if hasattr(message, "model_dump"):
-            data = message.model_dump()
+            data = message.model_dump(mode="json")
         else:
             data = message
+        
+        if config.ws_traffic_log_enabled:
+            log_websocket_traffic(
+                direction="server_to_client",
+                connection_id=self.connection_id,
+                user_id=self.user_id,
+                message_type=data.get("type") if isinstance(data, dict) else None,
+                payload=data,
+            )
         await self.websocket.send_json(data)
 
     async def send_token(self, content: str) -> None:

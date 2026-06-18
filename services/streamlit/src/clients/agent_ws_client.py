@@ -121,6 +121,7 @@ class AgentWebSocketClient:
         self._websocket: Optional[Any] = None
         self._connected = False
         self._cancelled = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_id: Optional[int] = None
 
         logger.info(f"Initialized WebSocket client for URL: {self.url}")
@@ -192,7 +193,8 @@ class AgentWebSocketClient:
 
                 if ack_data.get("type") == "connection_ack":
                     self._connected = True
-                    self._loop_id = id(asyncio.get_event_loop())
+                    self._loop = asyncio.get_event_loop()
+                    self._loop_id = id(self._loop)
                     logger.info("Successfully connected to Agent Server")
                     return
                 else:
@@ -227,6 +229,7 @@ class AgentWebSocketClient:
             finally:
                 self._websocket = None
                 self._connected = False
+                self._loop = None
                 self._loop_id = None
 
     async def _send_and_receive(
@@ -273,6 +276,8 @@ class AgentWebSocketClient:
             async for raw_msg in self._websocket:
                 if self._cancelled:
                     await self._websocket.send(json.dumps({"type": "cancel"}))
+                    await self._disconnect()
+                    accumulated_response = "Request cancelled."
                     break
 
                 try:
@@ -369,6 +374,20 @@ class AgentWebSocketClient:
 
         except ConnectionClosed as e:
             self._connected = False
+            if self._cancelled:
+                self._websocket = None
+                self._loop = None
+                self._loop_id = None
+                return ChatResponse(
+                    response="Request cancelled.",
+                    conversation_id=conversation_id,
+                    conversation_title=conversation_title,
+                    artifacts=final_artifacts,
+                    error=False,
+                    needs_location_confirmation=False,
+                    location_options=[],
+                    pause_state={},
+                )
             logger.error(f"WebSocket connection closed unexpectedly: {e}")
             raise ConnectionError("WebSocket connection closed unexpectedly")
 
@@ -455,6 +474,21 @@ class AgentWebSocketClient:
     def cancel(self) -> None:
         """Cancel the current operation."""
         self._cancelled = True
+        if not self._connected or self._websocket is None:
+            return
+
+        async def _send_cancel() -> None:
+            if self._websocket is not None:
+                await self._websocket.send(json.dumps({"type": "cancel"}))
+                await self._websocket.close()
+
+        try:
+            if self._loop and self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(_send_cancel(), self._loop)
+            else:
+                self._run_sync(_send_cancel())
+        except Exception as e:
+            logger.warning(f"Failed to send cancel request: {type(e).__name__}: {e}")
 
     def close(self) -> None:
         """Close the WebSocket connection."""
