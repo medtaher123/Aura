@@ -22,6 +22,7 @@ class UserRead(BaseModel):
 
     id: str
     email: Optional[str] = None
+    username: Optional[str] = None
     created_at: datetime
 
     @classmethod
@@ -29,6 +30,7 @@ class UserRead(BaseModel):
         """Map an ORM user to the public API schema."""
         return cls(
             id=user.id,
+            username=user.username,
             email=user.email,
             created_at=user.created_at,
         )

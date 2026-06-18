@@ -1,8 +1,9 @@
 
 import asyncio
 import json
-from typing import Any, Optional
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -14,6 +15,7 @@ from src.schemas.websocket import (
     ChatResumeMessage,
     ClientMessageType,
     CompleteMessage,
+    ConversationTitleMessage,
     ConnectionAckMessage,
     ErrorMessage,
     LocationConfirmationMessage,
@@ -46,10 +48,12 @@ class WebSocketConnection:
     Provides methods for sending typed messages and managing connection state.
     """
 
-    def __init__(self, websocket: WebSocket):
+    def __init__(self, websocket: WebSocket, user_id: str | None = None):
         self.websocket = websocket
         self.config = get_config()
         self._cancelled = False
+        self.connection_id = str(uuid.uuid4())
+        self.user_id = user_id
 
     async def accept(self) -> None:
         """Accept the WebSocket connection and send acknowledgment."""
@@ -103,17 +107,33 @@ class WebSocketConnection:
             LocationConfirmationMessage(options=options, pause_state=pause_state)
         )
 
+    async def send_conversation_title(
+        self, conversation_id: uuid.UUID, title: str
+    ) -> None:
+        """Send generated conversation title."""
+        await self.send(
+            ConversationTitleMessage(conversation_id=conversation_id, title=title)
+        )
+
     async def send_complete(
         self,
         response: str,
+        conversation_id: Optional[uuid.UUID | str] = None,
         artifacts: Optional[ToolArtifacts] = None,
         error: bool = False,
     ) -> None:
         """Send completion message."""
         artifacts = artifacts or ToolArtifacts()
+        if isinstance(conversation_id, str):
+            normalized_conversation_id = (
+                uuid.UUID(conversation_id) if conversation_id else None
+            )
+        else:
+            normalized_conversation_id = conversation_id
         await self.send(
             CompleteMessage(
                 response=response,
+                conversation_id=normalized_conversation_id,
                 artifacts=artifacts,
                 error=error,
             )

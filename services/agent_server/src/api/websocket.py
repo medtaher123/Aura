@@ -6,15 +6,17 @@ Manages real-time communication with clients for agent orchestration.
 
 import asyncio
 import json
+import uuid
 from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user
 from src.api.websocket_connection import WebSocketConnection
-from src.db import User
+from src.db import ConversationService, User, get_db
 from src.schemas.websocket import (
     AgentStage,
     ToolArtifacts,
@@ -35,6 +37,7 @@ from src.schemas.websocket import (
 from ..auth import AuthConfigurationError, AuthError
 from ..config import get_config
 from ..core.logger import get_logger
+from ..core.websocket_traffic_logger import log_websocket_traffic
 from ..core.memory import normalize_chat_messages
 from ..services.orchestrator_agent_service import create_orchestrator_executor
 from ..services.agent_runner import invoke_agent, coerce_tool_response
@@ -46,6 +49,38 @@ from ..services.translate_service import (
 
 logger = get_logger("websocket")
 router = APIRouter()
+
+
+async def _generate_update_and_send_conversation_title(
+    *,
+    conn: WebSocketConnection,
+    conversations: ConversationService,
+    user: User,
+    conversation_id: uuid.UUID,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    """Generate a title for a new conversation and notify the client."""
+    try:
+        loop = asyncio.get_running_loop()
+        title = await loop.run_in_executor(
+            None,
+            lambda: conversations.generate_title(user_message, assistant_message),
+        )
+        conversation = await conversations.update_title(user, conversation_id, title)
+        if conversation is None:
+            logger.warning(
+                f"Skipped title event because conversation was not found: {conversation_id}"
+            )
+            return
+        await conn.send_conversation_title(conversation.id, conversation.title)
+        logger.info(
+            f"Generated conversation title - conversation_id: {conversation.id}, title: {conversation.title}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Conversation title generation failed for {conversation_id}: {type(e).__name__}: {e}"
+        )
 
 
 def _patch_resume_state_with_confirmed_location(
@@ -110,7 +145,10 @@ def _patch_resume_state_with_confirmed_location(
 
 
 async def handle_chat_request(
-    conn: WebSocketConnection, message: ChatRequestMessage
+    conn: WebSocketConnection,
+    message: ChatRequestMessage,
+    user: User,
+    conversations: ConversationService,
 ) -> None:
     """
     Handle a chat request from the client.
@@ -118,8 +156,15 @@ async def handle_chat_request(
     This is the main entry point for agent orchestration.
     """
     try:
+        conversation_context = await conversations.get_or_create_conversation_with_messages(
+            user, message.conversation_id
+        )
+        if conversation_context is None:
+            await conn.send_error("Conversation not found", recoverable=True)
+            return
+
         logger.info(
-            f"Chat request received - message length: {len(message.message)}, history size: {len(message.chat_history)}, confirmed_locations: {len(message.confirmed_locations)}"
+            f"Chat request received - message length: {len(message.message)}, conversation_id: {conversation_context.conversation.id}, new_conversation: {conversation_context.created}, history size: {len(conversation_context.messages)}, confirmed_locations: {len(message.confirmed_locations)}"
         )
 
         # Send initial status
@@ -140,9 +185,11 @@ async def handle_chat_request(
                 english_message, _ = detect_and_translate_to_english(user_message)
                 logger.debug(f"Translated from {detected_lang} to English")
 
-        # Normalize chat history
         chat_history = normalize_chat_messages(
-            [{"role": m.role, "content": m.content} for m in message.chat_history]
+            [
+                {"role": m.role, "content": m.content}
+                for m in conversation_context.messages
+            ]
         )
 
         # Create stream callback for real-time updates
@@ -215,7 +262,11 @@ async def handle_chat_request(
 
         # Check for cancellation
         if conn.is_cancelled():
-            await conn.send_complete(response="Request cancelled.", error=False)
+            await conn.send_complete(
+                response="Request cancelled.",
+                conversation_id=conversation_context.conversation.id,
+                error=False,
+            )
             return
 
         # Process result
@@ -241,6 +292,9 @@ async def handle_chat_request(
             ]
             pause_state = data.get("pause", {})
             pause_state["detected_lang"] = detected_lang
+            pause_state["conversation_id"] = str(conversation_context.conversation.id)
+            pause_state["conversation_title_pending"] = conversation_context.created
+            pause_state["title_user_message"] = english_message
             logger.info(
                 f"Location confirmation required - {len(options)} options provided"
             )
@@ -254,12 +308,32 @@ async def handle_chat_request(
         response_message = translate_from_english(tool_response.message, detected_lang)
         logger.debug(f"Translated response to {detected_lang}")
 
+        await conversations.append_messages(
+            user,
+            conversation_context.conversation.id,
+            [
+                {"role": "user", "content": english_message},
+                {"role": "assistant", "content": tool_response.message},
+            ],
+        )
+
+        if conversation_context.created:
+            await _generate_update_and_send_conversation_title(
+                conn=conn,
+                conversations=conversations,
+                user=user,
+                conversation_id=conversation_context.conversation.id,
+                user_message=english_message,
+                assistant_message=tool_response.message,
+            )
+
         # Send completion
         logger.info(
             f"Chat request completed - error: {tool_response.error}, artifacts: {len(tool_response.artifacts.maps)} maps, {len(tool_response.artifacts.urls)} urls"
         )
         await conn.send_complete(
             response=response_message,
+            conversation_id=conversation_context.conversation.id,
             artifacts=tool_response.artifacts,
             error=tool_response.error,
         )
@@ -270,7 +344,10 @@ async def handle_chat_request(
 
 
 async def handle_chat_resume(
-    conn: WebSocketConnection, message: ChatResumeMessage
+    conn: WebSocketConnection,
+    message: ChatResumeMessage,
+    user: User,
+    conversations: ConversationService,
 ) -> None:
     """
     Handle a chat resume request after location confirmation.
@@ -287,6 +364,22 @@ async def handle_chat_resume(
         # Extract resume information
         pause_state = message.pause_state
         confirmed_location = message.confirmed_location
+        title_pending = bool(pause_state.get("conversation_title_pending"))
+        title_user_message = pause_state.get("title_user_message") or pause_state.get(
+            "user_text", ""
+        )
+        conversation_id_raw = pause_state.get("conversation_id")
+        try:
+            conversation_id = (
+                uuid.UUID(conversation_id_raw)
+                if isinstance(conversation_id_raw, str) and conversation_id_raw
+                else conversation_id_raw
+                if isinstance(conversation_id_raw, uuid.UUID)
+                else None
+            )
+        except ValueError:
+            logger.warning(f"Invalid conversation_id in pause_state: {conversation_id_raw}")
+            conversation_id = None
 
         # Build resume payload for orchestrator
         resume_payload = {
@@ -384,7 +477,11 @@ async def handle_chat_resume(
 
         # Check for cancellation
         if conn.is_cancelled():
-            await conn.send_complete(response="Request cancelled.", error=False)
+            await conn.send_complete(
+                response="Request cancelled.",
+                conversation_id=conversation_id,
+                error=False,
+            )
             return
 
         # Process result
@@ -412,6 +509,11 @@ async def handle_chat_resume(
             ]
             new_pause_state = data.get("pause", {})
             new_pause_state["detected_lang"] = detected_lang
+            if conversation_id:
+                new_pause_state["conversation_id"] = str(conversation_id)
+            if title_pending:
+                new_pause_state["conversation_title_pending"] = True
+                new_pause_state["title_user_message"] = title_user_message
             logger.info(
                 f"Another location confirmation required during resume - {len(options)} options provided"
             )
@@ -423,11 +525,31 @@ async def handle_chat_resume(
 
         artifacts = tool_response.artifacts
 
+        if conversation_id:
+            await conversations.append_messages(
+                user,
+                conversation_id,
+                [
+                    {"role": "user", "content": resume_payload.get("user_text", "")},
+                    {"role": "assistant", "content": tool_response.message},
+                ],
+            )
+            if title_pending:
+                await _generate_update_and_send_conversation_title(
+                    conn=conn,
+                    conversations=conversations,
+                    user=user,
+                    conversation_id=conversation_id,
+                    user_message=str(title_user_message),
+                    assistant_message=tool_response.message,
+                )
+
         logger.info(
             f"Chat resume completed - error: {tool_response.error}, artifacts: {len(artifacts.maps)} maps, {len(artifacts.urls)} urls"
         )
         await conn.send_complete(
             response=response_message,
+            conversation_id=conversation_id,
             artifacts=artifacts,
             error=tool_response.error,
         )
@@ -438,7 +560,11 @@ async def handle_chat_resume(
 
 
 @router.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_user)) -> None:
+async def websocket_chat(
+    websocket: WebSocket,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
     """
     WebSocket endpoint for real-time chat with the agent.
 
@@ -448,34 +574,84 @@ async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_
     3. Route messages to appropriate handlers
     4. Handle disconnection gracefully
     """
-    conn = WebSocketConnection(websocket)
+    conn = WebSocketConnection(websocket, user_id=user.id)
+    conversations = ConversationService(db)
+    active_task: asyncio.Task[None] | None = None
 
     try:
         await conn.accept()
+        log_websocket_traffic(
+            event="connection_open",
+            direction="server",
+            connection_id=conn.connection_id,
+            user_id=conn.user_id,
+            message_type=None,
+            payload={"path": websocket.url.path},
+        )
         logger.info("WebSocket connection established")
 
         while True:
+            if active_task and active_task.done():
+                try:
+                    await active_task
+                except asyncio.CancelledError:
+                    logger.info("Active WebSocket request task was cancelled")
+                except Exception:
+                    logger.exception("Active WebSocket request task failed")
+                active_task = None
+
             # Receive and parse message
+            raw_data = ""
             try:
                 raw_data = await websocket.receive_text()
                 data = json.loads(raw_data)
             except json.JSONDecodeError as e:
+                log_websocket_traffic(
+                    event="invalid_json",
+                    direction="client_to_server",
+                    connection_id=conn.connection_id,
+                    user_id=conn.user_id,
+                    message_type=None,
+                    payload={"raw": raw_data, "error": str(e)},
+                )
                 logger.warning(f"Received invalid JSON from client: {e}")
                 await conn.send_error(f"Invalid JSON: {e}", recoverable=True)
                 continue
 
             # Get message type
-            msg_type = data.get("type")
+            msg_type = data.get("type") if isinstance(data, dict) else None
+            log_websocket_traffic(
+                direction="client_to_server",
+                connection_id=conn.connection_id,
+                user_id=conn.user_id,
+                message_type=msg_type,
+                payload=data,
+            )
+            if not isinstance(data, dict):
+                logger.warning("Received non-object JSON from client")
+                await conn.send_error(
+                    "Invalid message format: expected JSON object", recoverable=True
+                )
+                continue
+
             logger.debug(f"Received message type: {msg_type}")
 
             if msg_type == ClientMessageType.CHAT_REQUEST.value:
                 try:
+                    if active_task and not active_task.done():
+                        await conn.send_error(
+                            "A request is already running. Cancel it before starting another.",
+                            recoverable=True,
+                        )
+                        continue
                     message = ChatRequestMessage(**data)
                     conn.reset_cancellation()
                     logger.debug(
                         f"Processing chat_request: message_length={len(message.message)}"
                     )
-                    await handle_chat_request(conn, message)
+                    active_task = asyncio.create_task(
+                        handle_chat_request(conn, message, user, conversations)
+                    )
                 except ValidationError as e:
                     logger.error(f"Chat request validation error: {e}")
                     await conn.send_error(
@@ -484,6 +660,12 @@ async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_
 
             elif msg_type == ClientMessageType.CHAT_RESUME.value:
                 try:
+                    if active_task and not active_task.done():
+                        await conn.send_error(
+                            "A request is already running. Cancel it before starting another.",
+                            recoverable=True,
+                        )
+                        continue
                     logger.debug(
                         f"Processing chat_resume: data: {json.dumps(data, indent=2)}"
                     )
@@ -492,7 +674,9 @@ async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_
                         f"Processing chat_resume: location={message.confirmed_location.name}"
                     )
                     conn.reset_cancellation()
-                    await handle_chat_resume(conn, message)
+                    active_task = asyncio.create_task(
+                        handle_chat_resume(conn, message, user, conversations)
+                    )
                 except ValidationError as e:
                     logger.error(f"Chat resume validation error: {e}")
                     await conn.send_error(
@@ -502,6 +686,7 @@ async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_
             elif msg_type == ClientMessageType.CANCEL.value:
                 conn.cancel()
                 logger.info("Client requested cancellation")
+                await conn.send_complete(response="Request cancelled.", error=False)
 
             else:
                 logger.warning(f"Unknown message type received: {msg_type}")
@@ -514,6 +699,14 @@ async def websocket_chat(websocket: WebSocket, user: User = Depends(get_current_
     except AuthConfigurationError as e:
         logger.exception("WebSocket authentication is misconfigured")
     except WebSocketDisconnect as e:
+        log_websocket_traffic(
+            event="connection_closed",
+            direction="client",
+            connection_id=conn.connection_id,
+            user_id=conn.user_id,
+            message_type=None,
+            payload={"code": e.code, "reason": e.reason},
+        )
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.exception("WebSocket error")

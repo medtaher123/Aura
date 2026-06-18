@@ -33,6 +33,8 @@ class AgentResponse:
     """Unified response from agent."""
 
     message: str
+    conversation_id: Optional[str] = None
+    conversation_title: Optional[str] = None
     artifacts: ToolArtifacts = field(default_factory=lambda: ToolArtifacts())
     error: bool = False
     needs_location_confirmation: bool = False
@@ -88,6 +90,7 @@ class RemoteAgentAdapter:
         document_context: Optional[str] = None,
         resume: Optional[dict] = None,
         confirmed_location: Optional[dict] = None,
+        conversation_id: Optional[str] = None,
         stream_callback: Optional[Callable[[dict], None]] = None,
         language: Optional[str] = None,
     ) -> AgentResponse:
@@ -174,6 +177,7 @@ class RemoteAgentAdapter:
                 logger.debug("Sending normal chat request")
                 response = client.send_chat(
                     message=message,
+                    conversation_id=conversation_id,
                     chat_history=history,
                     document_context=document_context,
                     language=language,
@@ -212,6 +216,8 @@ class RemoteAgentAdapter:
 
             return AgentResponse(
                 message=response.response,
+                conversation_id=response.conversation_id,
+                conversation_title=response.conversation_title,
                 artifacts=artifacts,
                 error=response.error,
                 needs_location_confirmation=response.needs_location_confirmation,
@@ -234,6 +240,12 @@ class RemoteAgentAdapter:
             logger.info("Closing WebSocket client")
             self._client.close()
             self._client = None
+
+    def cancel(self):
+        """Cancel the active WebSocket request, if any."""
+        if self._client:
+            logger.info("Cancelling active WebSocket request")
+            self._client.cancel()
 
 
 def get_agent_adapter() -> RemoteAgentAdapter:

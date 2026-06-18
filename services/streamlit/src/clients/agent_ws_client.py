@@ -50,6 +50,8 @@ class ChatResponse:
     """Response from agent chat."""
 
     response: str
+    conversation_id: Optional[str] = None
+    conversation_title: Optional[str] = None
     artifacts: dict = field(
         default_factory=lambda: {"maps": [], "thumbnails": [], "urls": []}
     )
@@ -264,6 +266,8 @@ class AgentWebSocketClient:
         needs_location_confirmation = False
         location_options = []
         pause_state = {}
+        conversation_id = None
+        conversation_title = None
 
         try:
             async for raw_msg in self._websocket:
@@ -327,13 +331,20 @@ class AgentWebSocketClient:
                     needs_location_confirmation = True
                     location_options = data.get("options", [])
                     pause_state = data.get("pause_state", {})
+                    conversation_id = pause_state.get("conversation_id")
                     logger.info(
                         f"Location confirmation requested with {len(location_options)} options"
                     )
                     break
 
+                elif msg_type == "conversation_title":
+                    conversation_id = data.get("conversation_id") or conversation_id
+                    conversation_title = data.get("title") or conversation_title
+                    logger.info(f"Conversation title generated: {conversation_title}")
+
                 elif msg_type == "complete":
                     accumulated_response = data.get("response", accumulated_response)
+                    conversation_id = data.get("conversation_id") or conversation_id
                     response_artifacts = data.get("artifacts", {})
                     error = data.get("error", False)
                     logger.info(f"Agent response complete (error={error})")
@@ -363,6 +374,8 @@ class AgentWebSocketClient:
 
         return ChatResponse(
             response=accumulated_response,
+            conversation_id=conversation_id,
+            conversation_title=conversation_title,
             artifacts=final_artifacts,
             error=error,
             needs_location_confirmation=needs_location_confirmation,
@@ -373,6 +386,7 @@ class AgentWebSocketClient:
     def send_chat(
         self,
         message: str,
+        conversation_id: Optional[str] = None,
         chat_history: Optional[list[ChatMessage]] = None,
         confirmed_locations: Optional[dict[str, list[float]]] = None,
         document_context: Optional[str] = None,
@@ -386,6 +400,7 @@ class AgentWebSocketClient:
         payload = {
             "type": "chat_request",
             "message": message,
+            "conversation_id": conversation_id,
             "chat_history": [m.to_dict() for m in (chat_history or [])],
             "confirmed_locations": confirmed_locations or {},
             "document_context": document_context,

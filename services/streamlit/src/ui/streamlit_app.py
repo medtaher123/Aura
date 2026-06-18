@@ -14,6 +14,7 @@ from typing_extensions import TypedDict
 import numpy as np
 import streamlit as st
 import pydeck as pdk
+import requests
 from PIL import Image
 from dotenv import load_dotenv
 from streamlit.delta_generator import DeltaGenerator
@@ -155,6 +156,7 @@ def _invoke_agent_unified(
     chat_history=None,
     resume=None,
     confirmed_location=None,
+    conversation_id=None,
     stream_callback=None,
     language=None,
     document_context=None,
@@ -171,6 +173,7 @@ def _invoke_agent_unified(
         document_context=document_context,
         resume=resume,
         confirmed_location=confirmed_location,
+        conversation_id=conversation_id,
         stream_callback=stream_callback,
         language=language,
     )
@@ -359,6 +362,138 @@ def _augment_with_document(english_query: str) -> str:
     return english_query
 
 
+def _get_conversation_id_from_query_params() -> str | None:
+    value = st.query_params.get("conversation_id")
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _set_conversation_id_query_param(conversation_id: str) -> None:
+    if _get_conversation_id_from_query_params() == conversation_id:
+        return
+    st.query_params["conversation_id"] = conversation_id
+
+
+def _clear_conversation_id_query_param() -> None:
+    if "conversation_id" in st.query_params:
+        del st.query_params["conversation_id"]
+
+
+def _store_conversation_id(conversation_id: str | None) -> None:
+    if not conversation_id:
+        return
+    st.session_state.conversation_id = conversation_id
+    _set_conversation_id_query_param(conversation_id)
+
+
+def _store_conversation_title(
+    conversation_id: str | None, conversation_title: str | None
+) -> None:
+    if not conversation_id or not conversation_title:
+        return
+    titles = st.session_state.get("conversation_titles")
+    if not isinstance(titles, dict):
+        titles = {}
+    titles[conversation_id] = conversation_title
+    st.session_state.conversation_titles = titles
+
+
+def _agent_server_http_base_url(agent_url: str) -> str:
+    if "://" not in agent_url:
+        agent_url = f"http://{agent_url}"
+    parsed = urlparse(agent_url)
+    scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme or "http")
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    if path.endswith("/ws/chat"):
+        path = path[: -len("/ws/chat")]
+    return f"{scheme}://{netloc}{path}".rstrip("/")
+
+
+def _agent_server_headers(auth_token: str | None) -> dict[str, str]:
+    if not auth_token:
+        return {}
+    return {"Authorization": f"Bearer {auth_token}"}
+
+
+def _list_conversations(agent_url: str, auth_token: str | None) -> list[dict]:
+    response = requests.get(
+        f"{_agent_server_http_base_url(agent_url)}/conversations",
+        headers=_agent_server_headers(auth_token),
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _get_conversation(
+    agent_url: str, auth_token: str | None, conversation_id: str
+) -> dict | None:
+    response = requests.get(
+        f"{_agent_server_http_base_url(agent_url)}/conversations/{conversation_id}",
+        headers=_agent_server_headers(auth_token),
+        timeout=10,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else None
+
+
+def _conversation_messages_to_chat_state(messages: list[dict]) -> tuple[list[Message], list[dict]]:
+    ui_messages: list[Message] = []
+    agent_messages: list[dict] = []
+
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content") or ""
+        if role == "user":
+            ui_messages.append(UserMessage(role="user", content=content))
+            agent_messages.append({"role": "user", "content": content})
+        elif role == "assistant":
+            ui_messages.append(
+                AssistantMessage(
+                    role="assistant",
+                    content=content,
+                    artifacts=ToolArtifacts(),
+                    error=False,
+                )
+            )
+            agent_messages.append({"role": "assistant", "content": content})
+
+    return ui_messages, agent_messages
+
+
+def _load_conversation_into_session(
+    agent_url: str, auth_token: str | None, conversation_id: str
+) -> None:
+    conversation = _get_conversation(agent_url, auth_token, conversation_id)
+    if conversation is None:
+        st.warning("Conversation not found. Starting a new conversation.")
+        st.session_state.conversation_id = None
+        st.session_state.loaded_conversation_id = None
+        st.session_state.messages = []
+        st.session_state.messages_en = []
+        st.session_state.pending_location_confirmation = None
+        _clear_conversation_id_query_param()
+        return
+
+    messages = conversation.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+    ui_messages, agent_messages = _conversation_messages_to_chat_state(messages)
+    st.session_state.messages = ui_messages
+    st.session_state.messages_en = agent_messages
+    st.session_state.pending_location_confirmation = None
+    st.session_state.loaded_conversation_id = conversation_id
+
+
 # ---------------------------------------------------
 # SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
@@ -379,6 +514,23 @@ if "agent_executor" not in st.session_state:
 
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
+
+conversation_id_from_query = _get_conversation_id_from_query_params()
+
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = conversation_id_from_query
+elif conversation_id_from_query != st.session_state.conversation_id:
+    st.session_state.conversation_id = conversation_id_from_query
+    st.session_state.messages = []
+    st.session_state.messages_en = []
+    st.session_state.pending_location_confirmation = None
+    st.session_state.loaded_conversation_id = None
+
+if "loaded_conversation_id" not in st.session_state:
+    st.session_state.loaded_conversation_id = None
+
+if "conversation_titles" not in st.session_state:
+    st.session_state.conversation_titles = {}
 
 if "pending_location_confirmation" not in st.session_state:
     st.session_state.pending_location_confirmation = None
@@ -413,6 +565,7 @@ with st.sidebar:
     st.caption(f"Connected to: {agent_url}")
 
     st.subheader("Agent Auth")
+    effective_auth_token = ""
 
     if auth_enabled() and cognito_tokens:
         # Logged in via Cognito Hosted UI: forward the access token.
@@ -434,6 +587,44 @@ with st.sidebar:
         st.caption("Agent auth token is set.")
     else:
         st.caption("No Agent Server auth token configured.")
+
+    st.divider()
+    st.subheader("Conversations")
+
+    if st.button("New conversation", use_container_width=True):
+        st.session_state.conversation_id = None
+        st.session_state.loaded_conversation_id = None
+        st.session_state.messages = []
+        st.session_state.messages_en = []
+        st.session_state.pending_location_confirmation = None
+        _clear_conversation_id_query_param()
+        st.rerun()
+
+    try:
+        conversations = _list_conversations(agent_url, effective_auth_token or None)
+        if not conversations:
+            st.caption("No conversations yet.")
+        for conversation in conversations:
+            conversation_id = str(conversation.get("id") or "")
+            if not conversation_id:
+                continue
+            title = (
+                st.session_state.conversation_titles.get(conversation_id)
+                or conversation.get("title")
+                or "New chat"
+            )
+            if st.button(
+                title,
+                key=f"conversation_{conversation_id}",
+                use_container_width=True,
+            ):
+                st.session_state.conversation_id = conversation_id
+                st.session_state.loaded_conversation_id = None
+                _set_conversation_id_query_param(conversation_id)
+                st.rerun()
+    except Exception as e:
+        logger.warning(f"Failed to load conversations: {type(e).__name__}: {e}")
+        st.caption("Could not load conversations.")
 
     st.divider()
     st.subheader("Document (PDF)")
@@ -480,6 +671,23 @@ with st.sidebar:
         logger.info("Clearing document context")
         st.session_state.document_text = ""
         st.session_state.document_name = ""
+
+
+if (
+    st.session_state.conversation_id
+    and st.session_state.loaded_conversation_id != st.session_state.conversation_id
+):
+    try:
+        _load_conversation_into_session(
+            agent_url,
+            effective_auth_token or None,
+            st.session_state.conversation_id,
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to load conversation {st.session_state.conversation_id}: {type(e).__name__}: {e}"
+        )
+        st.warning("Could not load the selected conversation.")
 
 
 # ---------------------------------------------------
@@ -660,6 +868,10 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         resume=resume,
                         confirmed_location=auto_loc,
                         stream_callback=live_callback,
+                    )
+                    _store_conversation_id(result.conversation_id)
+                    _store_conversation_title(
+                        result.conversation_id, result.conversation_title
                     )
                     logger.info("Auto-confirm completed successfully")
                     logger.debug(
@@ -858,6 +1070,10 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         confirmed_location=confirmed_loc,
                         stream_callback=live_callback,
                     )
+                    _store_conversation_id(result.conversation_id)
+                    _store_conversation_title(
+                        result.conversation_id, result.conversation_title
+                    )
                     logger.info(
                         "Resume after location confirmation completed successfully"
                     )
@@ -949,8 +1165,13 @@ if user_input:
                 result = _invoke_agent_unified(
                     agent_executor,
                     english_query_augmented,
+                    conversation_id=st.session_state.conversation_id,
                     chat_history=history_for_agent,
                     stream_callback=live_callback,
+                )
+                _store_conversation_id(result.conversation_id)
+                _store_conversation_title(
+                    result.conversation_id, result.conversation_title
                 )
                 logger.info("Agent response received successfully")
                 logger.debug(

@@ -5,8 +5,9 @@ Defines the message protocol for client-server communication.
 """
 
 from enum import Enum
+import uuid
 from typing_extensions import Any, Callable, Literal, Optional, TypedDict
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from src.tools.contracts import ToolArtifacts
 
@@ -33,6 +34,7 @@ class ServerMessageType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
     LOCATION_CONFIRMATION = "location_confirmation"
+    CONVERSATION_TITLE = "conversation_title"
     COMPLETE = "complete"
     ERROR = "error"
 
@@ -137,8 +139,14 @@ class ChatRequestMessage(BaseModel):
 
     type: str = Field(default=ClientMessageType.CHAT_REQUEST.value)
     message: str = Field(..., description="User message")
-    chat_history: list[ChatMessage] = Field(
-        default_factory=list, description="Previous conversation history"
+    conversation_history: list[ChatMessage] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("conversation_history", "chat_history"),
+        description="Previous conversation history",
+    )
+    conversation_id: Optional[uuid.UUID] = Field(
+        default=None,
+        description="Conversation ID to load history from when history is not provided",
     )
     confirmed_locations: dict[str, list[float]] = Field(
         default_factory=dict,
@@ -227,11 +235,22 @@ class LocationConfirmationMessage(BaseModel):
     )
 
 
+class ConversationTitleMessage(BaseModel):
+    """Generated title for a conversation."""
+
+    type: str = Field(default=ServerMessageType.CONVERSATION_TITLE.value)
+    conversation_id: uuid.UUID = Field(..., description="Conversation that was titled")
+    title: str = Field(..., description="Generated conversation title")
+
+
 class CompleteMessage(BaseModel):
     """Final response indicating completion."""
 
     type: str = Field(default=ServerMessageType.COMPLETE.value)
     response: str = Field(..., description="Final response text")
+    conversation_id: Optional[uuid.UUID] = Field(
+        default=None, description="Conversation associated with this response"
+    )
     artifacts: ToolArtifacts = Field(default=ToolArtifacts(), description="Artifacts")
     error: bool = Field(default=False, description="Whether an error occurred")
 
@@ -256,6 +275,7 @@ ServerMessage = (
     | ToolStartMessage
     | ToolResultMessage
     | LocationConfirmationMessage
+    | ConversationTitleMessage
     | CompleteMessage
     | ErrorMessage
 )
