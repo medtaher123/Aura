@@ -457,12 +457,24 @@ def _conversation_messages_to_chat_state(messages: list[dict]) -> tuple[list[Mes
             ui_messages.append(UserMessage(role="user", content=content))
             agent_messages.append({"role": "user", "content": content})
         elif role == "assistant":
+            metadata = message.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            artifacts_data = metadata.get("artifacts")
+            if isinstance(artifacts_data, dict):
+                artifacts = ToolArtifacts(
+                    maps=artifacts_data.get("maps", []),
+                    thumbnails=artifacts_data.get("thumbnails", []),
+                    urls=artifacts_data.get("urls", []),
+                )
+            else:
+                artifacts = ToolArtifacts()
             ui_messages.append(
                 AssistantMessage(
                     role="assistant",
                     content=content,
-                    artifacts=ToolArtifacts(),
-                    error=False,
+                    artifacts=artifacts,
+                    error=bool(metadata.get("error", False)),
                 )
             )
             agent_messages.append({"role": "assistant", "content": content})

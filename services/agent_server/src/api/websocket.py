@@ -51,6 +51,26 @@ logger = get_logger("websocket")
 router = APIRouter()
 
 
+def _assistant_message_metadata(tool_response: Any) -> dict[str, Any]:
+    """Build the JSONB metadata persisted alongside an assistant message.
+
+    Artifacts (maps, thumbnails, urls) are produced by tools and must be stored
+    so a reloaded conversation can re-render them, not just the text content.
+    """
+    artifacts = getattr(tool_response, "artifacts", None)
+    if artifacts is not None and hasattr(artifacts, "model_dump"):
+        artifacts_data = artifacts.model_dump(mode="json")
+    elif isinstance(artifacts, dict):
+        artifacts_data = artifacts
+    else:
+        artifacts_data = ToolArtifacts().model_dump(mode="json")
+
+    return {
+        "artifacts": artifacts_data,
+        "error": bool(getattr(tool_response, "error", False)),
+    }
+
+
 async def _generate_update_and_send_conversation_title(
     *,
     conn: WebSocketConnection,
@@ -313,7 +333,11 @@ async def handle_chat_request(
             conversation_context.conversation.id,
             [
                 {"role": "user", "content": english_message},
-                {"role": "assistant", "content": tool_response.message},
+                {
+                    "role": "assistant",
+                    "content": tool_response.message,
+                    "metadata": _assistant_message_metadata(tool_response),
+                },
             ],
         )
 
@@ -531,7 +555,11 @@ async def handle_chat_resume(
                 conversation_id,
                 [
                     {"role": "user", "content": resume_payload.get("user_text", "")},
-                    {"role": "assistant", "content": tool_response.message},
+                    {
+                        "role": "assistant",
+                        "content": tool_response.message,
+                        "metadata": _assistant_message_metadata(tool_response),
+                    },
                 ],
             )
             if title_pending:
