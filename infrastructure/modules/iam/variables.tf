@@ -18,6 +18,12 @@ variable "aws_account_id" {
   type        = string
 }
 
+variable "execution_role_name" {
+  description = "Name of the ECS task execution role. Override per-stack to avoid account-global IAM name collisions when running multiple stacks in the same account."
+  type        = string
+  default     = "ecsTaskExecutionRole"
+}
+
 variable "opentopo_api_key_arn" {
   description = "ARN for OpenTopo API key secret"
   type        = string

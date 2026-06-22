@@ -166,21 +166,51 @@ resource "aws_ecr_lifecycle_policy" "bdtopo_pipeline" {
   })
 }
 
+# These IAM resources are account-global (the OIDC provider can only exist once
+# per account, and the role/policy names are not project-scoped). Toggle off for
+# secondary stacks via var.create_github_oidc so they reuse the existing ones.
+moved {
+  from = data.tls_certificate.github
+  to   = data.tls_certificate.github[0]
+}
+
+moved {
+  from = aws_iam_openid_connect_provider.github
+  to   = aws_iam_openid_connect_provider.github[0]
+}
+
+moved {
+  from = aws_iam_role.github_actions_ecr
+  to   = aws_iam_role.github_actions_ecr[0]
+}
+
+moved {
+  from = aws_iam_policy.github_actions_ecr
+  to   = aws_iam_policy.github_actions_ecr[0]
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.github_actions_ecr
+  to   = aws_iam_role_policy_attachment.github_actions_ecr[0]
+}
+
 # Retrieve GitHub OIDC provider's TLS certificate
 data "tls_certificate" "github" {
-  url = "https://token.actions.githubusercontent.com"
+  count = var.create_github_oidc ? 1 : 0
+  url   = "https://token.actions.githubusercontent.com"
 }
 
 # GitHub Actions OIDC Provider
 resource "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+  count = var.create_github_oidc ? 1 : 0
+  url   = "https://token.actions.githubusercontent.com"
 
   client_id_list = [
     "sts.amazonaws.com"
   ]
 
   thumbprint_list = [
-    data.tls_certificate.github.certificates[0].sha1_fingerprint
+    data.tls_certificate.github[0].certificates[0].sha1_fingerprint
   ]
 
   tags = {
@@ -192,7 +222,8 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 # IAM Role for GitHub Actions
 resource "aws_iam_role" "github_actions_ecr" {
-  name = "github-actions-ecr-role"
+  count = var.create_github_oidc ? 1 : 0
+  name  = "github-actions-ecr-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -200,7 +231,7 @@ resource "aws_iam_role" "github_actions_ecr" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = aws_iam_openid_connect_provider.github.arn
+          Federated = aws_iam_openid_connect_provider.github[0].arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
@@ -224,6 +255,7 @@ resource "aws_iam_role" "github_actions_ecr" {
 
 # IAM Policy for ECR Push
 resource "aws_iam_policy" "github_actions_ecr" {
+  count       = var.create_github_oidc ? 1 : 0
   name        = "github-actions-ecr-policy"
   description = "Policy for GitHub Actions to push to ECR and update ECS"
 
@@ -287,6 +319,7 @@ resource "aws_iam_policy" "github_actions_ecr" {
 
 # Attach policy to role
 resource "aws_iam_role_policy_attachment" "github_actions_ecr" {
-  role       = aws_iam_role.github_actions_ecr.name
-  policy_arn = aws_iam_policy.github_actions_ecr.arn
+  count      = var.create_github_oidc ? 1 : 0
+  role       = aws_iam_role.github_actions_ecr[0].name
+  policy_arn = aws_iam_policy.github_actions_ecr[0].arn
 }

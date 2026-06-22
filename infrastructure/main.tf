@@ -20,6 +20,7 @@ module "iam" {
   environment                    = var.environment
   aws_region                     = var.aws_region
   aws_account_id                 = var.aws_account_id
+  execution_role_name            = var.execution_role_name
   opentopo_api_key_arn           = var.opentopo_api_key_arn
   map_key_arn                    = var.map_key_arn
   maptiler_api_key_arn           = var.maptiler_api_key_arn
@@ -31,11 +32,12 @@ module "iam" {
 module "ecr" {
   source = "./modules/ecr"
 
-  project_name      = var.project_name
-  environment       = var.environment
-  aws_region        = var.aws_region
-  aws_account_id    = var.aws_account_id
-  github_repository = var.github_repository
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  aws_account_id     = var.aws_account_id
+  github_repository  = var.github_repository
+  create_github_oidc = var.create_github_oidc
 }
 
 # Service Discovery Module

@@ -43,6 +43,6 @@ output "bdtopo_pipeline_repository_arn" {
 }
 
 output "github_actions_role_arn" {
-  description = "IAM role ARN for GitHub Actions"
-  value       = aws_iam_role.github_actions_ecr.arn
+  description = "IAM role ARN for GitHub Actions (null when create_github_oidc = false)"
+  value       = try(aws_iam_role.github_actions_ecr[0].arn, null)
 }

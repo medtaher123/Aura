@@ -10,15 +10,18 @@ terraform {
 
   backend "s3" {
     bucket       = "eo-agent-terraform-state-963275461308"
-    key          = "eo-agent-terraform.tfstate"
+    key          = "eo-agent-terraform-2.tfstate"
     region       = "eu-west-3"
     encrypt      = true
-    use_lockfile = true
+    #use_lockfile = true
+
+    #profile = "MLOps-963275461308"
   }
 }
 
 provider "aws" {
   region = var.aws_region
+  #profile = "MLOps-963275461308"
 
   default_tags {
     tags = {

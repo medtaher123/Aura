@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region for resources"
   type        = string
-  default     = "eu-west-3"
+  default     = "eu-west-1"
 }
 
 variable "environment" {
@@ -29,6 +29,18 @@ variable "github_repository" {
   default     = "ines-besrour/MetaplanetLLM" # Update this with your actual repository
 }
 
+variable "create_github_oidc" {
+  description = "Create the account-global GitHub OIDC provider and CI role/policy. Keep true for the primary stack; set false for additional stacks in the same AWS account (the OIDC provider is account-global and can only exist once)."
+  type        = bool
+  default     = true
+}
+
+variable "execution_role_name" {
+  description = "Name of the shared ECS task execution role. Override per-stack (e.g. <project>-ecs-execution-role) to avoid the account-global name collision when running multiple stacks in one account."
+  type        = string
+  default     = "ecsTaskExecutionRole"
+}
+
 # VPC Configuration
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
@@ -39,7 +51,7 @@ variable "vpc_cidr" {
 variable "availability_zones" {
   description = "Availability zones for subnets"
   type        = list(string)
-  default     = ["eu-west-3a", "eu-west-3b", "eu-west-3c"]
+  default     = ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
 }
 
 variable "public_subnet_cidrs" {
@@ -76,7 +88,7 @@ variable "mcp_server_desired_count" {
 variable "mcp_server_image" {
   description = "Docker image for MCP server"
   type        = string
-  default     = "963275461308.dkr.ecr.eu-west-3.amazonaws.com/eo-agent-mcp-server:latest"
+  default     = "963275461308.dkr.ecr.eu-west-1.amazonaws.com/eo-agent-mcp-server:latest"
 }
 
 variable "mcp_log_level" {
@@ -95,13 +107,13 @@ variable "mcp_workers" {
 variable "opentopo_api_key_arn" {
   description = "ARN for OpenTopo API key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
+  default     = "arn:aws:secretsmanager:eu-west-1:963275461308:secret:mpllm/api-keys/OPENTOPO_API_KEY-z1pBzv"
 }
 
 variable "map_key_arn" {
   description = "ARN for Map key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
+  default     = "arn:aws:secretsmanager:eu-west-1:963275461308:secret:mpllm/api-keys/MAP_KEY-GUFKLE"
 }
 
 # GeoServer Configuration

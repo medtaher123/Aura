@@ -1,7 +1,7 @@
 # ECS Task Execution Role (shared)
 # Used by ECS to pull images, write logs, and access secrets
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecsTaskExecutionRole"
+  name = var.execution_role_name
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -17,7 +17,7 @@ resource "aws_iam_role" "ecs_task_execution_role" {
   })
 
   tags = {
-    Name        = "ecsTaskExecutionRole"
+    Name        = var.execution_role_name
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
