@@ -24,11 +24,11 @@ concurrency:
     cancel-in-progress: false
 
 env:
-    AWS_REGION: eu-west-3
-    ECR_REPOSITORY: eo-agent-agent-server
+    AWS_REGION: eu-west-1
+    ECR_REPOSITORY: eo-agent-2-agent-server
     SERVICE_PATH: services/agent_server
-    ECS_CLUSTER: eo-agent-cluster
-    ECS_SERVICE: eo-agent-agent-service
+    ECS_CLUSTER: eo-agent-2-cluster
+    ECS_SERVICE: eo-agent-2-agent-service
 
 jobs:
     build-and-push:

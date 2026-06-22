@@ -24,8 +24,8 @@ concurrency:
     cancel-in-progress: false
 
 env:
-    AWS_REGION: eu-west-3
-    ECR_REPOSITORY: eo-agent-bdtopo-pipeline
+    AWS_REGION: eu-west-1
+    ECR_REPOSITORY: eo-agent-2-bdtopo-pipeline
     SERVICE_PATH: services/bdtopo_pipeline
 
 jobs:
