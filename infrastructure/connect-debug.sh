@@ -33,7 +33,7 @@ start_tunnel() {
     case "$SERVICE_KEY" in
         mcp)
             LOCAL_PORT="5677"
-            CONTAINER_PORT="5677" 
+            CONTAINER_PORT="5678" 
             SERVICE_NAME="eo-agent-2-mcp-service"
             ;;
         agent)
@@ -43,7 +43,7 @@ start_tunnel() {
             ;;
         streamlit)
             LOCAL_PORT="5679"
-            CONTAINER_PORT="5679"
+            CONTAINER_PORT="5678"
             SERVICE_NAME="eo-agent-2-streamlit-service"
             ;;
     esac
