@@ -44,3 +44,6 @@ htmlcov/
 # Logs / generated traffic dumps
 *.log
 logs/
+
+# Database
+agent_server.db

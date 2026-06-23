@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+# 1. ADDED JSON and Uuid to the generic sqlalchemy imports
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, func, JSON, Uuid
+# 2. RENAMED the postgresql UUID import so it doesn't clash with Python's built-in uuid
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from typing import TYPE_CHECKING
 from ..base import BaseModel
 
 if TYPE_CHECKING:
@@ -22,20 +23,31 @@ class Message(BaseModel):
 
     __tablename__ = "messages"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"), 
+        primary_key=True, 
+        autoincrement=True
+    )    
+    # 3. UPDATED: Fall back to standard Uuid for SQLite, but use native PGUUID for PostgreSQL
     conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True).with_variant(PGUUID(as_uuid=True), "postgresql"),
         ForeignKey("conversations.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )
+    
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # Stored as JSONB. Attribute renamed because ``metadata`` is reserved by
-    # SQLAlchemy's declarative API.
+    
+    # 4. UPDATED: Fall back to generic JSON for SQLite, use JSONB for PostgreSQL
     message_metadata: Mapped[dict[str, Any]] = mapped_column(
-        "metadata", JSONB, nullable=False, default=dict, server_default="{}"
+        "metadata", 
+        JSON().with_variant(JSONB(), "postgresql"), 
+        nullable=False, 
+        default=dict, 
+        server_default="{}"
     )
+    
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

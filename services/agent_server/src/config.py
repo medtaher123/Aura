@@ -57,7 +57,8 @@ class AgentServerConfig(BaseSettings):
 
     # Database settings
     database_url: str = Field(
-        default="postgresql+asyncpg://metaplanet:metaplanet@localhost:5432/metaplanet",
+        #default="postgresql+asyncpg://metaplanet:metaplanet@localhost:5432/metaplanet",
+        default="sqlite+aiosqlite:///./agent_server.db",
         description="SQLAlchemy database URL (async driver). Loaded from DATABASE_URL.",
     )
     database_echo: bool = Field(
