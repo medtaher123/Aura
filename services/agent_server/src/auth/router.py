@@ -28,8 +28,10 @@ class AuthRouter:
         """
 
         config = get_config()
-        enabled_providers = [p.strip().lower() for p in config.auth_providers.split(",") if p.strip()]
-        enabled_providers.append(TestProvider.name)
+        enabled_providers = [p.strip().lower() for p in config.auth_providers.split(",") if p.strip()]$
+
+        if config.dev_mode:
+            enabled_providers.append(TestProvider.name)
 
 
         providers_dir = Path(__file__).resolve().parent / "auth_providers"
