@@ -166,41 +166,19 @@ resource "aws_ecr_lifecycle_policy" "bdtopo_pipeline" {
   })
 }
 
-# These IAM resources are account-global (the OIDC provider can only exist once
-# per account, and the role/policy names are not project-scoped). Toggle off for
-# secondary stacks via var.create_github_oidc so they reuse the existing ones.
-moved {
-  from = data.tls_certificate.github
-  to   = data.tls_certificate.github[0]
-}
+# The GitHub OIDC provider is account-global (only one per account for the
+# token.actions.githubusercontent.com URL). Toggle var.create_github_oidc off to
+# reuse an existing provider instead of creating it. The CI role/policy are
+# project-scoped (prefixed with var.project_name) so multiple stacks in the same
+# account never collide on the IAM name.
 
-moved {
-  from = aws_iam_openid_connect_provider.github
-  to   = aws_iam_openid_connect_provider.github[0]
-}
-
-moved {
-  from = aws_iam_role.github_actions_ecr
-  to   = aws_iam_role.github_actions_ecr[0]
-}
-
-moved {
-  from = aws_iam_policy.github_actions_ecr
-  to   = aws_iam_policy.github_actions_ecr[0]
-}
-
-moved {
-  from = aws_iam_role_policy_attachment.github_actions_ecr
-  to   = aws_iam_role_policy_attachment.github_actions_ecr[0]
-}
-
-# Retrieve GitHub OIDC provider's TLS certificate
+# Retrieve GitHub OIDC provider's TLS certificate (only when creating it)
 data "tls_certificate" "github" {
   count = var.create_github_oidc ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
 }
 
-# GitHub Actions OIDC Provider
+# GitHub Actions OIDC Provider (created only for the primary stack)
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.create_github_oidc ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
@@ -220,10 +198,19 @@ resource "aws_iam_openid_connect_provider" "github" {
   }
 }
 
-# IAM Role for GitHub Actions
+# Look up the existing account-global OIDC provider when we are not creating it
+data "aws_iam_openid_connect_provider" "github_existing" {
+  count = var.create_github_oidc ? 0 : 1
+  url   = "https://token.actions.githubusercontent.com"
+}
+
+locals {
+  github_oidc_provider_arn = var.create_github_oidc ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github_existing[0].arn
+}
+
+# IAM Role for GitHub Actions (project-scoped name to avoid account-wide collisions)
 resource "aws_iam_role" "github_actions_ecr" {
-  count = var.create_github_oidc ? 1 : 0
-  name  = "github-actions-ecr-role"
+  name = "${var.project_name}-github-actions-ecr-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -231,7 +218,7 @@ resource "aws_iam_role" "github_actions_ecr" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = aws_iam_openid_connect_provider.github[0].arn
+          Federated = local.github_oidc_provider_arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
@@ -247,16 +234,15 @@ resource "aws_iam_role" "github_actions_ecr" {
   })
 
   tags = {
-    Name        = "github-actions-ecr-role"
+    Name        = "${var.project_name}-github-actions-ecr-role"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
 }
 
-# IAM Policy for ECR Push
+# IAM Policy for ECR Push (project-scoped name)
 resource "aws_iam_policy" "github_actions_ecr" {
-  count       = var.create_github_oidc ? 1 : 0
-  name        = "github-actions-ecr-policy"
+  name        = "${var.project_name}-github-actions-ecr-policy"
   description = "Policy for GitHub Actions to push to ECR and update ECS"
 
   policy = jsonencode({
@@ -311,7 +297,7 @@ resource "aws_iam_policy" "github_actions_ecr" {
   })
 
   tags = {
-    Name        = "github-actions-ecr-policy"
+    Name        = "${var.project_name}-github-actions-ecr-policy"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
@@ -319,7 +305,6 @@ resource "aws_iam_policy" "github_actions_ecr" {
 
 # Attach policy to role
 resource "aws_iam_role_policy_attachment" "github_actions_ecr" {
-  count      = var.create_github_oidc ? 1 : 0
-  role       = aws_iam_role.github_actions_ecr[0].name
-  policy_arn = aws_iam_policy.github_actions_ecr[0].arn
+  role       = aws_iam_role.github_actions_ecr.name
+  policy_arn = aws_iam_policy.github_actions_ecr.arn
 }

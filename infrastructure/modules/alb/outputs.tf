@@ -22,3 +22,8 @@ output "alb_security_group_id" {
   description = "Security group ID of the ALB"
   value       = aws_security_group.alb.id
 }
+
+output "app_url" {
+  description = "Public URL for the Streamlit app (HTTPS custom domain when enabled, else ALB HTTP)"
+  value       = var.enable_https ? "https://${var.alb_domain_name}" : "http://${aws_lb.streamlit.dns_name}"
+}

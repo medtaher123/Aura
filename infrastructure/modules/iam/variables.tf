@@ -45,6 +45,13 @@ variable "bdtopo_database_url_secret_arn" {
   default     = ""
 }
 
+
+variable "cognito_client_secret_arn" {
+  description = "Optional ARN containing the Streamlit Cognito app client secret"
+  type        = string
+  default     = ""
+}
+
 variable "bdtopo_pipeline_enabled" {
   description = "Whether to create BDTOPO pipeline IAM resources"
   type        = bool

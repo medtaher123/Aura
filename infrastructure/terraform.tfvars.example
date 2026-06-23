@@ -37,6 +37,22 @@
 # maptiler_api_key_arn = ""  # Optional, leave empty if not using
 # bdtopo_database_url_secret_arn = "arn:aws:secretsmanager:...:secret:.../BDTOPO_DATABASE_URL-xxxx"
 
+# Cognito / Authentication (shared by Agent Server and Streamlit)
+# Public identifiers are injected as plain env vars; the Streamlit app client
+# secret is read from Secrets Manager (JSON key COGNITO_CLIENT_SECRET).
+# auth_enabled                = "true"
+# agent_auth_providers        = "cognito"
+# cognito_region              = "eu-west-3"
+# cognito_user_pool_id        = "eu-west-3_xxxxxxxxx"
+# cognito_domain              = "https://eu-west-3xxxxxxxxx.auth.eu-west-3.amazoncognito.com"
+# cognito_app_client_id       = "xxxxxxxxxxxxxxxxxxxxxxxxxx"
+# cognito_token_use           = ""          # "access" or "id"; empty skips the check
+# cognito_jwt_leeway_seconds  = "0"
+# cognito_redirect_uri        = "https://<your-alb-or-domain>/"
+# cognito_logout_redirect_uri = "https://<your-alb-or-domain>/"
+# cognito_scopes              = "openid email profile"
+# cognito_client_secret_arn   = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/auth/COGNITO_CLIENT_SECRET-xxxxxx"
+
 # GeoServer Configuration
 # geoserver_base_url   = "http://geoserver-alb-556624184.eu-west-3.elb.amazonaws.com/geoserver"
 # geoserver_risk_layer = "georisk:predictions"

@@ -26,7 +26,7 @@ variable "aws_account_id" {
 variable "github_repository" {
   description = "GitHub repository in format owner/repo for OIDC authentication"
   type        = string
-  default     = "ines-besrour/MetaplanetLLM" # Update this with your actual repository
+  default     = "Chlafen/MetaplanetLLM_temp" # Update this with your actual repository
 }
 
 variable "create_github_oidc" {
@@ -213,6 +213,105 @@ variable "agent_server_bedrock_max_tokens" {
   description = "Bedrock max tokens for Agent server"
   type        = string
   default     = "4096"
+}
+
+# CloudFront CDN (provides valid HTTPS via *.cloudfront.net without a custom domain)
+variable "cloudfront_enabled" {
+  description = "Put a CloudFront distribution in front of the ALB for edge TLS. Cognito redirect URIs are auto-derived from the CloudFront domain when enabled."
+  type        = bool
+  default     = false
+}
+
+# ALB HTTPS / custom domain
+variable "alb_enable_https" {
+  description = "Provision ACM cert + HTTPS:443 listener + Route53 alias and redirect HTTP->HTTPS for the Streamlit ALB"
+  type        = bool
+  default     = false
+}
+
+variable "alb_domain_name" {
+  description = "FQDN to serve the Streamlit app on (e.g. staging.example.com). Required when alb_enable_https = true."
+  type        = string
+  default     = ""
+}
+
+variable "route53_zone_name" {
+  description = "Route53 hosted zone containing alb_domain_name (e.g. example.com). Required when alb_enable_https = true."
+  type        = string
+  default     = ""
+}
+
+# Cognito / Authentication
+variable "auth_enabled" {
+  description = "Enable the Cognito login gate / API auth ('true'/'false')"
+  type        = string
+  default     = "true"
+}
+
+variable "agent_auth_providers" {
+  description = "Comma-separated auth providers for the Agent Server (e.g. 'cognito')"
+  type        = string
+  default     = "cognito"
+}
+
+variable "cognito_region" {
+  description = "AWS region of the Cognito user pool"
+  type        = string
+  default     = "eu-west-3"
+}
+
+variable "cognito_user_pool_id" {
+  description = "Cognito user pool ID (used by Agent Server to validate JWT issuers)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_domain" {
+  description = "Cognito Hosted UI domain (https://...amazoncognito.com)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_app_client_id" {
+  description = "Cognito app client ID (Agent Server COGNITO_APP_CLIENT_ID / Streamlit COGNITO_CLIENT_ID)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_token_use" {
+  description = "Expected Cognito token_use claim ('access' or 'id'); empty to skip the check"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_jwt_leeway_seconds" {
+  description = "Clock skew leeway (seconds) when validating Cognito JWTs"
+  type        = string
+  default     = "0"
+}
+
+variable "cognito_client_secret_arn" {
+  description = "Secrets Manager ARN holding the Streamlit Cognito app client secret (JSON key COGNITO_CLIENT_SECRET). Empty disables secret injection."
+  type        = string
+  default     = ""
+}
+
+variable "cognito_redirect_uri" {
+  description = "Streamlit Cognito callback URL (must match an allowed callback on the app client)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_logout_redirect_uri" {
+  description = "Streamlit Cognito sign-out URL (must match an allowed sign-out URL on the app client)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_scopes" {
+  description = "OAuth scopes requested by Streamlit at the Hosted UI"
+  type        = string
+  default     = "openid email profile"
 }
 
 # Service Discovery

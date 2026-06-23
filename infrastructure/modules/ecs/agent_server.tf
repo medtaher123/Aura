@@ -1,6 +1,49 @@
 # Agent Server Service Configuration
 
 locals {
+  # Optional Cognito claim-validation tuning (only emitted when configured)
+  agent_server_cognito_optional_env = concat(
+    var.cognito_token_use != "" ? [
+      {
+        name  = "COGNITO_TOKEN_USE"
+        value = var.cognito_token_use
+      }
+    ] : [],
+    [
+      {
+        name  = "COGNITO_JWT_LEEWAY_SECONDS"
+        value = var.cognito_jwt_leeway_seconds
+      }
+    ]
+  )
+
+  agent_server_cognito_env = [
+    {
+      name  = "AUTH_ENABLED"
+      value = var.auth_enabled
+    },
+    {
+      name  = "AUTH_PROVIDERS"
+      value = var.agent_auth_providers
+    },
+    {
+      name  = "COGNITO_REGION"
+      value = var.cognito_region
+    },
+    {
+      name  = "COGNITO_USER_POOL_ID"
+      value = var.cognito_user_pool_id
+    },
+    {
+      name  = "COGNITO_DOMAIN"
+      value = var.cognito_domain
+    },
+    {
+      name  = "COGNITO_APP_CLIENT_ID"
+      value = var.cognito_app_client_id
+    }
+  ]
+
   agent_server_container_definitions = [
     {
       name      = "agent-server"
@@ -15,7 +58,7 @@ locals {
         }
       ]
 
-      environment = [
+      environment = concat([
         {
           name  = "LOG_LEVEL"
           value = var.agent_server_log_level
@@ -44,7 +87,7 @@ locals {
           name  = "BEDROCK_MAX_TOKENS"
           value = var.agent_server_bedrock_max_tokens
         }
-      ]
+      ], local.agent_server_cognito_env, local.agent_server_cognito_optional_env)
 
       logConfiguration = {
         logDriver = "awslogs"

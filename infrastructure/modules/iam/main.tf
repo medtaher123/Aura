@@ -45,7 +45,8 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
           var.opentopo_api_key_arn,
           var.map_key_arn,
           var.maptiler_api_key_arn,
-          var.bdtopo_database_url_secret_arn
+          var.bdtopo_database_url_secret_arn,
+          var.cognito_client_secret_arn
         ])
       },
       {
@@ -295,9 +296,9 @@ resource "aws_iam_role_policy" "eventbridge_scheduler_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "RunTask"
-        Effect = "Allow"
-        Action = "ecs:RunTask"
+        Sid      = "RunTask"
+        Effect   = "Allow"
+        Action   = "ecs:RunTask"
         Resource = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${var.project_name}-bdtopo-pipeline:*"
         Condition = {
           ArnEquals = {

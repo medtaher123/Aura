@@ -177,7 +177,7 @@ variable "agent_server_url" {
 variable "maptiler_api_key_arn" {
   description = "ARN for Maptiler API key secret"
   type        = string
-  default     = "arn:aws:secretsmanager:eu-west-3:963275461308:secret:mpllm/api-keys/MAPTILER_API_KEY-cfpZua"
+  default     = "arn:aws:secretsmanager:eu-west-1:963275461308:secret:mpllm/api-keys/MAPTILER_API_KEY-afkJiV"
 }
 
 # Agent Server variables
@@ -245,6 +245,80 @@ variable "agent_server_bedrock_max_tokens" {
   description = "Bedrock max tokens for Agent server"
   type        = string
   default     = "4096"
+}
+
+
+# Cognito / Authentication (shared by Agent Server and Streamlit)
+variable "auth_enabled" {
+  description = "Enable the Cognito login gate / API auth ('true'/'false')"
+  type        = string
+  default     = "true"
+}
+
+variable "agent_auth_providers" {
+  description = "Comma-separated auth providers for the Agent Server (e.g. 'cognito')"
+  type        = string
+  default     = "cognito"
+}
+
+variable "cognito_region" {
+  description = "AWS region of the Cognito user pool"
+  type        = string
+  default     = "eu-west-3"
+}
+
+variable "cognito_user_pool_id" {
+  description = "Cognito user pool ID (used by Agent Server to validate JWT issuers)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_domain" {
+  description = "Cognito Hosted UI domain (https://...amazoncognito.com)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_app_client_id" {
+  description = "Cognito app client ID (Agent Server COGNITO_APP_CLIENT_ID / Streamlit COGNITO_CLIENT_ID)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_token_use" {
+  description = "Expected Cognito token_use claim ('access' or 'id'); empty to skip the check"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_jwt_leeway_seconds" {
+  description = "Clock skew leeway (seconds) when validating Cognito JWTs"
+  type        = string
+  default     = "0"
+}
+
+variable "cognito_client_secret_arn" {
+  description = "Secrets Manager ARN holding the Streamlit Cognito app client secret (JSON key COGNITO_CLIENT_SECRET). Empty disables secret injection."
+  type        = string
+  default     = ""
+}
+
+variable "cognito_redirect_uri" {
+  description = "Streamlit Cognito callback URL (must match an allowed callback on the app client)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_logout_redirect_uri" {
+  description = "Streamlit Cognito sign-out URL (must match an allowed sign-out URL on the app client)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_scopes" {
+  description = "OAuth scopes requested by Streamlit at the Hosted UI"
+  type        = string
+  default     = "openid email profile"
 }
 
 # BDTOPO Pipeline variables
