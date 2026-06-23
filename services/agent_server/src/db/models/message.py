@@ -6,9 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
-# 1. ADDED JSON and Uuid to the generic sqlalchemy imports
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, func, JSON, Uuid
-# 2. RENAMED the postgresql UUID import so it doesn't clash with Python's built-in uuid
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,7 +26,6 @@ class Message(BaseModel):
         primary_key=True, 
         autoincrement=True
     )    
-    # 3. UPDATED: Fall back to standard Uuid for SQLite, but use native PGUUID for PostgreSQL
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True).with_variant(PGUUID(as_uuid=True), "postgresql"),
         ForeignKey("conversations.id", ondelete="CASCADE"),
