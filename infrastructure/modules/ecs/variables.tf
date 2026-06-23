@@ -44,6 +44,12 @@ variable "agent_task_role_arn" {
   type        = string
 }
 
+variable "debug_enabled" {
+  description = "Enable remote debugging: turns on ECS Exec on the services and sets DEBUG=true so containers start debugpy on port 5678."
+  type        = bool
+  default     = false
+}
+
 variable "streamlit_task_role_arn" {
   description = "ARN of the Streamlit task role"
   type        = string

@@ -8,6 +8,11 @@
 # project_name = "eo-agent"
 # environment  = "production"
 
+# Remote debugging (ECS Exec + debugpy on port 5678). Keep false in production.
+# When true: enables enable_execute_command on the services and sets DEBUG=true
+# so containers start debugpy. Tunnel in with infrastructure/connect-debug.sh.
+# debug_enabled = false
+
 # GitHub Repository for OIDC
 # github_repository = "your-org/your-repo"
 

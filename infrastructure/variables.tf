@@ -41,6 +41,13 @@ variable "execution_role_name" {
   default     = "ecsTaskExecutionRole"
 }
 
+# Debugging
+variable "debug_enabled" {
+  description = "Enable remote debugging: turns on ECS Exec (enable_execute_command) on the services and sets the DEBUG=true env var so each service starts debugpy on port 5678. Tunnel in with infrastructure/connect-debug.sh. Keep false in production."
+  type        = bool
+  default     = false
+}
+
 # VPC Configuration
 variable "vpc_cidr" {
   description = "CIDR block for VPC"

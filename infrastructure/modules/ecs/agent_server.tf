@@ -72,6 +72,10 @@ locals {
           value = "1"
         },
         {
+          name  = "DEBUG"
+          value = var.debug_enabled ? "true" : "false"
+        },
+        {
           name  = "MCP_SERVER_URL"
           value = var.agent_server_mcp_server_url
         },
@@ -149,6 +153,8 @@ resource "aws_ecs_service" "agent_server" {
   desired_count    = var.agent_server_desired_count
   launch_type      = "FARGATE"
   platform_version = "LATEST"
+
+  enable_execute_command = var.debug_enabled
 
   network_configuration {
     subnets          = var.subnet_ids

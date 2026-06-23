@@ -48,6 +48,10 @@ locals {
           value = "1"
         },
         {
+          name  = "DEBUG"
+          value = var.debug_enabled ? "true" : "false"
+        },
+        {
           name  = "GEOSERVER_BASE_URL"
           value = var.geoserver_base_url
         },
@@ -117,6 +121,8 @@ resource "aws_ecs_service" "mcp_server" {
   desired_count    = var.mcp_server_desired_count
   launch_type      = "FARGATE"
   platform_version = "LATEST"
+
+  enable_execute_command = var.debug_enabled
 
   network_configuration {
     subnets          = var.subnet_ids

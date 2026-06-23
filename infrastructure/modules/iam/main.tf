@@ -103,6 +103,20 @@ locals {
         "ecs:DescribeTasks"
       ]
       Resource = "*"
+    },
+    {
+      # Required for ECS Exec / SSM port-forwarding (remote debugging).
+      # These actions do not support resource-level scoping; the SSM channel
+      # only exists when enable_execute_command is set on the service.
+      Sid    = "ECSExecSSMMessages"
+      Effect = "Allow"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ]
+      Resource = "*"
     }
   ]
 }

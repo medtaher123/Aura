@@ -128,6 +128,9 @@ module "ecs" {
   agent_task_role_arn     = module.iam.agent_task_role_arn
   streamlit_task_role_arn = module.iam.streamlit_task_role_arn
 
+  # Remote debugging (ECS Exec + debugpy)
+  debug_enabled = var.debug_enabled
+
   # MCP Server configuration
   mcp_server_container_image = "${module.ecr.mcp_repository_url}:latest"
   mcp_server_container_port  = 8000
