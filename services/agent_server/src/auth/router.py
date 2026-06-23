@@ -28,7 +28,7 @@ class AuthRouter:
         """
 
         config = get_config()
-        enabled_providers = [p.strip().lower() for p in config.auth_providers.split(",") if p.strip()]$
+        enabled_providers = [p.strip().lower() for p in config.auth_providers.split(",") if p.strip()]
 
         if config.dev_mode:
             enabled_providers.append(TestProvider.name)
