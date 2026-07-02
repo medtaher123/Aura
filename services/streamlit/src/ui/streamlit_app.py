@@ -7,7 +7,7 @@ import io
 import os
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from urllib.parse import urlparse
 from typing_extensions import TypedDict
 
@@ -148,6 +148,31 @@ class AssistantMessage(TypedDict):
 
 # Union type for all message types
 Message = UserMessage | AssistantMessage
+
+
+def _confirmed_location_from_cache(display: str, token: Optional[str]) -> dict:
+    """Build a confirmed-location payload from a cached disambiguation token.
+
+    Tokens look like ``@osm_id:R4479752`` or ``@place_id:397136633``. Parsing the
+    identifier lets the backend match it against the fresh candidate list when
+    auto-confirming a previously chosen location.
+    """
+    loc: dict = {"name": display or "", "coordinates": [0, 0]}
+    if not isinstance(token, str):
+        return loc
+    if token.startswith("@osm_id:") and len(token) > len("@osm_id:"):
+        rest = token[len("@osm_id:") :]
+        prefix, digits = rest[:1], rest[1:]
+        osm_types = {"R": "relation", "W": "way", "N": "node"}
+        if prefix in osm_types and digits.isdigit():
+            loc["osm_id"] = int(digits)
+            loc["osm_type"] = osm_types[prefix]
+            loc["osm_type_prefix"] = prefix
+    elif token.startswith("@place_id:"):
+        digits = token[len("@place_id:") :]
+        if digits.isdigit():
+            loc["place_id"] = int(digits)
+    return loc
 
 
 def _invoke_agent_unified(
@@ -339,6 +364,24 @@ def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
 # CONFIGURATION
 # ---------------------------------------------------
 st.set_page_config(page_title="STAC & Fire Chatbot", layout="wide")
+
+# Make the whole application's font bold.
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"], [class*="st-"],
+    .stApp, .stMarkdown, .stMarkdown *,
+    p, span, div, label, li, a,
+    h1, h2, h3, h4, h5, h6,
+    button, input, textarea, select,
+    .stButton button, .stTextInput input, .stTextArea textarea,
+    .stChatMessage, .stChatMessage * {
+        font-weight: 700 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Enforce Cognito Hosted UI login before rendering the app. When Cognito is
 # not configured this is a no-op so local/dev usage keeps working.
@@ -825,35 +868,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
         and norm_key
         and attempts < 1
     ):
-        pause_value = pending.get("pause")
-        resume = pause_value if isinstance(pause_value, dict) else {}
-        resume_state_value = resume.get("resume_state")
-        resume_state = (
-            resume_state_value if isinstance(resume_state_value, dict) else None
-        )
-        resume_patch_value = pending.get("resume_patch")
-        resume_patch = (
-            resume_patch_value if isinstance(resume_patch_value, dict) else {}
-        )
-        field = resume_patch.get("field") if resume_patch else None
         patched_value = cached.get("token") if cached else None
-
-        if isinstance(resume_state, dict):
-            next_input = resume_state.get("next_input")
-            if isinstance(field, str) and field.strip():
-                if isinstance(next_input, dict):
-                    next_input[field] = patched_value
-                else:
-                    resume_state["next_input"] = {field: patched_value}
-            else:
-                resume_state["next_input"] = patched_value
-
-            confirmed = resume_state.get("confirmed_locations")
-            if not isinstance(confirmed, dict):
-                confirmed = {}
-            confirmed[norm_key] = patched_value
-            resume_state["confirmed_locations"] = confirmed
-            resume["resume_state"] = resume_state
 
         st.session_state.auto_confirm_attempts[norm_key] = attempts + 1
         st.session_state.pending_location_confirmation = None
@@ -863,22 +878,18 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 trace_placeholder = st.empty()
                 live_callback = _make_live_trace_updater(trace_placeholder)
                 try:
-                    english_query = resume.get("user_text") or ""
-                    english_query_augmented = _augment_with_document(english_query)
                     logger.debug(
-                        f"Auto-confirming location, resuming with query: {english_query_augmented[:100]}..."
+                        f"Auto-confirming location, resuming conversation_id={st.session_state.conversation_id}"
                     )
-                    history_for_agent = st.session_state.messages_en
-                    auto_loc = {
-                        "name": cached.get("display", ""),
-                        "coordinates": [0, 0],
-                    }
+                    auto_loc = _confirmed_location_from_cache(
+                        cached.get("display", ""), patched_value
+                    )
                     result = _invoke_agent_unified(
                         agent_executor,
-                        english_query_augmented,
-                        chat_history=history_for_agent,
-                        resume=resume,
+                        "",
+                        resume=True,
                         confirmed_location=auto_loc,
+                        conversation_id=st.session_state.conversation_id,
                         stream_callback=live_callback,
                     )
                     _store_conversation_id(result.conversation_id)
@@ -978,19 +989,8 @@ if isinstance(pending, dict) and pending.get("candidates"):
             logger.warning("No OSM ID or place ID found for chosen location")
             patched_value = chosen_display or ""
 
-        pause_value = pending.get("pause")
-        resume = pause_value if isinstance(pause_value, dict) else {}
-        resume_state_value = resume.get("resume_state")
-        resume_state = (
-            resume_state_value if isinstance(resume_state_value, dict) else None
-        )
-        resume_patch_value = pending.get("resume_patch")
-        resume_patch = (
-            resume_patch_value if isinstance(resume_patch_value, dict) else {}
-        )
-        field = resume_patch.get("field") if resume_patch else None
-
-        # Prefer a stable token that resolves to the exact chosen place.
+        # The paused agent state lives server-side; the client only references the
+        # conversation id when resuming. Local cache below is a UX optimization.
 
         # Cache confirmation for this query so other tools can reuse it.
         if norm_key:
@@ -1009,33 +1009,6 @@ if isinstance(pending, dict) and pending.get("candidates"):
             st.session_state.auto_confirm_attempts[norm_key] = 0
             if base_key != norm_key:
                 st.session_state.auto_confirm_attempts[base_key] = 0
-
-        if isinstance(resume_state, dict):
-            next_input = resume_state.get("next_input")
-            if isinstance(field, str) and field.strip():
-                if isinstance(next_input, dict):
-                    next_input[field] = patched_value
-                else:
-                    resume_state["next_input"] = {field: patched_value}
-            else:
-                # Fallback: replace next_input entirely.
-                resume_state["next_input"] = patched_value
-
-            # Persist confirmed disambiguations into the agent state so later planner
-            # steps can reuse them (avoid re-asking for the same city).
-            if norm_key:
-                confirmed = resume_state.get("confirmed_locations")
-                if not isinstance(confirmed, dict):
-                    confirmed = {}
-                confirmed[norm_key] = patched_value
-                base_key = (
-                    norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
-                )
-                if base_key and base_key != norm_key:
-                    confirmed[base_key] = patched_value
-                resume_state["confirmed_locations"] = confirmed
-
-            resume["resume_state"] = resume_state
 
         # Append a short confirmation message to chat history for user visibility.
         detected_lang = st.session_state.last_lang or "en"
@@ -1056,16 +1029,10 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 trace_placeholder = st.empty()
                 live_callback = _make_live_trace_updater(trace_placeholder)
                 try:
-                    english_query = resume.get("user_text") or ""
-                    english_query_augmented = _augment_with_document(english_query)
                     logger.debug(
-                        f"Resuming after location confirmation: {english_query_augmented[:100]}..."
+                        f"Resuming after location confirmation: conversation_id={st.session_state.conversation_id}"
                     )
-                    logger.debug(f"Resume state: {resume_state}")
-                    logger.debug(f"Resume patch: {resume_patch}")
-                    logger.debug(f"Field: {field}")
                     logger.debug(f"Patched value: {patched_value}")
-                    history_for_agent = st.session_state.messages_en[:-1]
                     confirmed_loc = {
                         "name": choice.name,
                         "coordinates": choice.coordinates,
@@ -1076,10 +1043,10 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     }
                     result = _invoke_agent_unified(
                         agent_executor,
-                        english_query_augmented,
-                        chat_history=history_for_agent,
-                        resume=resume,
+                        "",
+                        resume=True,
                         confirmed_location=confirmed_loc,
+                        conversation_id=st.session_state.conversation_id,
                         stream_callback=live_callback,
                     )
                     _store_conversation_id(result.conversation_id)
