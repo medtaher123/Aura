@@ -131,6 +131,25 @@ def test_query_list_all_variant():
     assert "total_tools" in result.data
 
 
+def test_query_what_tools_about_floods():
+    """Scoped tool questions should search, not dump the full catalog."""
+    result = tools_info_tool(query="what tools do you have about floods")
+
+    assert result.error is False
+    assert "relevant_tools" in result.data
+    assert "Available Tools" not in result.message
+    relevant = result.data["relevant_tools"]
+    assert any(
+        tool in relevant
+        for tool in (
+            "streamflow_forecast_tool",
+            "flood_depth_damage_tool",
+            "estimate_surface_water_ingress_tool",
+            "drought_flood_risk_tool",
+        )
+    )
+
+
 def test_tool_info_weather_tool():
     """Test detailed info for weather tool"""
     result = tools_info_tool(tool_name="weather_tool")

@@ -162,14 +162,19 @@ class ChatRequestMessage(BaseModel):
 
 
 class ChatResumeMessage(BaseModel):
-    """Client request to resume after location confirmation."""
+    """Client request to resume after location confirmation.
+
+    The client only references the conversation; the paused agent state is
+    retrieved server-side from the conversation rather than round-tripped
+    through the client.
+    """
 
     type: str = Field(default=ClientMessageType.CHAT_RESUME.value)
     confirmed_location: LocationOption = Field(
         ..., description="The location the user confirmed"
     )
-    pause_state: dict[str, Any] = Field(
-        ..., description="Serialized agent state from location_confirmation message"
+    conversation_id: uuid.UUID = Field(
+        ..., description="Conversation whose paused state should be resumed"
     )
 
 

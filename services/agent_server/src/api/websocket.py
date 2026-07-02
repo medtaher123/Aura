@@ -41,10 +41,20 @@ from ..core.websocket_traffic_logger import log_websocket_traffic
 from ..core.memory import normalize_chat_messages
 from ..services.orchestrator_agent_service import create_orchestrator_executor
 from ..services.agent_runner import invoke_agent, coerce_tool_response
+from ..services import graph_runner
 from ..services.translate_service import (
     detect_and_translate_to_english,
     translate_from_english,
 )
+
+
+def _graph_status_stage(stage: str) -> AgentStage:
+    """Map a graph_runner status string to an AgentStage."""
+    return {
+        "planning": AgentStage.PLANNING,
+        "tool_call": AgentStage.TOOL_CALL,
+        "analyzing": AgentStage.ANALYZING,
+    }.get(stage, AgentStage.PLANNING)
 
 
 logger = get_logger("websocket")
@@ -216,7 +226,13 @@ async def handle_chat_request(
         async def stream_callback_async(event: dict):
             event_type = event.get("type", "")
 
-            if event_type == "orchestrator_plan":
+            if event_type == "graph_status":
+                await conn.send_status(
+                    _graph_status_stage(event.get("stage", "")),
+                    event.get("message", ""),
+                )
+
+            elif event_type == "orchestrator_plan":
                 trace = event.get("trace", {})
                 detail = f"Planning: data={trace.get('needs_data')}, analysis={trace.get('needs_analysis')}"
                 await conn.send_status(AgentStage.PLANNING, detail)
@@ -262,8 +278,18 @@ async def handle_chat_request(
             except Exception as e:
                 logger.warning(f"Stream callback error: {e}")
 
-        # Run orchestrator in thread pool to avoid blocking
+        use_graph = get_config().use_graph_pipeline
+
+        # Run the selected engine in a thread pool to avoid blocking the loop.
         def run_orchestrator():
+            if use_graph:
+                return graph_runner.run_graph_turn(
+                    english_query=english_message,
+                    user_id=str(user.id),
+                    session_id=str(conversation_context.conversation.id),
+                    chat_history=chat_history,
+                    stream_callback=stream_callback,
+                )
             executor = create_orchestrator_executor()
             return invoke_agent(
                 executor,
@@ -273,7 +299,7 @@ async def handle_chat_request(
             )
 
         # Execute in thread pool
-        logger.debug("Invoking orchestrator agent")
+        logger.debug(f"Invoking agent engine - use_graph_pipeline: {use_graph}")
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = await loop.run_in_executor(pool, run_orchestrator)
@@ -321,7 +347,15 @@ async def handle_chat_request(
             logger.debug(
                 f"Pause state keys: {list(pause_state.keys())}, has_resume_state: {'resume_state' in pause_state}, has_orchestrator_trace: {'orchestrator_trace' in pause_state}"
             )
-            await conn.send_location_confirmation(options, pause_state)
+            # Persist the paused state server-side so the client only needs to
+            # reference the conversation id when resuming.
+            await conversations.set_pause_state(
+                user, conversation_context.conversation.id, pause_state
+            )
+            await conn.send_location_confirmation(
+                options,
+                {"conversation_id": str(conversation_context.conversation.id)},
+            )
             return
 
         # translate response message if needed
@@ -378,70 +412,104 @@ async def handle_chat_resume(
     """
     try:
         logger.info(
-            f"Chat resume received - location: {message.confirmed_location.name}, pause_state_keys: {list(message.pause_state.keys())}"
+            f"Chat resume received - location: {message.confirmed_location.name}, conversation_id: {message.conversation_id}"
         )
+
+        # Retrieve the paused agent state server-side; the client only references
+        # the conversation id.
+        conversation_id = message.conversation_id
+        conversation = await conversations.get_conversation(user, conversation_id)
+        if conversation is None:
+            await conn.send_error("Conversation not found", recoverable=True)
+            return
+
+        pause_state = conversation.pause_state or {}
+        if not pause_state:
+            logger.warning(
+                f"Resume requested but no paused state stored for conversation {conversation_id}"
+            )
+            await conn.send_error(
+                "No paused request to resume for this conversation.",
+                recoverable=True,
+            )
+            return
 
         await conn.send_status(
             AgentStage.PLANNING, "Resuming with confirmed location..."
         )
 
-        # Extract resume information
-        pause_state = message.pause_state
+        # Extract resume information from the persisted pause state.
         confirmed_location = message.confirmed_location
         title_pending = bool(pause_state.get("conversation_title_pending"))
         title_user_message = pause_state.get("title_user_message") or pause_state.get(
             "user_text", ""
         )
-        conversation_id_raw = pause_state.get("conversation_id")
-        try:
-            conversation_id = (
-                uuid.UUID(conversation_id_raw)
-                if isinstance(conversation_id_raw, str) and conversation_id_raw
-                else conversation_id_raw
-                if isinstance(conversation_id_raw, uuid.UUID)
-                else None
+
+        # The graph pipeline stores its full state under "graph_state"; the legacy
+        # orchestrator stores a "resume_state". Pick the engine accordingly.
+        use_graph = get_config().use_graph_pipeline or ("graph_state" in pause_state)
+
+        graph_state: dict[str, Any] = pause_state.get("graph_state") or {}
+        graph_confirmed_index = 0
+        resume_payload: dict[str, Any] = {}
+
+        if use_graph:
+            graph_confirmed_index = graph_runner.match_location_index(
+                graph_state.get("location_candidates") or [],
+                confirmed_location,
             )
-        except ValueError:
-            logger.warning(f"Invalid conversation_id in pause_state: {conversation_id_raw}")
-            conversation_id = None
-
-        # Build resume payload for orchestrator
-        resume_payload = {
-            "resume_state": pause_state.get("resume_state", {}),
-            "orchestrator_trace": pause_state.get("orchestrator_trace", {}),
-            "needs_analysis": pause_state.get("needs_analysis", False),
-            "analysis_goal": pause_state.get("analysis_goal", ""),
-            "user_text": pause_state.get("user_text", ""),
-        }
-
-        logger.debug(
-            f"Resume payload constructed - has_resume_state: {bool(resume_payload.get('resume_state'))}, has_orchestrator_trace: {bool(resume_payload.get('orchestrator_trace'))}, user_text: {resume_payload.get('user_text', '')[:100]}"
-        )
-
-        # Add confirmed location to the resume state
-        if resume_payload.get("resume_state"):
-            logger.debug(f"Resume payload: {json.dumps(resume_payload, indent=2)}")
-            confirmed_locations, patch_field = (
-                _patch_resume_state_with_confirmed_location(
-                    pause_state=pause_state,
-                    resume_state=resume_payload["resume_state"],
-                    confirmed_location=confirmed_location,
-                )
+            resume_user_text = str(
+                graph_state.get("user_query") or pause_state.get("user_text", "")
             )
-
             logger.debug(
-                f"Added confirmed location to resume state: {confirmed_locations}, patch_field={patch_field}"
+                f"Graph resume - confirmed_index: {graph_confirmed_index}, "
+                f"candidates: {len(graph_state.get('location_candidates') or [])}"
             )
         else:
-            logger.warning(
-                "Resume state is empty or missing, location confirmation may not work properly"
+            # Build resume payload for orchestrator
+            resume_payload = {
+                "resume_state": pause_state.get("resume_state", {}),
+                "orchestrator_trace": pause_state.get("orchestrator_trace", {}),
+                "needs_analysis": pause_state.get("needs_analysis", False),
+                "analysis_goal": pause_state.get("analysis_goal", ""),
+                "user_text": pause_state.get("user_text", ""),
+            }
+            resume_user_text = resume_payload.get("user_text", "")
+
+            logger.debug(
+                f"Resume payload constructed - has_resume_state: {bool(resume_payload.get('resume_state'))}, has_orchestrator_trace: {bool(resume_payload.get('orchestrator_trace'))}, user_text: {resume_user_text[:100]}"
             )
+
+            # Add confirmed location to the resume state
+            if resume_payload.get("resume_state"):
+                logger.debug(f"Resume payload: {json.dumps(resume_payload, indent=2)}")
+                confirmed_locations, patch_field = (
+                    _patch_resume_state_with_confirmed_location(
+                        pause_state=pause_state,
+                        resume_state=resume_payload["resume_state"],
+                        confirmed_location=confirmed_location,
+                    )
+                )
+
+                logger.debug(
+                    f"Added confirmed location to resume state: {confirmed_locations}, patch_field={patch_field}"
+                )
+            else:
+                logger.warning(
+                    "Resume state is empty or missing, location confirmation may not work properly"
+                )
 
         # Create stream callback for real-time updates
         async def stream_callback_async(event: dict):
             event_type = event.get("type", "")
 
-            if event_type == "stage":
+            if event_type == "graph_status":
+                await conn.send_status(
+                    _graph_status_stage(event.get("stage", "")),
+                    event.get("message", ""),
+                )
+
+            elif event_type == "stage":
                 stage = event.get("stage", "")
                 msg = event.get("message", "")
                 if stage == "data_agent":
@@ -482,8 +550,14 @@ async def handle_chat_resume(
             except Exception as e:
                 logger.warning(f"Stream callback error: {e}")
 
-        # Run orchestrator resume in thread pool
+        # Run resume in thread pool
         def run_orchestrator_resume():
+            if use_graph:
+                return graph_runner.resume_graph_turn(
+                    graph_state=graph_state,
+                    confirmed_index=graph_confirmed_index,
+                    stream_callback=stream_callback,
+                )
             executor = create_orchestrator_executor()
             return invoke_agent(
                 executor,
@@ -492,7 +566,7 @@ async def handle_chat_resume(
                 stream_callback=stream_callback,
             )
 
-        logger.debug("Invoking orchestrator agent with resume payload")
+        logger.debug(f"Invoking agent engine with resume - use_graph_pipeline: {use_graph}")
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = await loop.run_in_executor(pool, run_orchestrator_resume)
@@ -542,7 +616,16 @@ async def handle_chat_resume(
                 f"Another location confirmation required during resume - {len(options)} options provided"
             )
             logger.debug(f"New pause state keys: {list(new_pause_state.keys())}")
-            await conn.send_location_confirmation(options, new_pause_state)
+            # Replace the persisted pause state with the new one so the next
+            # resume can reference it by conversation id.
+            if conversation_id:
+                await conversations.set_pause_state(
+                    user, conversation_id, new_pause_state
+                )
+            await conn.send_location_confirmation(
+                options,
+                {"conversation_id": str(conversation_id)} if conversation_id else {},
+            )
             return
 
         response_message = translate_from_english(tool_response.message, detected_lang)
@@ -550,11 +633,13 @@ async def handle_chat_resume(
         artifacts = tool_response.artifacts
 
         if conversation_id:
+            # The paused turn has been resumed to completion; drop the stored state.
+            await conversations.clear_pause_state(user, conversation_id)
             await conversations.append_messages(
                 user,
                 conversation_id,
                 [
-                    {"role": "user", "content": resume_payload.get("user_text", "")},
+                    {"role": "user", "content": resume_user_text},
                     {
                         "role": "assistant",
                         "content": tool_response.message,

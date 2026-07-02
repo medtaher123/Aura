@@ -1,6 +1,8 @@
 """Agent Server Configuration"""
 
-from pydantic import Field
+from functools import lru_cache
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -24,7 +26,7 @@ class AgentServerConfig(BaseSettings):
     log_level: str = Field(default="info", description="Logging level")
     timeout_seconds: int = Field(default=300, description="Request timeout in seconds")
 
-    ws_traffic_log_enabled: bool = Field(default=False, description="Enable WebSocket traffic logging")
+    ws_traffic_log_enabled: bool = Field(default=True, description="Enable WebSocket traffic logging")
     ws_traffic_log_file: str = Field(default="logs/websocket_traffic.jsonl", description="WebSocket traffic log file")
 
     # MCP Server connection
@@ -86,7 +88,7 @@ class AgentServerConfig(BaseSettings):
 
     # Authentication settings
     auth_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable authentication for protected API endpoints",
     )
     auth_providers: str = Field(
@@ -94,7 +96,7 @@ class AgentServerConfig(BaseSettings):
         description="Comma-separated list of authentication providers to use when auth is enabled",
     )
     cognito_region: Optional[str] = Field(
-        default=None,
+        default="eu-west-3",
         description="AWS region for the Cognito user pool",
     )
     cognito_user_pool_id: Optional[str] = Field(
@@ -118,6 +120,80 @@ class AgentServerConfig(BaseSettings):
         description="Clock skew leeway in seconds when validating Cognito JWTs",
     )
 
+    # =========================================================================
+    # Graph pipeline (ported EO_LLM LangGraph)
+    # =========================================================================
+    use_graph_pipeline: bool = Field(
+        default=True,
+        description="Route chat requests through the EO_LLM LangGraph pipeline instead of the legacy orchestrator",
+    )
+
+    # AgentCore feature flag + connectivity (consumed by eo_llm.adapters)
+    agentcore_enabled: bool = Field(
+        default=True, description="Enable AWS Bedrock AgentCore integration"
+    )
+    agentcore_region: str = Field(default="", description="AgentCore / Bedrock region")
+    agentcore_endpoint: str = Field(
+        default="", description="Optional Bedrock runtime endpoint URL"
+    )
+    agentcore_api_key: str = Field(default="", description="Optional AgentCore API key")
+    agentcore_router_model_id: str = Field(
+        default="", description="Bedrock model ID for domain routing decisions"
+    )
+    agentcore_tool_planner_model_id: str = Field(
+        default="", description="Bedrock model ID for per-domain tool planning"
+    )
+    agentcore_timeout_seconds: int = Field(
+        default=20, ge=1, description="AgentCore call timeout in seconds"
+    )
+    agentcore_stage: str = Field(default="dev", description="Environment stage tag")
+
+    # AgentCore Browser (Strands) — web fallback via managed browser
+    agentcore_browser_enabled: bool = Field(
+        default=False,
+        description="Enable AgentCore Browser (Strands) for the web_search node",
+    )
+    agentcore_browser_region: str = Field(
+        default="",
+        description="AWS region for Browser API (defaults to agentcore_region)",
+    )
+    agentcore_browser_timeout_seconds: int = Field(
+        default=180,
+        ge=30,
+        le=3600,
+        description="Max wall-clock seconds for one browser agent run",
+    )
+    agentcore_browser_max_tool_rounds: int = Field(
+        default=4,
+        ge=1,
+        le=25,
+        description="Max successful browser tool completions per web run",
+    )
+    agentcore_browser_message_window: int = Field(
+        default=14,
+        ge=6,
+        le=60,
+        description="SlidingWindowConversationManager max messages kept",
+    )
+
+    # AgentCore Memory config (optional; not used when history lives in Postgres)
+    agentcore_memory_id: str = Field(
+        default="",
+        description="AgentCore Memory resource ID for short/long-term chat memory",
+    )
+    agentcore_memory_short_term_turns: int = Field(
+        default=8,
+        ge=1,
+        le=30,
+        description="How many recent short-term conversation turns to load",
+    )
+    agentcore_memory_long_term_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="How many long-term memory records to retrieve per namespace",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -125,14 +201,30 @@ class AgentServerConfig(BaseSettings):
         extra="ignore",
     )
 
+    @model_validator(mode="after")
+    def _backfill_agentcore_from_bedrock(self) -> "AgentServerConfig":
+        """Default the AgentCore Bedrock settings to the main Bedrock config.
 
-# Singleton instance
-_config_instance: Optional[AgentServerConfig] = None
+        This lets the graph pipeline work out of the box with the existing
+        `BEDROCK_MODEL_ID` / `BEDROCK_REGION` settings; explicit `AGENTCORE_*`
+        values still take precedence.
+        """
+        if not (self.agentcore_region or "").strip():
+            self.agentcore_region = self.bedrock_region
+        if not (self.agentcore_router_model_id or "").strip():
+            self.agentcore_router_model_id = self.bedrock_model_id
+        if not (self.agentcore_tool_planner_model_id or "").strip():
+            self.agentcore_tool_planner_model_id = self.agentcore_router_model_id
+        if not (self.agentcore_browser_region or "").strip():
+            self.agentcore_browser_region = self.agentcore_region
+        return self
 
 
+@lru_cache(maxsize=1)
 def get_config() -> AgentServerConfig:
-    """Get or create singleton config instance."""
-    global _config_instance
-    if _config_instance is None:
-        _config_instance = AgentServerConfig()
-    return _config_instance
+    """Get or create the cached config instance.
+
+    Implemented with ``lru_cache`` so callers can reset it via
+    ``get_config.cache_clear()`` (e.g. tests toggling environment variables).
+    """
+    return AgentServerConfig()

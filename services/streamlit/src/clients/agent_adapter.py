@@ -88,7 +88,7 @@ class RemoteAgentAdapter:
         message: str,
         chat_history: Optional[list[dict]] = None,
         document_context: Optional[str] = None,
-        resume: Optional[dict] = None,
+        resume: Optional[bool] = None,
         confirmed_location: Optional[dict] = None,
         conversation_id: Optional[str] = None,
         stream_callback: Optional[Callable[[dict], None]] = None,
@@ -101,7 +101,8 @@ class RemoteAgentAdapter:
             message: User message
             chat_history: Previous conversation history
             document_context: Extracted text from documents
-            resume: Resume state for paused agents (the pause_state dict)
+            resume: Marker that this call resumes a paused turn; the paused state
+                is retrieved server-side from ``conversation_id``.
             confirmed_location: Confirmed location dict with name, coordinates, etc.
             stream_callback: Callback for streaming updates
             language: User's language
@@ -157,6 +158,10 @@ class RemoteAgentAdapter:
 
         try:
             if resume and confirmed_location:
+                if not conversation_id:
+                    raise ValueError(
+                        "Cannot resume a paused turn without a conversation_id"
+                    )
                 logger.info("Resuming agent from paused state with confirmed location")
                 loc = LocationOption(
                     name=confirmed_location.get("name", ""),
@@ -168,7 +173,7 @@ class RemoteAgentAdapter:
                 )
                 response = client.resume_chat(
                     confirmed_location=loc,
-                    pause_state=resume,
+                    conversation_id=conversation_id,
                     on_status=on_status,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,

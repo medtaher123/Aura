@@ -1,43 +1,25 @@
-
-import asyncio
-import json
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import ValidationError
+from fastapi import WebSocket
 
 from src.schemas.websocket import (
     AgentStage,
     ToolArtifacts,
-    ChatRequestMessage,
-    ChatResumeMessage,
-    ClientMessageType,
-    CompleteMessage,
-    ConversationTitleMessage,
     ConnectionAckMessage,
+    ConversationTitleMessage,
+    CompleteMessage,
     ErrorMessage,
     LocationConfirmationMessage,
     LocationOption,
     StatusMessage,
-    TokenMessage,
     ToolResultMessage,
     ToolStartMessage,
-    get_osm_type_prefix,
 )
 
-from ..auth import AuthConfigurationError, AuthError
 from ..config import get_config
 from ..core.logger import get_logger
 from ..core.websocket_traffic_logger import log_websocket_traffic
-from ..core.memory import normalize_chat_messages
-from ..services.orchestrator_agent_service import create_orchestrator_executor
-from ..services.agent_runner import invoke_agent, coerce_tool_response
-from ..services.translate_service import (
-    detect_and_translate_to_english,
-    translate_from_english,
-)
 
 logger = get_logger("websocket")
 config = get_config()
@@ -79,10 +61,6 @@ class WebSocketConnection:
                 payload=data,
             )
         await self.websocket.send_json(data)
-
-    async def send_token(self, content: str) -> None:
-        """Send a streaming token."""
-        await self.send(TokenMessage(content=content))
 
     async def send_status(
         self, stage: AgentStage, detail: Optional[str] = None

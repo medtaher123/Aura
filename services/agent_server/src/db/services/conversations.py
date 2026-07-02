@@ -104,6 +104,42 @@ class ConversationService:
             await self.messages.db.commit()
         return True
 
+    async def set_pause_state(
+        self,
+        user: User,
+        conversation_id: uuid.UUID,
+        pause_state: Optional[dict],
+        *,
+        commit: bool = True,
+    ) -> Optional[Conversation]:
+        """Persist (or clear) the paused agent state for an owner-scoped conversation.
+
+        Passing ``None`` clears any stored pause state, which is the correct
+        behavior once a paused turn has been resumed to completion.
+        """
+        conversation = await self.get_conversation(user, conversation_id)
+        if conversation is None:
+            return None
+        conversation.pause_state = pause_state or None
+        if commit:
+            await self.conversations.db.commit()
+            await self.conversations.db.refresh(conversation)
+        else:
+            await self.conversations.db.flush()
+        return conversation
+
+    async def clear_pause_state(
+        self,
+        user: User,
+        conversation_id: uuid.UUID,
+        *,
+        commit: bool = True,
+    ) -> Optional[Conversation]:
+        """Clear the stored pause state once a paused turn has been resumed."""
+        return await self.set_pause_state(
+            user, conversation_id, None, commit=commit
+        )
+
     async def update_title(
         self,
         user: User,

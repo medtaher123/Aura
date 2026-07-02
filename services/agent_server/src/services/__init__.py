@@ -1,6 +1,6 @@
 """Agent services - Business logic for agent orchestration."""
 
-from .llm_service import get_chat_llm, get_llm
+from .llm_service import get_chat_llm
 from .agent_runner import invoke_agent, coerce_tool_response
 from .orchestrator_agent_service import OrchestratorExecutor, create_orchestrator_executor
 from .data_agent_service import MultiStepDataAgentExecutor, create_data_agent_executor
@@ -11,11 +11,9 @@ from .translate_service import (
     translate_from_english,
     detect_and_translate_to_english,
 )
-from .document_service import extract_text_from_pdf_bytes
 
 __all__ = [
     "get_chat_llm",
-    "get_llm",
     "invoke_agent",
     "coerce_tool_response",
     "OrchestratorExecutor",
@@ -28,5 +26,4 @@ __all__ = [
     "translate_to_english",
     "translate_from_english",
     "detect_and_translate_to_english",
-    "extract_text_from_pdf_bytes",
 ]

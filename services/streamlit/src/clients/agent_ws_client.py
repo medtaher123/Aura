@@ -440,13 +440,17 @@ class AgentWebSocketClient:
     def resume_chat(
         self,
         confirmed_location: LocationOption,
-        pause_state: dict,
+        conversation_id: str,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_tool_start: Optional[Callable[[str, dict], None]] = None,
         on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
     ) -> ChatResponse:
-        """Resume chat after location confirmation."""
+        """Resume chat after location confirmation.
+
+        Only the ``conversation_id`` is sent; the paused agent state is retrieved
+        server-side from the conversation.
+        """
         payload = {
             "type": "chat_resume",
             "confirmed_location": {
@@ -457,7 +461,7 @@ class AgentWebSocketClient:
                 "osm_type": confirmed_location.osm_type,
                 "osm_type_prefix": confirmed_location.osm_type_prefix,
             },
-            "pause_state": pause_state,
+            "conversation_id": conversation_id,
         }
 
         async def _do_send():

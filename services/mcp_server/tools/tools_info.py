@@ -536,6 +536,49 @@ TOOL_CATEGORIES = {
 }
 
 
+def _is_scoped_tools_query(query: str) -> bool:
+    """True when the user asks about tools for a specific topic, not the full catalog."""
+    q = f" {(query or '').lower().strip()} "
+    scoped_markers = (
+        " about ",
+        " for ",
+        " related to ",
+        " involving ",
+        " that can ",
+        " that help ",
+        " to detect ",
+        " to help ",
+        " can detect ",
+        " can help ",
+        " with ",
+    )
+    return any(marker in q for marker in scoped_markers)
+
+
+def _should_list_all_catalog(*, query: str | None, list_all: bool) -> bool:
+    """Return True only for unscoped 'show me everything' tool-discovery requests."""
+    if list_all:
+        return True
+    if not query:
+        return False
+    if _is_scoped_tools_query(query):
+        return False
+    q = query.lower().strip()
+    catalog_markers = (
+        "list all",
+        "all tools",
+        "available tools",
+        "what tools",
+        "which tools",
+        "tools do you have",
+        "what can you do",
+        "your capabilities",
+        "show me your tools",
+        "show me the tools",
+    )
+    return any(marker in q for marker in catalog_markers)
+
+
 @mcp.tool()
 def tools_info_tool(
     query: str | None = None,
@@ -564,7 +607,7 @@ def tools_info_tool(
     
     try:
         # Case 1: List all tools
-        if list_all or (query and any(keyword in query.lower() for keyword in ["list all", "all tools", "available tools", "what tools"])):
+        if _should_list_all_catalog(query=query, list_all=list_all):
             output_lines = ["📋 **Available Tools:**\n"]
             
             for category_name, tool_list in TOOL_CATEGORIES.items():

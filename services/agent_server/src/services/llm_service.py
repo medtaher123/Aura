@@ -132,8 +132,3 @@ def get_chat_llm(
         kwargs["model_kwargs"] = model_kwargs
 
     return _ChatBedrock(**kwargs)
-
-
-def get_llm(*args, **kwargs):
-    """Backward-compatible alias used by older call sites."""
-    return get_chat_llm(*args, **kwargs)
