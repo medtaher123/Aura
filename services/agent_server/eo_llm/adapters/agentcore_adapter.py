@@ -20,6 +20,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.document_store import load_document_bytes
 from eo_llm.adapters.mcp_tools_registry import DOMAIN_TOOLS
+from eo_llm.prompts import (
+    DOCUMENT_QA_SYSTEM,
+    get_arg_resolver_prompt,
+    get_document_location_prompt,
+    get_finalizer_prompt,
+    get_query_location_prompt,
+    get_router_prompt,
+    get_tool_planner_prompt,
+)
 
 logger = logging.getLogger("eo_llm.agentcore")
 
@@ -528,27 +537,7 @@ class AgentCoreAdapter:
                 )
 
         if self.is_ready() and self._router_model_id:
-            system_prompt = (
-                "You are a routing policy engine. Return only data that conforms to the provided JSON schema."
-            )
-            user_prompt = (
-                "Route this query to one or more domains from: "
-                "flood_damage, fire_detection, disaster_detection, infrastructure, stac, document_qa, tools_info, websearch_only.\n"
-                "Rules:\n"
-                "- Prefer specific domain(s) when clear.\n"
-                "- Use websearch_only only when none fit.\n"
-                "- Use tools_info when the user asks what tools/capabilities are available, how a tool works, what data sources a tool uses, or what questions they can ask.\n"
-                "- Do NOT use tools_info for greetings, thanks, or other casual chat.\n"
-                "- Use document_qa when user asks about the uploaded/attached document contents.\n"
-                "- Streamflow/river discharge/water-level forecast requests belong to flood_damage.\n"
-                "- STAC is for satellite catalog/discovery/imagery tasks, not hydrological forecasts.\n"
-                "- CLMS burnt-area impact requests belong to fire_detection.\n"
-                "- CLMS land-cover exposure and CEMS rapid-mapping requests belong to disaster_detection.\n"
-                "- confidence in [0,1].\n"
-                "- execution_mode is parallel or sequential.\n"
-                f"Query: {q}\n"
-                "Follow the schema exactly."
-            )
+            system_prompt, user_prompt = get_router_prompt(query=q)
             raw = self._call_bedrock_json(
                 model_id=self._router_model_id,
                 system_prompt=system_prompt,
@@ -579,21 +568,10 @@ class AgentCoreAdapter:
     def select_tool_plan(self, *, domain: DomainName, query: str = "") -> ToolPlan:
         tools = DOMAIN_TOOLS.get(domain, [])
         if self.is_ready() and self._tool_planner_model_id and tools:
-            system_prompt = (
-                "You are a domain tool planner. Return only data that conforms to the provided JSON schema."
-            )
-            user_prompt = (
-                f"Domain: {domain}\n"
-                f"Allowed tools: {', '.join(tools)}\n"
-                f"User query: {(query or '').strip()}\n"
-                "Build a concise tool plan with 1-4 steps.\n"
-                "Rules:\n"
-                "- tool_name must be from allowed tools.\n"
-                "- Use supported enums exactly (no synonyms).\n"
-                "- Prefer practical required_inputs that match runtime data availability.\n"
-                "- If the query asks for streamflow forecast/discharge, prioritize streamflow_forecast_tool when available.\n"
-                "- In fire_detection, if query mentions burnt area/burned area/zone brulee/zone brulee CLMS, prioritize clms_burnt_area_impact_tool.\n"
-                "Follow the schema exactly."
+            system_prompt, user_prompt = get_tool_planner_prompt(
+                domain=domain,
+                query=query,
+                allowed_tools=tools,
             )
             raw = self._call_bedrock_json(
                 model_id=self._tool_planner_model_id,
@@ -651,25 +629,13 @@ class AgentCoreAdapter:
             web_json = web_json[:2500] + "...(truncated)"
 
         today_utc = datetime.now(timezone.utc).date().isoformat()
-        system_prompt = (
-            "You are an EO risk analysis assistant. "
-            "Compose a concise, factual final answer from provided evidence only. "
-            "If evidence is limited or conflicting, explicitly say so. "
-            "Never contradict successful tool outputs. "
-            "Never claim a date is in the future unless it is strictly later than today's date."
-        )
-        user_prompt = (
-            f"Today (UTC): {today_utc}\n"
-            f"User query: {query}\n"
-            f"Answer source selected by pipeline: {answer_source}\n"
-            f"Aggregated evidence summary: {aggregated_evidence}\n"
-            f"Domain results JSON: {domain_json}\n"
-            f"Web results JSON: {web_json}\n"
-            "Write a helpful final answer in plain text with:\n"
-            "- 1 short direct answer paragraph\n"
-            "- 2-5 concise bullet points with key findings or caveats\n"
-            "- mention uncertainty when tools failed or evidence is partial\n"
-            "Return only data conforming to the schema."
+        system_prompt, user_prompt = get_finalizer_prompt(
+            today_utc=today_utc,
+            query=query,
+            answer_source=answer_source,
+            aggregated_evidence=aggregated_evidence,
+            domain_results_json=domain_json,
+            web_results_json=web_json,
         )
         raw = self._call_bedrock_json(
             model_id=model_id,
@@ -695,20 +661,11 @@ class AgentCoreAdapter:
         model_id = self._router_model_id or self._tool_planner_model_id
         if not self.is_ready() or not model_id:
             return ""
+        system_prompt, user_prompt = get_query_location_prompt(query=query)
         raw = self._call_bedrock_json(
             model_id=model_id,
-            system_prompt=(
-                "Extract only the most relevant place name from user query for geocoding. "
-                "Return empty string if no location is present."
-            ),
-            user_prompt=(
-                f"Query: {query}\n"
-                "Examples:\n"
-                "- 'fires in paris in 2025' -> 'Paris, France'\n"
-                "- 'storms in spain 2015-2025' -> 'Spain'\n"
-                "- 'hello' -> ''\n"
-                "Return only schema-conformant JSON."
-            ),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             json_schema=BEDROCK_LOCATION_EXTRACT_SCHEMA,
             schema_name="location_hint",
             schema_description="Geocodable place extracted from user query",
@@ -736,10 +693,7 @@ class AgentCoreAdapter:
             modelId=model_id,
             system=[
                 {
-                    "text": (
-                        "You answer questions using only the provided document. "
-                        "If the answer is not present, say so clearly."
-                    )
+                    "text": DOCUMENT_QA_SYSTEM,
                 }
             ],
             messages=[
@@ -776,16 +730,11 @@ class AgentCoreAdapter:
             return ""
         neutral_name = str(document_ref.get("neutral_name") or "Uploaded Document").strip()
         format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
+        system_prompt, user_prompt = get_document_location_prompt(query=query)
         raw = self._call_bedrock_json(
             model_id=model_id,
-            system_prompt=(
-                "Extract a single geocodable place from the document relevant to the user query. "
-                "Return empty string if no clear location is present."
-            ),
-            user_prompt=(
-                f"User query: {query}\n"
-                "Return one place only (city/region/country), suitable for geocoding."
-            ),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             json_schema=BEDROCK_LOCATION_EXTRACT_SCHEMA,
             schema_name="document_location_hint",
             schema_description="Location inferred from uploaded document and query",
@@ -968,38 +917,21 @@ class AgentCoreAdapter:
         # deterministic pass-through below.
         if self.is_ready() and self._tool_planner_model_id and tool_param_names:
             today_utc = datetime.now(timezone.utc).date().isoformat()
-            prompt = (
-                f"Today (UTC): {today_utc}\n"
-                f"Domain: {plan.domain}\n"
-                f"Tool: {step.tool_name}\n"
-                f"Required inputs (conceptual): {json.dumps(step.required_inputs)}\n"
-                f"Allowed argument names: {json.dumps(tool_param_names)}\n"
-                f"Required argument names (from signature): {json.dumps(required_params)}\n"
-                f"Tool docstring: {docstring[:1200]}\n"
-                f"Candidate arguments: {json.dumps(candidate_args, default=str)}\n"
-                f"Execution context: {json.dumps(execution_context, default=str)}\n"
-                "Return arguments ready for tool execution.\n"
-                "Rules:\n"
-                "- Use only allowed argument names.\n"
-                "- Keep values as JSON strings in value_json.\n"
-                "- Resolve conceptual inputs to concrete args when possible.\n"
-                "- Ensure required argument names are present with valid values.\n"
-                "- If a required argument is missing, infer a safe value from context/docstring.\n"
-                "- Derive date/time arguments (e.g. start_date, end_date, year, month) "
-                "from the user query in 'Execution context'; format dates as YYYY-MM-DD.\n"
-                "- When the query specifies a time period, OVERRIDE any candidate/default "
-                "date values (including a hardcoded current year) to match the query.\n"
-                "- Only keep candidate/default date values when the query has no temporal reference.\n"
-                "- Put unresolved conceptual inputs in unresolved_required_inputs.\n"
-                "Follow the schema exactly."
+            system_prompt, user_prompt = get_arg_resolver_prompt(
+                today_utc=today_utc,
+                domain=plan.domain,
+                tool_name=step.tool_name,
+                required_inputs=list(step.required_inputs),
+                tool_param_names=tool_param_names,
+                required_params=required_params,
+                docstring=docstring,
+                candidate_args=candidate_args,
+                execution_context=execution_context,
             )
             raw = self._call_bedrock_json(
                 model_id=self._tool_planner_model_id,
-                system_prompt=(
-                    "You are an argument-resolution policy engine for tool execution. "
-                    "Output strictly to schema."
-                ),
-                user_prompt=prompt,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
                 json_schema=BEDROCK_ARG_RESOLUTION_SCHEMA,
                 schema_name="step_argument_resolution",
                 schema_description="Resolved concrete arguments for one tool step",

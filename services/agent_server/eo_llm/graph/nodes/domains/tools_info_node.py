@@ -6,7 +6,8 @@ catalog, formatting, and per-tool/category lookup logic as the legacy DataAgent.
 
 from __future__ import annotations
 
-
+from eo_llm.graph.nodes.domain_base import DomainNode
+from eo_llm.graph.state import GraphState, GraphStateModel
 
 
 class ToolsInfoDomainNode(DomainNode):

@@ -10,9 +10,14 @@ DOMAIN_TOOLS: dict[str, list[str]] = {
         "streamflow_forecast_tool",
         "estimate_surface_water_ingress_tool",
     ],
-    "fire_detection": ["detect_fire_tool"],
+    "fire_detection": [
+        "detect_fire_tool",
+        "clms_burnt_area_impact_tool",
+    ],
     "disaster_detection": [
         "query_disaster_events_tool",
+        "clms_land_cover_exposure_tool",
+        "cems_rapid_mapping_events_tool",
     ],
     "infrastructure": [
         "infrastructure_query_tool",
