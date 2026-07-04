@@ -3,6 +3,7 @@
 # --- GLOBAL CONFIG ---
 CLUSTER_NAME="eo-agent-2-cluster"
 REGION="eu-west-1"
+INFRA_PROFILE="InfraAdmin-963275461308" # Added your InfraAdmin profile here
 # ---------------------
 
 # If no arguments are provided, default to running all three services
@@ -49,7 +50,8 @@ start_tunnel() {
     esac
 
     echo "🔍 [$SERVICE_KEY] Fetching active Task ID for $SERVICE_NAME..."
-    TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER_NAME" --service-name "$SERVICE_NAME" --region "$REGION" --query "taskArns[0]" --output text)
+    # Added --profile flag
+    TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER_NAME" --service-name "$SERVICE_NAME" --region "$REGION" --profile "$INFRA_PROFILE" --query "taskArns[0]" --output text)
 
     if [ "$TASK_ARN" == "None" ] || [ -z "$TASK_ARN" ]; then
         echo "❌ [$SERVICE_KEY] Error: No running tasks found for service $SERVICE_NAME"
@@ -60,7 +62,8 @@ start_tunnel() {
     echo "🎯 [$SERVICE_KEY] Found Task ID: $TASK_ID"
 
     echo "🔍 [$SERVICE_KEY] Fetching Container Runtime ID..."
-    RUNTIME_ID=$(aws ecs describe-tasks --cluster "$CLUSTER_NAME" --tasks "$TASK_ID" --region "$REGION" --query "tasks[0].containers[0].runtimeId" --output text)
+    # Added --profile flag
+    RUNTIME_ID=$(aws ecs describe-tasks --cluster "$CLUSTER_NAME" --tasks "$TASK_ID" --region "$REGION" --profile "$INFRA_PROFILE" --query "tasks[0].containers[0].runtimeId" --output text)
 
     if [ "$RUNTIME_ID" == "None" ] || [ -z "$RUNTIME_ID" ]; then
         echo "❌ [$SERVICE_KEY] Error: Could not retrieve container runtime ID."
@@ -72,10 +75,12 @@ start_tunnel() {
     echo "🚀 [$SERVICE_KEY] Opening secure SSM tunnel (Local $LOCAL_PORT -> Container $CONTAINER_PORT)..."
 
     # Running in the background (&) so multiple services can run concurrently
+    # Added --profile flag
     aws ssm start-session \
         --region "$REGION" \
         --target "$TARGET_STRING" \
         --document-name AWS-StartPortForwardingSession \
+        --profile "$INFRA_PROFILE" \
         --parameters "{\"portNumber\":[\"$CONTAINER_PORT\"],\"localPortNumber\":[\"$LOCAL_PORT\"]}" &
 }
 

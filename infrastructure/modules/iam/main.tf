@@ -159,6 +159,25 @@ resource "aws_iam_role_policy" "mcp_task_role_policy" {
         ]
       },
       {
+        # Read-only access to public AWS Open Data buckets that Athena/tools
+        # query directly (Daylight OSM for flood_damage_city, GDFC for
+        # floods_and_droughts). Athena reads source S3 as the task role, so
+        # these must be explicitly allowed even though the buckets are public.
+        Sid    = "PublicOpenDataRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation"
+        ]
+        Resource = [
+          "arn:aws:s3:::daylight-openstreetmap",
+          "arn:aws:s3:::daylight-openstreetmap/*",
+          "arn:aws:s3:::global-drought-flood-catalogue",
+          "arn:aws:s3:::global-drought-flood-catalogue/*"
+        ]
+      },
+      {
         Sid    = "AthenaAccess"
         Effect = "Allow"
         Action = [
