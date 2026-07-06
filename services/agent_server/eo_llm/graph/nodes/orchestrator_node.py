@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from eo_llm.adapters.agentcore_adapter import AgentCoreAdapter
-from eo_llm.graph.state import GraphState, dump_state, validate_state
+from eo_llm.graph.nodes.base import GraphNode
+from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
 
 logger = logging.getLogger("eo_llm.orchestrator")
 
@@ -87,53 +87,58 @@ def _needs_document_location_resolution(query: str) -> bool:
     return any(p in q for p in phrases)
 
 
-def orchestrator_node(state: GraphState) -> GraphState:
-    s = validate_state(state)
-    user_msg = (s.user_query or s.query or "").strip()
+class OrchestratorNode(GraphNode):
+    node_name = "orchestrator"
+    status_stage = "planning"
+    status_message = "Planning your request..."
 
-    if not user_msg:
-        s.intent = "empty"
-        s.next_step = "finalize_direct"
-        s.final_answer = "Please provide a question."
-        s.answer_source = "domain_tools"
+    def run(self, s: GraphStateModel) -> GraphState:
+        user_msg = (s.user_query or s.query or "").strip()
+
+        if not user_msg:
+            s.intent = "empty"
+            s.next_step = "finalize_direct"
+            s.final_answer = "Please provide a question."
+            s.answer_source = "domain_tools"
+            return dump_state(s)
+
+        if (
+            not (s.place_hint or "").strip()
+            and isinstance(s.document_ref, dict)
+            and s.document_ref
+            and _needs_document_location_resolution(user_msg)
+        ):
+            place_from_doc = self._adapter.extract_location_from_document(
+                query=user_msg,
+                document_ref=dict(s.document_ref),
+            )
+            if place_from_doc:
+                s.place_hint = place_from_doc
+
+        route_query = user_msg
+        if s.place_hint:
+            route_query = f"{user_msg}\nImplicit location context: {s.place_hint}"
+
+        try:
+            decision = self._adapter.route_domains(query=route_query)
+            selected_domains = [d for d in decision.domains if d != "websearch_only"]
+        except Exception as exc:
+            logger.warning(
+                "AgentCore route_domains failed (%s); falling back to keyword routing", exc
+            )
+            selected_domains = _keyword_domains(user_msg)
+
+        if "tools_info" in selected_domains and not _is_tools_info_query(user_msg):
+            selected_domains = [d for d in selected_domains if d != "tools_info"]
+
+        if isinstance(s.document_ref, dict) and s.document_ref and _is_document_query(user_msg):
+            if "document_qa" not in selected_domains:
+                selected_domains.append("document_qa")
+
+        s.intent = "data_or_analysis"
+        s.selected_domains = selected_domains
+        s.next_step = "route"
         return dump_state(s)
 
-    adapter = AgentCoreAdapter()
-    if (
-        not (s.place_hint or "").strip()
-        and isinstance(s.document_ref, dict)
-        and s.document_ref
-        and _needs_document_location_resolution(user_msg)
-    ):
-        place_from_doc = adapter.extract_location_from_document(
-            query=user_msg,
-            document_ref=dict(s.document_ref),
-        )
-        if place_from_doc:
-            s.place_hint = place_from_doc
 
-    route_query = user_msg
-    if s.place_hint:
-        route_query = f"{user_msg}\nImplicit location context: {s.place_hint}"
-
-    try:
-        decision = adapter.route_domains(query=route_query)
-        selected_domains = [d for d in decision.domains if d != "websearch_only"]
-    except Exception as exc:
-        logger.warning(
-            "AgentCore route_domains failed (%s); falling back to keyword routing", exc
-        )
-        selected_domains = _keyword_domains(user_msg)
-
-
-    if "tools_info" in selected_domains and not _is_tools_info_query(user_msg):
-        selected_domains = [d for d in selected_domains if d != "tools_info"]
-
-    if isinstance(s.document_ref, dict) and s.document_ref and _is_document_query(user_msg):
-        if "document_qa" not in selected_domains:
-            selected_domains.append("document_qa")
-
-    s.intent = "data_or_analysis"
-    s.selected_domains = selected_domains
-    s.next_step = "route"
-    return dump_state(s)
+orchestrator_node = OrchestratorNode()

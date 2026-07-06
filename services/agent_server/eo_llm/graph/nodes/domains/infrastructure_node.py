@@ -9,9 +9,12 @@ from eo_llm.graph.nodes.helpers import LocationContext
 
 
 class InfrastructureNode(ToolPlanDomainNode):
-    @property
-    def domain_name(self) -> str:
-        return "infrastructure"
+    domain_name = "infrastructure"
+    status_message = "Querying infrastructure..."
+    tools = [
+        "infrastructure_query_tool",
+        "get_route_info",
+    ]
 
     @property
     def missing_location_message(self) -> str:

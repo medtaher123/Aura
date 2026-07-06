@@ -13,9 +13,7 @@ from eo_llm.graph.state import GraphState, GraphStateModel
 class ToolsInfoDomainNode(DomainNode):
     """Return the MCP tools catalog and finalize without LLM composition."""
 
-    @property
-    def domain_name(self) -> str:
-        return "tools_info"
+    domain_name = "tools_info"
 
     def execute(self, s: GraphStateModel) -> GraphState:
         user_q = (s.user_query or "").strip()

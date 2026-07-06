@@ -9,9 +9,12 @@ from eo_llm.graph.nodes.helpers import LocationContext
 
 
 class FireDetectionNode(ToolPlanDomainNode):
-    @property
-    def domain_name(self) -> str:
-        return "fire_detection"
+    domain_name = "fire_detection"
+    status_message = "Detecting fires..."
+    tools = [
+        "detect_fire_tool",
+        "clms_burnt_area_impact_tool",
+    ]
 
     @property
     def missing_location_message(self) -> str:

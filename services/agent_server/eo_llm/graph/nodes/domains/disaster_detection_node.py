@@ -9,9 +9,13 @@ from eo_llm.graph.nodes.helpers import LocationContext
 
 
 class DisasterDetectionNode(ToolPlanDomainNode):
-    @property
-    def domain_name(self) -> str:
-        return "disaster_detection"
+    domain_name = "disaster_detection"
+    status_message = "Querying disaster events..."
+    tools = [
+        "query_disaster_events_tool",
+        "clms_land_cover_exposure_tool",
+        "cems_rapid_mapping_events_tool",
+    ]
 
     @property
     def missing_location_message(self) -> str:

@@ -12,9 +12,8 @@ from eo_llm.graph.state import GraphState, GraphStateModel
 class DocumentQADomainNode(DomainNode):
     """Answer questions grounded in an uploaded document."""
 
-    @property
-    def domain_name(self) -> str:
-        return "document_qa"
+    domain_name = "document_qa"
+    status_message = "Reading the document..."
 
     def execute(self, s: GraphStateModel) -> GraphState:
         if not isinstance(s.document_ref, dict) or not s.document_ref:

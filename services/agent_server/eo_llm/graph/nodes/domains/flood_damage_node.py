@@ -9,9 +9,15 @@ from eo_llm.graph.nodes.helpers import LocationContext
 
 
 class FloodDamageNode(ToolPlanDomainNode):
-    @property
-    def domain_name(self) -> str:
-        return "flood_damage"
+    domain_name = "flood_damage"
+    status_message = "Analyzing flood damage..."
+    tools = [
+        "geoserver_risk_mask_tool",
+        "flood_damage_city_tool",
+        "flood_depth_damage_tool",
+        "streamflow_forecast_tool",
+        "estimate_surface_water_ingress_tool",
+    ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
         lat = float(ctx.lat)  # type: ignore[arg-type]

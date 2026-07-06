@@ -10,9 +10,12 @@ from eo_llm.graph.nodes.helpers import LocationContext
 
 
 class StacNode(ToolPlanDomainNode):
-    @property
-    def domain_name(self) -> str:
-        return "stac"
+    domain_name = "stac"
+    status_message = "Searching the satellite catalog..."
+    tools = [
+        "query_stac_catalog",
+        "maxar_open_data_imagery_tool",
+    ]
 
     @property
     def missing_location_message(self) -> str:

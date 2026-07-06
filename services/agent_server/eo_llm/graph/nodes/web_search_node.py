@@ -12,7 +12,8 @@ from typing import Any
 from eo_llm.adapters.agentcore_browser import run_browser_research
 from eo_llm.adapters.web_search import run_web_search
 from eo_llm.config import get_config
-from eo_llm.graph.state import GraphState, dump_state, validate_state
+from eo_llm.graph.nodes.base import GraphNode
+from eo_llm.graph.state import GraphState, GraphStateModel
 
 
 def _domain_result_as_dict(result: Any) -> dict[str, Any]:
@@ -45,22 +46,29 @@ def _domain_failure_hint(domain_results: dict[str, Any]) -> str:
     return "\n".join(lines)[:4000]
 
 
-def web_search_node(state: GraphState) -> GraphState:
-    s = validate_state(state)
-    contextualized = s.query.strip()
-    user_q = (s.user_query or "").strip() or contextualized
-    hint = _domain_failure_hint(dict(s.domain_results))
+class WebSearchNode(GraphNode):
+    node_name = "web_search"
+    status_stage = "tool_call"
+    status_message = "Searching the web..."
 
-    if bool(getattr(get_config(), "agentcore_browser_enabled", False)):
-        web_results = run_browser_research(
-            contextualized_query=contextualized,
-            user_query=user_q,
-            domain_failure_hint=hint,
-        )
-    else:
-        web_results = run_web_search(
-            contextualized_query=contextualized,
-            user_query=user_q,
-            domain_failure_hint=hint,
-        )
-    return {"web_results": web_results}
+    def run(self, s: GraphStateModel) -> GraphState:
+        contextualized = s.query.strip()
+        user_q = (s.user_query or "").strip() or contextualized
+        hint = _domain_failure_hint(dict(s.domain_results))
+
+        if bool(getattr(get_config(), "agentcore_browser_enabled", False)):
+            web_results = run_browser_research(
+                contextualized_query=contextualized,
+                user_query=user_q,
+                domain_failure_hint=hint,
+            )
+        else:
+            web_results = run_web_search(
+                contextualized_query=contextualized,
+                user_query=user_q,
+                domain_failure_hint=hint,
+            )
+        return {"web_results": web_results}
+
+
+web_search_node = WebSearchNode()
