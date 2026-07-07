@@ -199,6 +199,7 @@ async def handle_chat_request(
 
         # Send initial status
         await conn.send_status(AgentStage.PLANNING, "Processing your request...")
+        conn.begin_streaming_response()
 
         # Detect language and translate to English if needed
         user_message = message.message
@@ -231,6 +232,11 @@ async def handle_chat_request(
                     _graph_status_stage(event.get("stage", "")),
                     event.get("message", ""),
                 )
+
+            elif event_type == "token":
+                content = event.get("content", "")
+                if content:
+                    await conn.send_token(str(content))
 
             elif event_type == "orchestrator_plan":
                 trace = event.get("trace", {})
@@ -437,6 +443,7 @@ async def handle_chat_resume(
         await conn.send_status(
             AgentStage.PLANNING, "Resuming with confirmed location..."
         )
+        conn.begin_streaming_response()
 
         # Extract resume information from the persisted pause state.
         confirmed_location = message.confirmed_location
@@ -508,6 +515,11 @@ async def handle_chat_resume(
                     _graph_status_stage(event.get("stage", "")),
                     event.get("message", ""),
                 )
+
+            elif event_type == "token":
+                content = event.get("content", "")
+                if content:
+                    await conn.send_token(str(content))
 
             elif event_type == "stage":
                 stage = event.get("stage", "")

@@ -258,6 +258,13 @@ class CompleteMessage(BaseModel):
     )
     artifacts: ToolArtifacts = Field(default=ToolArtifacts(), description="Artifacts")
     error: bool = Field(default=False, description="Whether an error occurred")
+    replace_streamed: bool = Field(
+        default=False,
+        description=(
+            "When true, clients should replace any text assembled from prior "
+            "token events with this response."
+        ),
+    )
 
 
 class ErrorMessage(BaseModel):

@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -128,25 +128,29 @@ class AgentServerConfig(BaseSettings):
         description="Route chat requests through the EO_LLM LangGraph pipeline instead of the legacy orchestrator",
     )
 
-    # AgentCore feature flag + connectivity (consumed by eo_llm.adapters)
-    agentcore_enabled: bool = Field(
-        default=True, description="Enable AWS Bedrock AgentCore integration"
+    # Bedrock LLM settings for the EO_LLM graph pipeline
+    bedrock_llm_enabled: bool = Field(
+        default=True,
+        description="Enable Bedrock LLM calls for the EO_LLM graph pipeline",
+        validation_alias=AliasChoices("bedrock_llm_enabled", "agentcore_enabled"),
     )
-    agentcore_region: str = Field(default="", description="AgentCore / Bedrock region")
-    agentcore_endpoint: str = Field(
-        default="", description="Optional Bedrock runtime endpoint URL"
+    bedrock_endpoint: str = Field(
+        default="",
+        description="Optional Bedrock runtime endpoint URL",
+        validation_alias=AliasChoices("bedrock_endpoint", "agentcore_endpoint"),
     )
-    agentcore_api_key: str = Field(default="", description="Optional AgentCore API key")
-    agentcore_router_model_id: str = Field(
-        default="", description="Bedrock model ID for domain routing decisions"
+    bedrock_router_model_id: str = Field(
+        default="",
+        description="Bedrock model ID for domain routing decisions",
+        validation_alias=AliasChoices("bedrock_router_model_id", "agentcore_router_model_id"),
     )
-    agentcore_tool_planner_model_id: str = Field(
-        default="", description="Bedrock model ID for per-domain tool planning"
+    bedrock_tool_planner_model_id: str = Field(
+        default="",
+        description="Bedrock model ID for per-domain tool planning",
+        validation_alias=AliasChoices(
+            "bedrock_tool_planner_model_id", "agentcore_tool_planner_model_id"
+        ),
     )
-    agentcore_timeout_seconds: int = Field(
-        default=20, ge=1, description="AgentCore call timeout in seconds"
-    )
-    agentcore_stage: str = Field(default="dev", description="Environment stage tag")
 
     # AgentCore Browser (Strands) — web fallback via managed browser
     agentcore_browser_enabled: bool = Field(
@@ -155,7 +159,7 @@ class AgentServerConfig(BaseSettings):
     )
     agentcore_browser_region: str = Field(
         default="",
-        description="AWS region for Browser API (defaults to agentcore_region)",
+        description="AWS region for Browser API (defaults to bedrock_region)",
     )
     agentcore_browser_timeout_seconds: int = Field(
         default=180,
@@ -202,21 +206,18 @@ class AgentServerConfig(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def _backfill_agentcore_from_bedrock(self) -> "AgentServerConfig":
-        """Default the AgentCore Bedrock settings to the main Bedrock config.
+    def _backfill_bedrock_llm_settings(self) -> "AgentServerConfig":
+        """Default graph Bedrock LLM model IDs from the main Bedrock config.
 
-        This lets the graph pipeline work out of the box with the existing
-        `BEDROCK_MODEL_ID` / `BEDROCK_REGION` settings; explicit `AGENTCORE_*`
-        values still take precedence.
+        Explicit ``BEDROCK_ROUTER_MODEL_ID`` / legacy ``AGENTCORE_*`` values still
+        take precedence via field aliases.
         """
-        if not (self.agentcore_region or "").strip():
-            self.agentcore_region = self.bedrock_region
-        if not (self.agentcore_router_model_id or "").strip():
-            self.agentcore_router_model_id = self.bedrock_model_id
-        if not (self.agentcore_tool_planner_model_id or "").strip():
-            self.agentcore_tool_planner_model_id = self.agentcore_router_model_id
+        if not (self.bedrock_router_model_id or "").strip():
+            self.bedrock_router_model_id = self.bedrock_model_id
+        if not (self.bedrock_tool_planner_model_id or "").strip():
+            self.bedrock_tool_planner_model_id = self.bedrock_router_model_id
         if not (self.agentcore_browser_region or "").strip():
-            self.agentcore_browser_region = self.agentcore_region
+            self.agentcore_browser_region = self.bedrock_region
         return self
 
 

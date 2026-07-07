@@ -5,6 +5,7 @@ from fastapi import WebSocket
 
 from src.schemas.websocket import (
     AgentStage,
+    TokenMessage,
     ToolArtifacts,
     ConnectionAckMessage,
     ConversationTitleMessage,
@@ -38,6 +39,16 @@ class WebSocketConnection:
         self._cancelled = False
         self.connection_id = str(uuid.uuid4())
         self.user_id = user_id
+        self._streamed_response = ""
+
+    def begin_streaming_response(self) -> None:
+        """Reset streamed token accumulation for a new chat turn."""
+        self._streamed_response = ""
+
+    @property
+    def streamed_response(self) -> str:
+        """Text accumulated from token events in the current turn."""
+        return self._streamed_response
 
     async def accept(self) -> None:
         """Accept the WebSocket connection and send acknowledgment."""
@@ -67,6 +78,12 @@ class WebSocketConnection:
     ) -> None:
         """Send a status update."""
         await self.send(StatusMessage(stage=stage, detail=detail))
+
+    async def send_token(self, content: str) -> None:
+        """Send a streaming LLM token."""
+        if content:
+            self._streamed_response += content
+        await self.send(TokenMessage(content=content))
 
     async def send_tool_start(self, tool_name: str, tool_input: dict) -> None:
         """Send notification that a tool is starting."""
@@ -110,6 +127,8 @@ class WebSocketConnection:
         conversation_id: Optional[uuid.UUID | str] = None,
         artifacts: Optional[ToolArtifacts] = None,
         error: bool = False,
+        *,
+        replace_streamed: bool | None = None,
     ) -> None:
         """Send completion message."""
         artifacts = artifacts or ToolArtifacts()
@@ -119,14 +138,29 @@ class WebSocketConnection:
             )
         else:
             normalized_conversation_id = conversation_id
+
+        streamed = self._streamed_response.strip()
+        canonical = response.strip()
+        if replace_streamed is None:
+            replace_streamed = bool(streamed) and streamed != canonical
+        if replace_streamed and streamed:
+            logger.debug(
+                "Complete response replaces streamed text "
+                "(streamed_chars=%d, canonical_chars=%d)",
+                len(self._streamed_response),
+                len(response),
+            )
+
         await self.send(
             CompleteMessage(
                 response=response,
                 conversation_id=normalized_conversation_id,
                 artifacts=artifacts,
                 error=error,
+                replace_streamed=replace_streamed,
             )
         )
+        self._streamed_response = ""
 
     async def send_error(self, message: str, recoverable: bool = True) -> None:
         """Send error message."""
