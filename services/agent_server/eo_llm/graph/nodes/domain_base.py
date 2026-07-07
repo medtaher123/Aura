@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Any, Callable, ClassVar
 
-from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
+from eo_llm.adapters.bedrock import BedrockLLMAdapter
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.nodes.helpers import LocationContext, wrap_domain_result
 from eo_llm.graph.state import GraphState, GraphStateModel

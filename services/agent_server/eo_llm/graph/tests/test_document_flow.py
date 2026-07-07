@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
+from eo_llm.adapters.bedrock import BedrockLLMAdapter
 from eo_llm.graph.nodes.domains.document_qa_node import document_qa_node
 from eo_llm.graph.nodes.orchestrator_node import orchestrator_node
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Callable, ClassVar
 
-from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
+from eo_llm.adapters.bedrock import BedrockLLMAdapter
 from eo_llm.adapters.mcp_client import call_mcp_tool
 from eo_llm.graph.state import GraphState, GraphStateModel, validate_state
 

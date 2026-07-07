@@ -16,7 +16,7 @@ from eo_llm.graph.backoff import backoff_strategy_for
 from eo_llm.prompts import get_arg_resolver_prompt, get_tool_planner_prompt
 
 if TYPE_CHECKING:
-    from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
+    from eo_llm.adapters.bedrock import BedrockLLMAdapter
 
 DomainName = Literal[
     "flood_damage",
