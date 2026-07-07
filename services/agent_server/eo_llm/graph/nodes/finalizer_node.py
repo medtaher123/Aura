@@ -1,11 +1,15 @@
-"""Finalizer node: builds final answer text."""
+"""Finalizer node: builds final answer text via Bedrock streaming."""
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
 
+from eo_llm.adapters.mcp_client import _emit
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
+from eo_llm.prompts import get_finalizer_prompt
 
 logger = logging.getLogger("eo_llm.finalizer")
 
@@ -26,6 +30,7 @@ class FinalizerNode(GraphNode):
         # A direct answer was already produced upstream (e.g. orchestrator handling
         # empty input or tools_info). Preserve it verbatim instead of re-composing.
         if s.next_step == "finalize_direct" and s.final_answer.strip():
+            _emit({"type": "token", "content": s.final_answer})
             return dump_state(s)
 
         source = s.answer_source or "domain_tools"
@@ -33,7 +38,7 @@ class FinalizerNode(GraphNode):
         query = s.query
 
         try:
-            s.final_answer = self._adapter.compose_final_answer(
+            s.final_answer = self._stream_final_answer(
                 query=query,
                 answer_source=source,
                 aggregated_evidence=evidence,
@@ -42,13 +47,58 @@ class FinalizerNode(GraphNode):
             )
         except (RuntimeError, ValueError) as exc:
             logger.warning(
-                "compose_final_answer failed (%s: %s)",
+                "final answer streaming failed (%s: %s)",
                 type(exc).__name__,
                 str(exc)[:300],
             )
             user_q = (s.user_query or "").strip() or (s.query or "").strip()
             s.final_answer = _fallback_answer(user_q, exc)
+            _emit({"type": "token", "content": s.final_answer})
         return dump_state(s)
+
+    def _stream_final_answer(
+        self,
+        *,
+        query: str,
+        answer_source: str,
+        aggregated_evidence: str,
+        domain_results: dict,
+        web_results: list,
+    ) -> str:
+        adapter = self._adapter
+        model_id = adapter.finalizer_model_id
+        if not adapter.is_ready() or not model_id:
+            raise RuntimeError("Bedrock finalizer unavailable.")
+
+        provider = adapter.provider
+        assert provider is not None
+
+        today_utc = datetime.now(timezone.utc).date().isoformat()
+        system_prompt, user_prompt = get_finalizer_prompt(
+            today_utc=today_utc,
+            query=query,
+            answer_source=answer_source,
+            aggregated_evidence=aggregated_evidence,
+            domain_results_json=json.dumps(domain_results, default=str)[:6000],
+            web_results_json=json.dumps(web_results, default=str)[:2500],
+        )
+
+        parts: list[str] = []
+        for chunk in provider.call_stream(
+            model_id=model_id,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=900,
+        ):
+            if not chunk:
+                continue
+            parts.append(chunk)
+            _emit({"type": "token", "content": chunk})
+
+        final_answer = "".join(parts).strip()
+        if not final_answer:
+            raise RuntimeError("Bedrock finalizer returned empty answer.")
+        return final_answer
 
 
 finalizer_node = FinalizerNode()

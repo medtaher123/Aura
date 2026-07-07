@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from eo_llm.adapters.agentcore_adapter import AgentCoreAdapter
+from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
 from eo_llm.graph.nodes.domains.document_qa_node import document_qa_node
 from eo_llm.graph.nodes.orchestrator_node import orchestrator_node
 
@@ -21,8 +21,8 @@ def test_orchestrator_resolves_location_from_document(monkeypatch) -> None:
         seen["query"] = query
         return SimpleNamespace(domains=["disaster_detection"], confidence=0.9)
 
-    monkeypatch.setattr(AgentCoreAdapter, "extract_location_from_document", fake_extract)
-    monkeypatch.setattr(AgentCoreAdapter, "route_domains", fake_route)
+    monkeypatch.setattr(BedrockLLMAdapter, "extract_location_from_document", fake_extract)
+    monkeypatch.setattr(BedrockLLMAdapter, "route_domains", fake_route)
 
     out = orchestrator_node(
         {
@@ -43,7 +43,7 @@ def test_document_qa_node_uses_uploaded_document(monkeypatch) -> None:
         assert document_ref["document_id"] == "doc-2"
         return {"answer": "The document reports 12 events.", "citations": []}
 
-    monkeypatch.setattr(AgentCoreAdapter, "answer_question_with_document", fake_answer)
+    monkeypatch.setattr(BedrockLLMAdapter, "answer_question_with_document", fake_answer)
 
     out = document_qa_node(
         {

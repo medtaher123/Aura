@@ -112,7 +112,7 @@ def get_tool_metadata(tool_name: str) -> dict[str, Any]:
     """Return MCP-advertised signature metadata for a tool.
 
     Fetches and caches the MCP server's `list_tools` schemas on first use so the
-    AgentCore argument resolver knows each tool's real parameter names, required
+    Bedrock argument resolver knows each tool's real parameter names, required
     fields, and docstring (needed to derive e.g. dates from the user query).
     """
     global _tool_metadata_cache

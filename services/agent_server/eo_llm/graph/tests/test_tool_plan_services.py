@@ -36,10 +36,10 @@ def test_introspector_caches_metadata() -> None:
 def test_planner_select_tool_plan_validates_domain_and_tools() -> None:
     adapter = MagicMock()
     adapter.is_ready.return_value = True
-    adapter.structured_client = MagicMock()
+    adapter.provider = MagicMock()
     adapter._tool_planner_model_id = "model-1"
-    adapter._last_bedrock_failure_reason = None
-    adapter.structured_client.call_structured.return_value = ToolPlan(
+    adapter.provider.last_failure_reason = ""
+    adapter.provider.call_structured.return_value = ToolPlan(
         domain="fire_detection",
         tool_steps=[],
         stop_policy=StopPolicy(),

@@ -1,6 +1,6 @@
-"""AgentCore integration seam.
+"""Bedrock LLM integration for the EO_LLM graph pipeline.
 
-Keep this adapter thin so graph code stays framework-agnostic.
+Provides routing, planning, and document QA via AWS Bedrock Runtime.
 """
 
 from __future__ import annotations
@@ -8,15 +8,19 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, Literal, Type, TypeVar
+from typing import Any, Callable, Iterator, Literal, Protocol, Type, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.document_store import load_document_bytes
-from eo_llm.prompts import DOCUMENT_QA_SYSTEM, get_document_location_prompt
+from eo_llm.prompts import (
+    DOCUMENT_QA_SYSTEM,
+    get_document_location_prompt,
+    get_query_location_prompt,
+    get_router_prompt,
+)
 
-logger = logging.getLogger("eo_llm.agentcore")
+logger = logging.getLogger("eo_llm.bedrock")
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -47,14 +51,6 @@ class DomainRouteDecision(BaseModel):
     stop_after_domains_if_confidence_at_least: float = Field(default=0.8, ge=0.0, le=1.0)
 
 
-class FinalAnswerResponse(BaseModel):
-    """Schema for structured final answers."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    final_answer: str
-
-
 class LocationHint(BaseModel):
     """Schema for geo-location query extraction."""
 
@@ -63,12 +59,75 @@ class LocationHint(BaseModel):
     place_query: str
 
 
-class BedrockStructuredClient:
-    """Handles communications, schema rendering, and auto-parsing for Bedrock."""
+@dataclass
+class LLMSessionContext:
+    task_id: str
+    session_id: str
+    user_id: str
+
+
+class BedrockLLMSettings(Protocol):
+    """Bedrock LLM settings consumed by the graph adapter."""
+
+    bedrock_llm_enabled: bool
+    bedrock_region: str
+    bedrock_endpoint: str
+    bedrock_router_model_id: str
+    bedrock_tool_planner_model_id: str
+
+
+class LLMProvider(Protocol):
+    """Interface for LLM communications."""
+
+    @property
+    def last_failure_reason(self) -> str: ...
+
+    def call_structured(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: Type[T],
+        schema_name: str,
+        schema_description: str,
+        temperature: float = 0.0,
+        max_tokens: int = 800,
+        user_content: list[dict[str, Any]] | None = None,
+    ) -> T | None: ...
+
+    def call_stream(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.0,
+        max_tokens: int = 900,
+    ) -> Iterator[str]: ...
+
+    def call_standard_with_document(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        document_bytes: bytes,
+        document_name: str,
+        document_format: str,
+    ) -> dict[str, Any]: ...
+
+
+class BedrockRuntimeClient(LLMProvider):
+    """AWS Bedrock Runtime implementation of ``LLMProvider``."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
-        self.last_failure_reason = ""
+        self._last_failure_reason = ""
+
+    @property
+    def last_failure_reason(self) -> str:
+        return self._last_failure_reason
 
     def call_structured(
         self,
@@ -83,12 +142,11 @@ class BedrockStructuredClient:
         max_tokens: int = 800,
         user_content: list[dict[str, Any]] | None = None,
     ) -> T | None:
-        """Send native Pydantic schema to Bedrock and auto-parse the response."""
         if not self._client or not model_id:
-            self.last_failure_reason = "client_or_model_not_ready"
+            self._last_failure_reason = "client_or_model_not_ready"
             return None
 
-        self.last_failure_reason = ""
+        self._last_failure_reason = ""
         native_schema = response_model.model_json_schema()
 
         try:
@@ -121,7 +179,7 @@ class BedrockStructuredClient:
 
             stop_reason = str(response.get("stopReason") or "").lower()
             if stop_reason in {"max_tokens", "guardrail_intervened", "content_filtered"}:
-                self.last_failure_reason = f"stop_reason:{stop_reason}"
+                self._last_failure_reason = f"stop_reason:{stop_reason}"
                 return None
 
             content = response.get("output", {}).get("message", {}).get("content", [])
@@ -134,41 +192,149 @@ class BedrockStructuredClient:
             return response_model.model_validate_json(raw_text)
 
         except Exception as e:
-            self.last_failure_reason = f"{type(e).__name__}:{e}"
-            logger.warning("Bedrock call failed for schema %s: %s", schema_name, e)
+            self._last_failure_reason = f"{type(e).__name__}:{e}"
+            logger.warning("Bedrock structured call failed for schema %s: %s", schema_name, e)
             return None
 
+    def call_stream(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.0,
+        max_tokens: int = 900,
+    ) -> Iterator[str]:
+        """Send a standard text prompt and yield streamed text responses."""
+        if not self._client or not model_id:
+            self._last_failure_reason = "client_or_model_not_ready"
+            return
 
-@dataclass
-class AgentCoreContext:
-    task_id: str
-    session_id: str
-    user_id: str
+        self._last_failure_reason = ""
 
+        try:
+            response = self._client.converse_stream(
+                modelId=model_id,
+                system=[{"text": system_prompt}],
+                messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+                inferenceConfig={
+                    "temperature": float(temperature),
+                    "maxTokens": int(max_tokens),
+                },
+            )
 
-class AgentCoreAdapter:
-    """Cleaned structural adapter for AgentCore integration."""
+            for event in response.get("stream", []):
+                if "contentBlockDelta" in event:
+                    delta = event["contentBlockDelta"].get("delta", {})
+                    if "text" in delta:
+                        yield delta["text"]
 
-    def __init__(self, route_decider: RouteDecider | None = None) -> None:
-        cfg = self._load_runtime_config()
-        self._agentcore_enabled = bool(cfg.agentcore_enabled)
-        self._router_model_id = (cfg.agentcore_router_model_id or "").strip()
-        self._tool_planner_model_id = (cfg.agentcore_tool_planner_model_id or "").strip()
-        self._route_decider = route_decider
+        except Exception as e:
+            self._last_failure_reason = f"{type(e).__name__}:{e}"
+            logger.warning("Bedrock streaming call failed: %s", e)
+            raise RuntimeError(f"Streaming failed: {self._last_failure_reason}") from e
 
-        raw_boto_client = self._init_agentcore_client()
-        self.structured_client = (
-            BedrockStructuredClient(raw_boto_client) if raw_boto_client else None
+    def call_standard_with_document(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        document_bytes: bytes,
+        document_name: str,
+        document_format: str,
+    ) -> dict[str, Any]:
+        """Handles standard (non-structured) calls that include a document payload."""
+        response = self._client.converse(
+            modelId=model_id,
+            system=[{"text": system_prompt}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": user_prompt},
+                        {
+                            "document": {
+                                "format": document_format,
+                                "name": document_name,
+                                "source": {"bytes": document_bytes},
+                            }
+                        },
+                    ],
+                }
+            ],
+            inferenceConfig={"temperature": 0.0, "maxTokens": 900},
         )
+        return response
 
-    @property
-    def _last_bedrock_failure_reason(self) -> str:
-        if self.structured_client is None:
-            return "client_not_initialized"
-        return self.structured_client.last_failure_reason
+
+def _create_bedrock_runtime_client(config: BedrockLLMSettings) -> BedrockRuntimeClient | None:
+    """Build the default Bedrock runtime client from application config."""
+    if not config.bedrock_llm_enabled:
+        return None
+    try:
+        import boto3
+
+        kwargs: dict[str, Any] = {"region_name": config.bedrock_region}
+        endpoint = (config.bedrock_endpoint or "").strip()
+        if endpoint:
+            kwargs["endpoint_url"] = endpoint
+        return BedrockRuntimeClient(boto3.client("bedrock-runtime", **kwargs))
+    except Exception:
+        return None
+
+
+def create_bedrock_llm_adapter(
+    route_decider: RouteDecider | None = None,
+) -> BedrockLLMAdapter:
+    """Factory for the production Bedrock LLM adapter with config-driven defaults."""
+    from eo_llm.config import get_config
+
+    cfg = get_config()
+    return BedrockLLMAdapter(
+        config=cfg,
+        provider=_create_bedrock_runtime_client(cfg),
+        route_decider=route_decider,
+    )
+
+
+class BedrockLLMAdapter:
+    """High-level Bedrock LLM adapter used by EO_LLM graph nodes."""
+
+    def __init__(
+        self,
+        config: BedrockLLMSettings | None = None,
+        provider: LLMProvider | None = None,
+        route_decider: RouteDecider | None = None,
+    ) -> None:
+        if config is None:
+            from eo_llm.config import get_config
+
+            config = get_config()
+
+        self._bedrock_llm_enabled = bool(config.bedrock_llm_enabled)
+        self._router_model_id = (config.bedrock_router_model_id or "").strip()
+        self._tool_planner_model_id = (config.bedrock_tool_planner_model_id or "").strip()
+
+        self._route_decider = route_decider
+        self.provider = provider
+        if self.provider is None and self._bedrock_llm_enabled:
+            self.provider = _create_bedrock_runtime_client(config)
 
     def is_ready(self) -> bool:
-        return bool(self._agentcore_enabled and self.structured_client is not None)
+        return bool(self._bedrock_llm_enabled and self.provider is not None)
+
+    @property
+    def router_model_id(self) -> str:
+        return self._router_model_id
+
+    @property
+    def tool_planner_model_id(self) -> str:
+        return self._tool_planner_model_id
+
+    @property
+    def finalizer_model_id(self) -> str:
+        return self._router_model_id or self._tool_planner_model_id
 
     def route_domains(self, *, query: str) -> DomainRouteDecision:
         q = (query or "").strip().lower()
@@ -190,12 +356,9 @@ class AgentCoreAdapter:
                 )
 
         if self.is_ready() and self._router_model_id:
-            from eo_llm.prompts import get_router_prompt
-
-            client = self.structured_client
-            assert client is not None
+            assert self.provider is not None
             system_prompt, user_prompt = get_router_prompt(query=q)
-            decision = client.call_structured(
+            decision = self.provider.call_structured(
                 model_id=self._router_model_id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -208,69 +371,20 @@ class AgentCoreAdapter:
                 return decision
 
             raise RuntimeError(
-                "AgentCore route_domains Bedrock call failed. "
-                f"Reason: {self._last_bedrock_failure_reason}"
+                "Bedrock route_domains call failed. "
+                f"Reason: {self.provider.last_failure_reason}"
             )
 
-        raise RuntimeError("AgentCore route_domains unavailable.")
-
-    def compose_final_answer(
-        self,
-        *,
-        query: str,
-        answer_source: str,
-        aggregated_evidence: str,
-        domain_results: dict[str, Any] | None = None,
-        web_results: list[dict[str, Any]] | None = None,
-    ) -> str:
-        model_id = self._router_model_id or self._tool_planner_model_id
-        if not self.is_ready() or not model_id:
-            raise RuntimeError("AgentCore finalizer unavailable.")
-
-        from eo_llm.prompts import get_finalizer_prompt
-
-        client = self.structured_client
-        assert client is not None
-        today_utc = datetime.now(timezone.utc).date().isoformat()
-        system_prompt, user_prompt = get_finalizer_prompt(
-            today_utc=today_utc,
-            query=query,
-            answer_source=answer_source,
-            aggregated_evidence=aggregated_evidence,
-            domain_results_json=json.dumps(domain_results or {}, default=str)[:6000],
-            web_results_json=json.dumps(web_results or [], default=str)[:2500],
-        )
-
-        response = client.call_structured(
-            model_id=model_id,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_model=FinalAnswerResponse,
-            schema_name="final_answer_response",
-            schema_description="Final user-facing answer text",
-            max_tokens=900,
-        )
-        if response is None:
-            raise RuntimeError(
-                "AgentCore compose_final_answer failed. "
-                f"Reason: {self._last_bedrock_failure_reason}"
-            )
-        final_answer = response.final_answer.strip()
-        if not final_answer:
-            raise RuntimeError("AgentCore compose_final_answer returned empty answer.")
-        return final_answer
+        raise RuntimeError("Bedrock route_domains unavailable.")
 
     def extract_location_hint(self, *, query: str) -> str:
         model_id = self._router_model_id or self._tool_planner_model_id
         if not self.is_ready() or not model_id:
             return ""
 
-        from eo_llm.prompts import get_query_location_prompt
-
-        client = self.structured_client
-        assert client is not None
+        assert self.provider is not None
         system_prompt, user_prompt = get_query_location_prompt(query=query)
-        response = client.call_structured(
+        response = self.provider.call_structured(
             model_id=model_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -287,8 +401,9 @@ class AgentCoreAdapter:
         """Answer a user question grounded in one uploaded document."""
         model_id = self._router_model_id or self._tool_planner_model_id
         if not self.is_ready() or not model_id:
-            raise RuntimeError("AgentCore document QA unavailable: Bedrock model/client not ready.")
-        assert self.structured_client is not None
+            raise RuntimeError("Bedrock document QA unavailable: provider not ready.")
+
+        assert self.provider is not None
 
         doc_bytes = load_document_bytes(document_ref)
         if not doc_bytes:
@@ -296,26 +411,17 @@ class AgentCoreAdapter:
 
         neutral_name = str(document_ref.get("neutral_name") or "Uploaded Document").strip()
         format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
-        response = self.structured_client._client.converse(
-            modelId=model_id,
-            system=[{"text": DOCUMENT_QA_SYSTEM}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": (query or "").strip() or "Summarize this document."},
-                        {
-                            "document": {
-                                "format": format_value,
-                                "name": neutral_name,
-                                "source": {"bytes": doc_bytes},
-                            }
-                        },
-                    ],
-                }
-            ],
-            inferenceConfig={"temperature": 0.0, "maxTokens": 900},
+        user_prompt = (query or "").strip() or "Summarize this document."
+
+        response = self.provider.call_standard_with_document(
+            model_id=model_id,
+            system_prompt=DOCUMENT_QA_SYSTEM,
+            user_prompt=user_prompt,
+            document_bytes=doc_bytes,
+            document_name=neutral_name,
+            document_format=format_value,
         )
+
         text = self._extract_text_from_converse_response(response)
         citations = self._extract_document_citations(response)
         return {"answer": text, "citations": citations}
@@ -327,6 +433,7 @@ class AgentCoreAdapter:
         model_id = self._router_model_id or self._tool_planner_model_id
         if not self.is_ready() or not model_id:
             return ""
+
         try:
             doc_bytes = load_document_bytes(document_ref)
         except Exception:
@@ -335,9 +442,9 @@ class AgentCoreAdapter:
         neutral_name = str(document_ref.get("neutral_name") or "Uploaded Document").strip()
         format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
         system_prompt, user_prompt = get_document_location_prompt(query=query)
-        client = self.structured_client
-        assert client is not None
-        response = client.call_structured(
+
+        assert self.provider is not None
+        response = self.provider.call_structured(
             model_id=model_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -357,26 +464,6 @@ class AgentCoreAdapter:
             ],
         )
         return response.place_query.strip() if response else ""
-
-    @staticmethod
-    def _load_runtime_config() -> Any:
-        import importlib
-
-        return importlib.import_module("eo_llm.config").get_config()
-
-    def _init_agentcore_client(self) -> Any | None:
-        if not self._agentcore_enabled:
-            return None
-        try:
-            import boto3
-
-            cfg = self._load_runtime_config()
-            kwargs: dict[str, Any] = {"region_name": cfg.agentcore_region}
-            if getattr(cfg, "agentcore_endpoint", None):
-                kwargs["endpoint_url"] = cfg.agentcore_endpoint.strip()
-            return boto3.client("bedrock-runtime", **kwargs)
-        except Exception:
-            return None
 
     @staticmethod
     def _extract_text_from_converse_response(response: dict[str, Any]) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Any, Callable, ClassVar
 
-from eo_llm.adapters.agentcore_adapter import AgentCoreAdapter
+from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.nodes.helpers import LocationContext, wrap_domain_result
 from eo_llm.graph.state import GraphState, GraphStateModel
@@ -44,7 +44,7 @@ class DomainNode(GraphNode):
 
 
 class ToolPlanDomainNode(DomainNode):
-    """Domain node that plans and executes MCP tools via AgentCore."""
+    """Domain node that plans and executes MCP tools via Bedrock LLM."""
 
     tools: ClassVar[list[str]]
     requires_location: bool = True
@@ -52,7 +52,7 @@ class ToolPlanDomainNode(DomainNode):
 
     def __init__(
         self,
-        adapter: AgentCoreAdapter | None = None,
+        adapter: BedrockLLMAdapter | None = None,
         tool_caller: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
         *,
         introspector: ToolIntrospector | None = None,

@@ -90,13 +90,13 @@ def run_browser_research(
         ]
 
     region = (getattr(cfg, "agentcore_browser_region", "") or "").strip() or (
-        getattr(cfg, "agentcore_region", "") or ""
+        getattr(cfg, "bedrock_region", "") or ""
     ).strip()
     if not region:
         return [
             {
                 "title": "Configuration error",
-                "snippet": "agentcore_browser_region or agentcore_region must be set for AgentCore Browser.",
+                "snippet": "agentcore_browser_region or bedrock_region must be set for AgentCore Browser.",
                 "url": "",
             }
         ]
@@ -269,7 +269,7 @@ def browser_runtime_info() -> dict[str, Any]:
 
     cfg = get_config()
     region = (getattr(cfg, "agentcore_browser_region", "") or "").strip() or (
-        getattr(cfg, "agentcore_region", "") or ""
+        getattr(cfg, "bedrock_region", "") or ""
     ).strip()
     enabled = bool(getattr(cfg, "agentcore_browser_enabled", False))
     deps_ok = False

@@ -156,6 +156,10 @@ class RemoteAgentAdapter:
                     }
                 )
 
+        def on_token(content: str):
+            if stream_callback and content:
+                stream_callback({"type": "token", "content": content})
+
         try:
             if resume and confirmed_location:
                 if not conversation_id:
@@ -174,6 +178,7 @@ class RemoteAgentAdapter:
                 response = client.resume_chat(
                     confirmed_location=loc,
                     conversation_id=conversation_id,
+                    on_token=on_token,
                     on_status=on_status,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
@@ -186,6 +191,7 @@ class RemoteAgentAdapter:
                     chat_history=history,
                     document_context=document_context,
                     language=language,
+                    on_token=on_token,
                     on_status=on_status,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,

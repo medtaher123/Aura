@@ -5,9 +5,12 @@ Renders assistant responses, including map artifacts (HTML or Pydeck specs).
 
 import io
 import os
+import queue
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 from urllib.parse import urlparse
 from typing_extensions import TypedDict
 
@@ -202,6 +205,82 @@ def _invoke_agent_unified(
         stream_callback=stream_callback,
         language=language,
     )
+
+
+def _invoke_agent_with_streaming_display(
+    executor,
+    *,
+    message_placeholder: DeltaGenerator,
+    trace_callback: Callable[[dict], None] | None = None,
+    english_query: str = "",
+    chat_history=None,
+    resume=None,
+    confirmed_location=None,
+    conversation_id=None,
+    language=None,
+    document_context=None,
+) -> AgentResponse:
+    """Run the agent on a worker thread and render stream events on the main thread."""
+    event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+
+    def stream_callback(evt: dict) -> None:
+        if not isinstance(evt, dict):
+            return
+        if evt.get("type") == "token":
+            content = evt.get("content")
+            if isinstance(content, str) and content:
+                event_queue.put(("token", content))
+            return
+        event_queue.put(("event", evt))
+
+    def run_agent() -> AgentResponse:
+        return _invoke_agent_unified(
+            executor,
+            english_query,
+            chat_history=chat_history,
+            resume=resume,
+            confirmed_location=confirmed_location,
+            conversation_id=conversation_id,
+            stream_callback=stream_callback,
+            language=language,
+            document_context=document_context,
+        )
+
+    def drain_events() -> None:
+        nonlocal streamed, show_cursor
+        while True:
+            try:
+                kind, payload = event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "token" and isinstance(payload, str):
+                streamed += payload
+                show_cursor = True
+                message_placeholder.markdown(streamed + "▌")
+            elif kind == "event" and trace_callback and isinstance(payload, dict):
+                trace_callback(payload)
+
+    streamed = ""
+    show_cursor = False
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(run_agent)
+        while True:
+            drain_events()
+            if future.done():
+                drain_events()
+                break
+            time.sleep(0.02)
+
+        result = future.result()
+
+    final_text = (result.message or streamed).strip()
+    if final_text:
+        message_placeholder.markdown(final_text)
+    elif show_cursor:
+        message_placeholder.empty()
+
+    return result
 
 
 def _default_pydeck_map_style() -> str:
@@ -874,77 +953,84 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
-            with st.spinner("Continuing..."):
-                trace_placeholder = st.empty()
-                live_callback = _make_live_trace_updater(trace_placeholder)
-                try:
-                    logger.debug(
-                        f"Auto-confirming location, resuming conversation_id={st.session_state.conversation_id}"
-                    )
-                    auto_loc = _confirmed_location_from_cache(
-                        cached.get("display", ""), patched_value
-                    )
-                    result = _invoke_agent_unified(
-                        agent_executor,
-                        "",
-                        resume=True,
-                        confirmed_location=auto_loc,
-                        conversation_id=st.session_state.conversation_id,
-                        stream_callback=live_callback,
-                    )
-                    _store_conversation_id(result.conversation_id)
-                    _store_conversation_title(
-                        result.conversation_id, result.conversation_title
-                    )
-                    logger.info("Auto-confirm completed successfully")
-                    logger.debug(
-                        f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
-                    )
+            trace_placeholder = st.empty()
+            message_placeholder = st.empty()
+            live_callback = _make_live_trace_updater(trace_placeholder)
+            try:
+                logger.debug(
+                    f"Auto-confirming location, resuming conversation_id={st.session_state.conversation_id}"
+                )
+                auto_loc = _confirmed_location_from_cache(
+                    cached.get("display", ""), patched_value
+                )
+                result = _invoke_agent_with_streaming_display(
+                    agent_executor,
+                    message_placeholder=message_placeholder,
+                    trace_callback=live_callback,
+                    english_query="",
+                    resume=True,
+                    confirmed_location=auto_loc,
+                    conversation_id=st.session_state.conversation_id,
+                )
+                _store_conversation_id(result.conversation_id)
+                _store_conversation_title(
+                    result.conversation_id, result.conversation_title
+                )
+                logger.info("Auto-confirm completed successfully")
+                logger.debug(
+                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                )
 
-                    # Check if location confirmation is needed
-                    if result.needs_location_confirmation:
-                        logger.info("Another location confirmation needed")
-                        st.session_state.pending_location_confirmation = {
-                            "needs_location_confirmation": True,
-                            "candidates": result.location_options,
-                            "pause": result.pause_state,
-                        }
+                # Check if location confirmation is needed
+                if result.needs_location_confirmation:
+                    logger.info("Another location confirmation needed")
+                    st.session_state.pending_location_confirmation = {
+                        "needs_location_confirmation": True,
+                        "candidates": result.location_options,
+                        "pause": result.pause_state,
+                    }
 
-                    detected_lang = st.session_state.last_lang or "en"
-                    assistant_message_en = result.message or ""
-                    if not isinstance(assistant_message_en, str):
-                        assistant_message_en = str(assistant_message_en)
+                detected_lang = st.session_state.last_lang or "en"
+                assistant_message_en = result.message or ""
+                if not isinstance(assistant_message_en, str):
+                    assistant_message_en = str(assistant_message_en)
 
-                    ui_message = assistant_message_en
-                    if isinstance(ui_message, str):
-                        ui_message = translate_from_english(ui_message, detected_lang)
+                ui_message = assistant_message_en
+                if isinstance(ui_message, str):
+                    ui_message = translate_from_english(ui_message, detected_lang)
+                message_placeholder.markdown(ui_message)
 
-                    st.session_state.messages_en.append(
-                        {"role": "assistant", "content": assistant_message_en}
+                st.session_state.messages_en.append(
+                    {"role": "assistant", "content": assistant_message_en}
+                )
+                st.session_state.messages.append(
+                    AssistantMessage(
+                        role="assistant",
+                        content=ui_message,
+                        artifacts=result.artifacts,
+                        error=result.error,
                     )
-                    st.session_state.messages.append(
-                        AssistantMessage(
-                            role="assistant",
-                            content=ui_message,
-                            artifacts=result.artifacts,
-                            error=result.error,
-                        )
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error during auto-confirm: {type(e).__name__}: {str(e)}",
+                    exc_info=True,
+                )
+                error_msg = f"❌ Error: {str(e)}"
+                message_placeholder.error(error_msg)
+                st.session_state.messages.append(
+                    AssistantMessage(
+                        role="assistant",
+                        content=error_msg,
+                        artifacts=ToolArtifacts(),
+                        error=True,
                     )
-                except Exception as e:
-                    error_msg = f"❌ Error: {str(e)}"
-                    st.session_state.messages.append(
-                        AssistantMessage(
-                            role="assistant",
-                            content=error_msg,
-                            artifacts=ToolArtifacts(),
-                            error=True,
-                        )
-                    )
-                    st.session_state.messages_en.append(
-                        {"role": "assistant", "content": error_msg}
-                    )
-                finally:
-                    trace_placeholder.empty()
+                )
+                st.session_state.messages_en.append(
+                    {"role": "assistant", "content": error_msg}
+                )
+            finally:
+                trace_placeholder.empty()
 
         st.rerun()
 
@@ -1025,88 +1111,91 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
-            with st.spinner("Continuing..."):
-                trace_placeholder = st.empty()
-                live_callback = _make_live_trace_updater(trace_placeholder)
-                try:
-                    logger.debug(
-                        f"Resuming after location confirmation: conversation_id={st.session_state.conversation_id}"
-                    )
-                    logger.debug(f"Patched value: {patched_value}")
-                    confirmed_loc = {
-                        "name": choice.name,
-                        "coordinates": choice.coordinates,
-                        "place_id": choice.place_id,
-                        "osm_id": choice.osm_id,
-                        "osm_type": choice.osm_type,
-                        "osm_type_prefix": choice.osm_type_prefix,
+            trace_placeholder = st.empty()
+            message_placeholder = st.empty()
+            live_callback = _make_live_trace_updater(trace_placeholder)
+            try:
+                logger.debug(
+                    f"Resuming after location confirmation: conversation_id={st.session_state.conversation_id}"
+                )
+                logger.debug(f"Patched value: {patched_value}")
+                confirmed_loc = {
+                    "name": choice.name,
+                    "coordinates": choice.coordinates,
+                    "place_id": choice.place_id,
+                    "osm_id": choice.osm_id,
+                    "osm_type": choice.osm_type,
+                    "osm_type_prefix": choice.osm_type_prefix,
+                }
+                result = _invoke_agent_with_streaming_display(
+                    agent_executor,
+                    message_placeholder=message_placeholder,
+                    trace_callback=live_callback,
+                    english_query="",
+                    resume=True,
+                    confirmed_location=confirmed_loc,
+                    conversation_id=st.session_state.conversation_id,
+                )
+                _store_conversation_id(result.conversation_id)
+                _store_conversation_title(
+                    result.conversation_id, result.conversation_title
+                )
+                logger.info(
+                    "Resume after location confirmation completed successfully"
+                )
+                logger.debug(
+                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                )
+
+                # Check if location confirmation is needed
+                if result.needs_location_confirmation:
+                    logger.info("Another location confirmation needed")
+                    st.session_state.pending_location_confirmation = {
+                        "needs_location_confirmation": True,
+                        "candidates": result.location_options,
+                        "pause": result.pause_state,
                     }
-                    result = _invoke_agent_unified(
-                        agent_executor,
-                        "",
-                        resume=True,
-                        confirmed_location=confirmed_loc,
-                        conversation_id=st.session_state.conversation_id,
-                        stream_callback=live_callback,
-                    )
-                    _store_conversation_id(result.conversation_id)
-                    _store_conversation_title(
-                        result.conversation_id, result.conversation_title
-                    )
-                    logger.info(
-                        "Resume after location confirmation completed successfully"
-                    )
-                    logger.debug(
-                        f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
-                    )
 
-                    # Check if location confirmation is needed
-                    if result.needs_location_confirmation:
-                        logger.info("Another location confirmation needed")
-                        st.session_state.pending_location_confirmation = {
-                            "needs_location_confirmation": True,
-                            "candidates": result.location_options,
-                            "pause": result.pause_state,
-                        }
+                assistant_message_en = result.message or ""
+                if not isinstance(assistant_message_en, str):
+                    assistant_message_en = str(assistant_message_en)
 
-                    assistant_message_en = result.message or ""
-                    if not isinstance(assistant_message_en, str):
-                        assistant_message_en = str(assistant_message_en)
+                ui_message = assistant_message_en
+                if isinstance(ui_message, str):
+                    ui_message = translate_from_english(ui_message, detected_lang)
+                message_placeholder.markdown(ui_message)
 
-                    ui_message = assistant_message_en
-                    if isinstance(ui_message, str):
-                        ui_message = translate_from_english(ui_message, detected_lang)
-
-                    st.session_state.messages_en.append(
-                        {"role": "assistant", "content": assistant_message_en}
+                st.session_state.messages_en.append(
+                    {"role": "assistant", "content": assistant_message_en}
+                )
+                st.session_state.messages.append(
+                    AssistantMessage(
+                        role="assistant",
+                        content=ui_message,
+                        artifacts=result.artifacts,
+                        error=result.error,
                     )
-                    st.session_state.messages.append(
-                        AssistantMessage(
-                            role="assistant",
-                            content=ui_message,
-                            artifacts=result.artifacts,
-                            error=result.error,
-                        )
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error during resume: {type(e).__name__}: {str(e)}",
+                    exc_info=True,
+                )
+                error_msg = f"❌ Error: {str(e)}"
+                message_placeholder.error(error_msg)
+                st.session_state.messages.append(
+                    AssistantMessage(
+                        role="assistant",
+                        content=error_msg,
+                        artifacts=ToolArtifacts(),
+                        error=True,
                     )
-                except Exception as e:
-                    logger.error(
-                        f"Error during resume: {type(e).__name__}: {str(e)}",
-                        exc_info=True,
-                    )
-                    error_msg = f"❌ Error: {str(e)}"
-                    st.session_state.messages.append(
-                        AssistantMessage(
-                            role="assistant",
-                            content=error_msg,
-                            artifacts=ToolArtifacts(),
-                            error=True,
-                        )
-                    )
-                    st.session_state.messages_en.append(
-                        {"role": "assistant", "content": error_msg}
-                    )
-                finally:
-                    trace_placeholder.empty()
+                )
+                st.session_state.messages_en.append(
+                    {"role": "assistant", "content": error_msg}
+                )
+            finally:
+                trace_placeholder.empty()
 
         st.rerun()
 
@@ -1123,88 +1212,91 @@ if user_input:
         st.write(user_input)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            trace_placeholder = st.empty()
-            live_callback = _make_live_trace_updater(trace_placeholder)
+        trace_placeholder = st.empty()
+        message_placeholder = st.empty()
+        live_callback = _make_live_trace_updater(trace_placeholder)
 
-            try:
-                english_query, detected_lang = detect_and_translate_to_english(
-                    user_input
-                )
-                st.session_state.last_lang = detected_lang
-                st.session_state.messages_en.append(
-                    {"role": "user", "content": english_query}
-                )
+        try:
+            english_query, detected_lang = detect_and_translate_to_english(
+                user_input
+            )
+            st.session_state.last_lang = detected_lang
+            st.session_state.messages_en.append(
+                {"role": "user", "content": english_query}
+            )
 
-                english_query_augmented = _augment_with_document(english_query)
-                logger.debug(
-                    f"Invoking agent with query: {english_query_augmented[:100]}..."
-                )
-                history_for_agent = st.session_state.messages_en[:-1]
-                result = _invoke_agent_unified(
-                    agent_executor,
-                    english_query_augmented,
-                    conversation_id=st.session_state.conversation_id,
-                    chat_history=history_for_agent,
-                    stream_callback=live_callback,
-                )
-                _store_conversation_id(result.conversation_id)
-                _store_conversation_title(
-                    result.conversation_id, result.conversation_title
-                )
-                logger.info("Agent response received successfully")
-                logger.debug(
-                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
-                )
+            english_query_augmented = _augment_with_document(english_query)
+            logger.debug(
+                f"Invoking agent with query: {english_query_augmented[:100]}..."
+            )
+            history_for_agent = st.session_state.messages_en[:-1]
+            result = _invoke_agent_with_streaming_display(
+                agent_executor,
+                message_placeholder=message_placeholder,
+                trace_callback=live_callback,
+                english_query=english_query_augmented,
+                conversation_id=st.session_state.conversation_id,
+                chat_history=history_for_agent,
+            )
+            _store_conversation_id(result.conversation_id)
+            _store_conversation_title(
+                result.conversation_id, result.conversation_title
+            )
+            logger.info("Agent response received successfully")
+            logger.debug(
+                f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+            )
 
-                # Check if location confirmation is needed
-                if result.needs_location_confirmation:
-                    logger.info("Location confirmation required")
+            # Check if location confirmation is needed
+            if result.needs_location_confirmation:
+                logger.info("Location confirmation required")
 
-                    st.session_state.pending_location_confirmation = {
-                        "needs_location_confirmation": True,
-                        "candidates": result.location_options,
-                        "pause": result.pause_state,
-                    }
+                st.session_state.pending_location_confirmation = {
+                    "needs_location_confirmation": True,
+                    "candidates": result.location_options,
+                    "pause": result.pause_state,
+                }
 
-                assistant_message_en = result.message or ""
-                if not isinstance(assistant_message_en, str):
-                    assistant_message_en = str(assistant_message_en)
+            assistant_message_en = result.message or ""
+            if not isinstance(assistant_message_en, str):
+                assistant_message_en = str(assistant_message_en)
 
-                ui_message = assistant_message_en
-                if isinstance(ui_message, str):
-                    ui_message = translate_from_english(ui_message, detected_lang)
+            ui_message = assistant_message_en
+            if isinstance(ui_message, str):
+                ui_message = translate_from_english(ui_message, detected_lang)
+            message_placeholder.markdown(ui_message)
 
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": assistant_message_en}
+            st.session_state.messages_en.append(
+                {"role": "assistant", "content": assistant_message_en}
+            )
+            st.session_state.messages.append(
+                AssistantMessage(
+                    role="assistant",
+                    content=ui_message,
+                    artifacts=result.artifacts,
+                    error=result.error,
                 )
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=ui_message,
-                        artifacts=result.artifacts,
-                        error=result.error,
-                    )
-                )
+            )
 
-            except Exception as e:
-                logger.error(
-                    f"Error during chat: {type(e).__name__}: {str(e)}"
+        except Exception as e:
+            logger.error(
+                f"Error during chat: {type(e).__name__}: {str(e)}"
+            )
+            error_msg = f"Error: {str(e)}"
+            message_placeholder.error(error_msg)
+            st.session_state.messages.append(
+                AssistantMessage(
+                    role="assistant",
+                    content=error_msg,
+                    artifacts=ToolArtifacts(),
+                    error=True,
                 )
-                error_msg = f"Error: {str(e)}"
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=error_msg,
-                        artifacts=ToolArtifacts(),
-                        error=True,
-                    )
-                )
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": error_msg}
-                )
+            )
+            st.session_state.messages_en.append(
+                {"role": "assistant", "content": error_msg}
+            )
 
-            finally:
-                trace_placeholder.empty()
+        finally:
+            trace_placeholder.empty()
 
     st.rerun()

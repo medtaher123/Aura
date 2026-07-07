@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from eo_llm.prompts.builder import PromptSpec, render_system_user
 from eo_llm.prompts.shared.grounding import GROUNDING_RULES
-from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 from eo_llm.prompts.shared.temporal import TEMPORAL_RULES
 from eo_llm.prompts.shared.user_experience import USER_EXPERIENCE_RULES
+
+_STREAMING_OUTPUT_RULES: tuple[str, ...] = (
+    "Write the final answer in plain natural language for the user.",
+    "Do not wrap the response in JSON or markdown code fences.",
+)
 
 _FINALIZER_RULES: tuple[str, ...] = (
     *GROUNDING_RULES,
     *USER_EXPERIENCE_RULES,
     *TEMPORAL_RULES,
-    *SCHEMA_OUTPUT_RULES,
+    *_STREAMING_OUTPUT_RULES,
     "Compose a concise, factual final answer from provided evidence only.",
     "Speak as AURA to the user; do not mention internal pipeline stages unless helpful.",
     "When NASA POWER data is present, describe temperature trends qualitatively (high/low/normal); do not dump raw min/max unless the user asked.",
@@ -26,7 +30,7 @@ FINALIZER_PROMPT = PromptSpec(
     role="You are AURA composing the final user-facing answer.",
     task="Synthesize the user query and all provided evidence into one clear response.",
     rules=_FINALIZER_RULES,
-    include_schema_rules=True,
+    include_schema_rules=False,
 )
 
 

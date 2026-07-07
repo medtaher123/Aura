@@ -42,7 +42,7 @@ def _is_tools_info_query(query: str) -> bool:
 
 
 def _keyword_domains(query: str) -> list[str]:
-    """Deterministic fallback routing when AgentCore routing is unavailable."""
+    """Deterministic fallback routing when Bedrock routing is unavailable."""
     q = (query or "").lower()
 
     if _is_tools_info_query(q):
@@ -124,7 +124,7 @@ class OrchestratorNode(GraphNode):
             selected_domains = [d for d in decision.domains if d != "websearch_only"]
         except Exception as exc:
             logger.warning(
-                "AgentCore route_domains failed (%s); falling back to keyword routing", exc
+                "Bedrock route_domains failed (%s); falling back to keyword routing", exc
             )
             selected_domains = _keyword_domains(user_msg)
 

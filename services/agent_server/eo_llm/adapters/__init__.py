@@ -1,2 +1,2 @@
-"""External adapters (MCP, AgentCore, web search)."""
+"""External adapters (MCP, Bedrock LLM, web search)."""
 

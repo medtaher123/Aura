@@ -348,7 +348,11 @@ class AgentWebSocketClient:
                     logger.info(f"Conversation title generated: {conversation_title}")
 
                 elif msg_type == "complete":
-                    accumulated_response = data.get("response", accumulated_response)
+                    response_text = data.get("response", "")
+                    if data.get("replace_streamed", False):
+                        accumulated_response = response_text
+                    else:
+                        accumulated_response = response_text or accumulated_response
                     conversation_id = data.get("conversation_id") or conversation_id
                     response_artifacts = data.get("artifacts", {})
                     error = data.get("error", False)

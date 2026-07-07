@@ -16,7 +16,7 @@ from eo_llm.graph.backoff import backoff_strategy_for
 from eo_llm.prompts import get_arg_resolver_prompt, get_tool_planner_prompt
 
 if TYPE_CHECKING:
-    from eo_llm.adapters.agentcore_adapter import AgentCoreAdapter
+    from eo_llm.adapters.bedrock_llm_adapter import BedrockLLMAdapter
 
 DomainName = Literal[
     "flood_damage",
@@ -230,7 +230,7 @@ class ToolPlanner:
 
     def __init__(
         self,
-        adapter: AgentCoreAdapter,
+        adapter: BedrockLLMAdapter,
         domain: str,
         allowed_tools: list[str],
         introspector: ToolIntrospector | None = None,
@@ -243,7 +243,7 @@ class ToolPlanner:
     def select_tool_plan(self, query: str) -> ToolPlan:
         if (
             self._adapter.is_ready()
-            and self._adapter.structured_client is not None
+            and self._adapter.provider is not None
             and self._adapter._tool_planner_model_id
             and self._allowed_tools
         ):
@@ -252,7 +252,7 @@ class ToolPlanner:
                 query=query,
                 allowed_tools=self._allowed_tools,
             )
-            candidate = self._adapter.structured_client.call_structured(
+            candidate = self._adapter.provider.call_structured(
                 model_id=self._adapter._tool_planner_model_id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -270,10 +270,11 @@ class ToolPlanner:
                     f"select_tool_plan returned invalid domain/tools for {self._domain}."
                 )
 
+            provider = self._adapter.provider
+            reason = provider.last_failure_reason if provider is not None else "provider_not_initialized"
             raise RuntimeError(
                 "select_tool_plan Bedrock call returned no valid schema output "
-                f"for {self._domain}. Reason: "
-                f"{self._adapter._last_bedrock_failure_reason or 'unknown'}"
+                f"for {self._domain}. Reason: {reason or 'unknown'}"
             )
 
         raise RuntimeError(
@@ -296,7 +297,7 @@ class ToolPlanner:
 
         if (
             self._adapter.is_ready()
-            and self._adapter.structured_client is not None
+            and self._adapter.provider is not None
             and self._adapter._tool_planner_model_id
             and tool_param_names
         ):
@@ -312,7 +313,7 @@ class ToolPlanner:
                 candidate_args=candidate_args,
                 execution_context=execution_context,
             )
-            parsed = self._adapter.structured_client.call_structured(
+            parsed = self._adapter.provider.call_structured(
                 model_id=self._adapter._tool_planner_model_id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
