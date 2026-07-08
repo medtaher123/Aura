@@ -37,6 +37,7 @@ class WebSocketConnection:
         self.websocket = websocket
         self.config = get_config()
         self._cancelled = False
+        self._closed = False
         self.connection_id = str(uuid.uuid4())
         self.user_id = user_id
         self._streamed_response = ""
@@ -56,13 +57,24 @@ class WebSocketConnection:
         await self.send(ConnectionAckMessage(server_version=self.config.version))
         logger.info(f"WebSocket connection accepted - connection_id: {self.connection_id}")
 
-    async def send(self, message: Any) -> None:
-        """Send a typed message to the client."""
+    def mark_closed(self) -> None:
+        """Mark the connection as closed so in-flight handlers stop sending."""
+        self._closed = True
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    async def send(self, message: Any) -> bool:
+        """Send a typed message to the client. Returns False if the socket is closed."""
+        if self._closed:
+            return False
+
         if hasattr(message, "model_dump"):
             data = message.model_dump(mode="json")
         else:
             data = message
-        
+
         if config.ws_traffic_log_enabled:
             log_websocket_traffic(
                 direction="server_to_client",
@@ -71,7 +83,15 @@ class WebSocketConnection:
                 message_type=data.get("type") if isinstance(data, dict) else None,
                 payload=data,
             )
-        await self.websocket.send_json(data)
+        try:
+            await self.websocket.send_json(data)
+            return True
+        except Exception as e:
+            self._closed = True
+            logger.debug(
+                "WebSocket send skipped because the connection is closed: %s", e
+            )
+            return False
 
     async def send_status(
         self, stage: AgentStage, detail: Optional[str] = None

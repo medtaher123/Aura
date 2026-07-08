@@ -231,6 +231,7 @@ def _invoke_agent_with_streaming_display(
     tools_placeholder: DeltaGenerator | None = None,
     trace_callback: Callable[[dict], None] | None = None,
     tools_callback: Callable[[dict], None] | None = None,
+    tools_tick: Callable[[], None] | None = None,
     english_query: str = "",
     chat_history=None,
     resume=None,
@@ -284,13 +285,21 @@ def _invoke_agent_with_streaming_display(
 
     streamed = ""
     show_cursor = False
+    last_tool_tick = 0.0
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_agent)
         while True:
             drain_events()
+            if tools_tick:
+                now = time.monotonic()
+                if now - last_tool_tick >= 0.1:
+                    tools_tick()
+                    last_tool_tick = now
             if future.done():
                 drain_events()
+                if tools_tick:
+                    tools_tick()
                 break
             time.sleep(0.02)
 
@@ -449,6 +458,7 @@ class _ToolCallState:
     step_id: str | None = None
     domain: str | None = None
     execution_time_seconds: float | None = None
+    started_at: float | None = None
     detail: str | None = None
     order: int = 0
 
@@ -509,9 +519,12 @@ def _tool_status_from_event(evt: dict) -> ToolRunStatus:
     return "success"
 
 
-def _tool_status_meta(tool: _ToolCallState) -> str:
+def _tool_status_meta(tool: _ToolCallState, *, now: float | None = None) -> str:
     if tool.status == "running":
-        return "Running…"
+        if tool.started_at is not None:
+            elapsed = max(0.0, (now or time.monotonic()) - tool.started_at)
+            return _format_execution_time(elapsed) or "0.00s"
+        return "0.00s"
     if tool.status == "success":
         return _format_execution_time(tool.execution_time_seconds) or "Done"
     if tool.status == "error":
@@ -576,9 +589,13 @@ def _normalize_tool_progress_event(evt: dict) -> dict | None:
     return None
 
 
-def _render_tool_status_box(tools: list[_ToolCallState]) -> None:
+def _render_tool_status_box(
+    tools: list[_ToolCallState], *, now: float | None = None
+) -> None:
     if not tools:
         return
+
+    display_now = now if now is not None else time.monotonic()
 
     with st.container(border=True):
         st.markdown("**Tools**")
@@ -601,14 +618,18 @@ def _render_tool_status_box(tools: list[_ToolCallState]) -> None:
                     st.caption(" · ".join(subtitle_parts))
             with meta_col:
                 st.markdown(
-                    f"<div style='text-align:right;font-size:0.85rem;'>{html.escape(_tool_status_meta(tool))}</div>",
+                    f"<div style='text-align:right;font-size:0.85rem;'>{html.escape(_tool_status_meta(tool, now=display_now))}</div>",
                     unsafe_allow_html=True,
                 )
 
 
 def _make_tool_status_tracker(
     tools_placeholder: DeltaGenerator,
-) -> tuple[Callable[[dict], None], Callable[[], list[ToolCallRecord]]]:
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[], list[ToolCallRecord]],
+    Callable[[], None],
+]:
     tools_by_key: dict[str, _ToolCallState] = {}
     next_order = 0
 
@@ -618,13 +639,20 @@ def _make_tool_status_tracker(
                 return key
         return None
 
-    def _render() -> None:
+    def _has_running_tools() -> bool:
+        return any(tool.status == "running" for tool in tools_by_key.values())
+
+    def _render(*, now: float | None = None) -> None:
         tools = sorted(tools_by_key.values(), key=lambda item: item.order)
         tools_placeholder.empty()
         if not tools:
             return
         with tools_placeholder.container():
-            _render_tool_status_box(tools)
+            _render_tool_status_box(tools, now=now)
+
+    def tick() -> None:
+        if _has_running_tools():
+            _render(now=time.monotonic())
 
     def callback(evt: dict) -> None:
         nonlocal next_order
@@ -651,9 +679,10 @@ def _make_tool_status_tracker(
                 status="running",
                 step_id=step_id,
                 domain=domain,
+                started_at=time.monotonic(),
                 order=next_order,
             )
-            _render()
+            _render(now=time.monotonic())
             return
 
         if phase != "done":
@@ -703,15 +732,20 @@ def _make_tool_status_tracker(
             for tool in sorted(tools_by_key.values(), key=lambda item: item.order)
         ]
 
-    return callback, snapshot
+    return callback, snapshot, tick
 
 
 def _make_streaming_event_handler(
     *,
     tools_placeholder: DeltaGenerator,
     trace_placeholder: DeltaGenerator,
-) -> tuple[Callable[[dict], None], Callable[[dict], None], Callable[[], list[ToolCallRecord]]]:
-    tool_tracker, tool_snapshot = _make_tool_status_tracker(tools_placeholder)
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[dict], None],
+    Callable[[], list[ToolCallRecord]],
+    Callable[[], None],
+]:
+    tool_tracker, tool_snapshot, tool_tick = _make_tool_status_tracker(tools_placeholder)
     trace_updater = _make_live_trace_updater(trace_placeholder)
 
     def tools_callback(evt: dict) -> None:
@@ -722,7 +756,7 @@ def _make_streaming_event_handler(
             return
         trace_updater(evt)
 
-    return tools_callback, trace_callback, tool_snapshot
+    return tools_callback, trace_callback, tool_snapshot, tool_tick
 
 
 def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
@@ -1293,7 +1327,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
             tools_placeholder = st.empty()
             trace_placeholder = st.empty()
             message_placeholder = st.empty()
-            tools_callback, trace_callback, tool_snapshot = _make_streaming_event_handler(
+            tools_callback, trace_callback, tool_snapshot, tool_tick = _make_streaming_event_handler(
                 tools_placeholder=tools_placeholder,
                 trace_placeholder=trace_placeholder,
             )
@@ -1308,6 +1342,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     agent_executor,
                     message_placeholder=message_placeholder,
                     tools_callback=tools_callback,
+                    tools_tick=tool_tick,
                     trace_callback=trace_callback,
                     english_query="",
                     resume=True,
@@ -1459,7 +1494,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
             tools_placeholder = st.empty()
             trace_placeholder = st.empty()
             message_placeholder = st.empty()
-            tools_callback, trace_callback, tool_snapshot = _make_streaming_event_handler(
+            tools_callback, trace_callback, tool_snapshot, tool_tick = _make_streaming_event_handler(
                 tools_placeholder=tools_placeholder,
                 trace_placeholder=trace_placeholder,
             )
@@ -1480,6 +1515,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     agent_executor,
                     message_placeholder=message_placeholder,
                     tools_callback=tools_callback,
+                    tools_tick=tool_tick,
                     trace_callback=trace_callback,
                     english_query="",
                     resume=True,
@@ -1568,7 +1604,7 @@ if user_input:
         tools_placeholder = st.empty()
         trace_placeholder = st.empty()
         message_placeholder = st.empty()
-        tools_callback, trace_callback, tool_snapshot = _make_streaming_event_handler(
+        tools_callback, trace_callback, tool_snapshot, tool_tick = _make_streaming_event_handler(
             tools_placeholder=tools_placeholder,
             trace_placeholder=trace_placeholder,
         )
@@ -1591,6 +1627,7 @@ if user_input:
                 agent_executor,
                 message_placeholder=message_placeholder,
                 tools_callback=tools_callback,
+                tools_tick=tool_tick,
                 trace_callback=trace_callback,
                 english_query=english_query_augmented,
                 conversation_id=st.session_state.conversation_id,

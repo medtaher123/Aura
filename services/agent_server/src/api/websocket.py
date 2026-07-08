@@ -108,6 +108,51 @@ logger = get_logger("websocket")
 router = APIRouter()
 
 
+async def _cancel_active_task(task: asyncio.Task[None] | None) -> None:
+    """Cancel and drain an in-flight WebSocket handler task."""
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("Active WebSocket request task failed during cancellation")
+
+
+async def _keepalive_during_task(
+    conn: WebSocketConnection,
+    task: asyncio.Task[None],
+    *,
+    interval_seconds: float = 25.0,
+) -> None:
+    """Send lightweight status updates while a long-running handler is active."""
+    while not task.done() and not conn.is_closed:
+        await asyncio.sleep(interval_seconds)
+        if task.done() or conn.is_closed:
+            return
+        await conn.send_status(AgentStage.PLANNING, "Still working...")
+
+
+def _spawn_request_task(
+    conn: WebSocketConnection,
+    coro: Any,
+) -> tuple[asyncio.Task[None], asyncio.Task[None]]:
+    """Start a request handler and a keepalive companion task."""
+    request_task = asyncio.create_task(coro)
+    keepalive_task = asyncio.create_task(
+        _keepalive_during_task(conn, request_task)
+    )
+
+    def _stop_keepalive(done_task: asyncio.Task[None]) -> None:
+        if not keepalive_task.done():
+            keepalive_task.cancel()
+
+    request_task.add_done_callback(_stop_keepalive)
+    return request_task, keepalive_task
+
+
 def _assistant_message_metadata(tool_response: Any) -> dict[str, Any]:
     """Build the JSONB metadata persisted alongside an assistant message.
 
@@ -339,6 +384,9 @@ async def handle_chat_request(
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = await loop.run_in_executor(pool, run_orchestrator)
+
+        if conn.is_closed:
+            return
 
         logger.debug(f"Orchestrator completed - result type: {type(result)}")
 
@@ -596,6 +644,9 @@ async def handle_chat_resume(
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = await loop.run_in_executor(pool, run_orchestrator_resume)
 
+        if conn.is_closed:
+            return
+
         logger.debug(f"Orchestrator resume completed - result type: {type(result)}")
 
         # Check for cancellation
@@ -715,6 +766,7 @@ async def websocket_chat(
     conn = WebSocketConnection(websocket, user_id=user.id)
     conversations = ConversationService(db)
     active_task: asyncio.Task[None] | None = None
+    keepalive_task: asyncio.Task[None] | None = None
 
     try:
         await conn.accept()
@@ -737,6 +789,9 @@ async def websocket_chat(
                 except Exception:
                     logger.exception("Active WebSocket request task failed")
                 active_task = None
+                if keepalive_task and not keepalive_task.done():
+                    keepalive_task.cancel()
+                keepalive_task = None
 
             # Receive and parse message
             raw_data = ""
@@ -787,8 +842,9 @@ async def websocket_chat(
                     logger.debug(
                         f"Processing chat_request: message_length={len(message.message)}"
                     )
-                    active_task = asyncio.create_task(
-                        handle_chat_request(conn, message, user, conversations)
+                    active_task, keepalive_task = _spawn_request_task(
+                        conn,
+                        handle_chat_request(conn, message, user, conversations),
                     )
                 except ValidationError as e:
                     logger.error(f"Chat request validation error: {e}")
@@ -812,8 +868,9 @@ async def websocket_chat(
                         f"Processing chat_resume: location={message.confirmed_location.name}"
                     )
                     conn.reset_cancellation()
-                    active_task = asyncio.create_task(
-                        handle_chat_resume(conn, message, user, conversations)
+                    active_task, keepalive_task = _spawn_request_task(
+                        conn,
+                        handle_chat_resume(conn, message, user, conversations),
                     )
                 except ValidationError as e:
                     logger.error(f"Chat resume validation error: {e}")
@@ -837,6 +894,10 @@ async def websocket_chat(
     except AuthConfigurationError as e:
         logger.exception("WebSocket authentication is misconfigured")
     except WebSocketDisconnect as e:
+        conn.mark_closed()
+        await _cancel_active_task(active_task)
+        if keepalive_task and not keepalive_task.done():
+            keepalive_task.cancel()
         log_websocket_traffic(
             event="connection_closed",
             direction="client",
@@ -847,6 +908,10 @@ async def websocket_chat(
         )
         logger.info("WebSocket disconnected")
     except Exception as e:
+        conn.mark_closed()
+        await _cancel_active_task(active_task)
+        if keepalive_task and not keepalive_task.done():
+            keepalive_task.cancel()
         logger.exception("WebSocket error")
         try:
             await conn.send_error(str(e), recoverable=False)
