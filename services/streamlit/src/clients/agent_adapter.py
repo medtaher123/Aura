@@ -135,14 +135,18 @@ class RemoteAgentAdapter:
 
         def on_tool_start(tool_name: str, tool_input: dict):
             if stream_callback:
-                stream_callback(
-                    {
-                        "type": "data_agent_step",
-                        "phase": "running",
-                        "tool_name": tool_name,
-                        "tool_input": tool_input,
-                    }
-                )
+                payload = {
+                    "type": "data_agent_step",
+                    "phase": "running",
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                }
+                if isinstance(tool_input, dict):
+                    if tool_input.get("step_id"):
+                        payload["step_id"] = tool_input["step_id"]
+                    if tool_input.get("domain"):
+                        payload["domain"] = tool_input["domain"]
+                stream_callback(payload)
 
         def on_tool_result(tool_name: str, result: dict, artifacts: dict):
             if stream_callback:
@@ -153,6 +157,11 @@ class RemoteAgentAdapter:
                         "tool_name": tool_name,
                         "observation": result.get("observation", ""),
                         "error": result.get("error", False),
+                        "execution_time_seconds": result.get("execution_time_seconds"),
+                        "attempts": result.get("attempts"),
+                        "status": result.get("status"),
+                        "step_id": result.get("step_id"),
+                        "domain": result.get("domain"),
                     }
                 )
 

@@ -7,11 +7,14 @@ import inspect
 import json
 import pkgutil
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from itertools import groupby
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from eo_llm.adapters.mcp_client import emit_stream_event
 from eo_llm.graph.backoff import backoff_strategy_for
 from eo_llm.prompts import get_arg_resolver_prompt, get_tool_planner_prompt
 
@@ -59,9 +62,9 @@ RetryTrigger = Literal["timeout", "network_error", "http_429", "http_5xx", "empt
 class RetryPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_retries: int = Field(default=1, ge=0, le=5)
+    max_retries: int = Field(default=1)
     backoff: BackoffMode = "fixed"
-    initial_delay_ms: int = Field(default=300, ge=0)
+    initial_delay_ms: int = Field(default=300)
     retry_on: list[RetryTrigger] = Field(
         default_factory=lambda: ["timeout", "network_error", "http_429", "http_5xx"]
     )
@@ -78,8 +81,8 @@ class StopPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: StopMode = "run_all"
-    confidence_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
-    min_successful_steps: int = Field(default=1, ge=1)
+    confidence_threshold: float = Field(default=0.8)
+    min_successful_steps: int = Field(default=1)
 
 
 class ToolStepPlan(BaseModel):
@@ -87,14 +90,17 @@ class ToolStepPlan(BaseModel):
 
     step_id: str
     tool_name: ToolName
-    priority: int = Field(ge=1)
+    priority: int = Field()
     required_inputs: list[str] = Field(default_factory=list)
     parallel_group: str | None = None
-    args_template: dict[str, Any] = Field(default_factory=dict)
+    args_template: dict[str, Any] = Field(
+        default_factory=dict,
+        json_schema_extra={"additionalProperties": False}
+    )
     retry_policy: RetryPolicy
-    timeout_seconds: int = Field(default=30, ge=1, le=120)
+    timeout_seconds: int = Field(default=30)
     on_failure: OnFailurePolicy
-    success_weight: float = Field(default=0.2, ge=0.0, le=1.0)
+    success_weight: float = Field(default=0.2)
 
 
 class ToolPlan(BaseModel):
@@ -126,7 +132,7 @@ class ToolExecutionSummary(BaseModel):
     successful_steps: int = Field(default=0, ge=0)
     failed_steps: int = Field(default=0, ge=0)
     skipped_steps: int = Field(default=0, ge=0)
-    domain_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    domain_confidence: float = Field(default=0.0)
     fallback_triggered: bool = False
 
 
@@ -353,7 +359,9 @@ class ToolPlanner:
 
 
 class ToolExecutor:
-    """Runs tool plans with retries, fallbacks, and stop policies."""
+    """Runs tool plans with retries, fallbacks, stop policies, and parallel batches."""
+
+    _MAX_PARALLEL_TOOL_CALLS = 8
 
     def __init__(
         self,
@@ -370,7 +378,7 @@ class ToolExecutor:
         runtime_args_by_tool: dict[str, dict[str, Any]],
         execution_context: dict[str, Any] | None = None,
     ) -> ToolExecutionResult:
-        ordered_steps = sorted(plan.tool_steps, key=lambda s: s.priority)
+        ordered_steps = sorted(plan.tool_steps, key=lambda s: (s.priority, s.step_id))
         index_by_step_id = {step.step_id: idx for idx, step in enumerate(ordered_steps)}
         executions: list[ToolStepExecution] = []
         success_count = 0
@@ -381,41 +389,66 @@ class ToolExecutor:
         fallback_triggered = False
         context = execution_context or {}
 
-        i = 0
-        while i < len(ordered_steps):
-            step = ordered_steps[i]
+        for batch in self._batch_steps(ordered_steps):
+            prepared: list[tuple[ToolStepPlan, dict[str, Any]]] = []
+            skipped_in_batch: list[ToolStepExecution] = []
 
-            args, missing = self._prepare_step_arguments(
-                step, plan, runtime_args_by_tool, context
-            )
-            if missing:
-                skip_count += 1
-                executions.append(self._record_skipped_step(step, args, missing))
-                i = self._get_next_index(i, step, index_by_step_id)
-                continue
+            for step in batch:
+                args, missing = self._prepare_step_arguments(
+                    step, plan, runtime_args_by_tool, context
+                )
+                if missing:
+                    skip_count += 1
+                    skipped = self._record_skipped_step(step, args, missing)
+                    skipped_in_batch.append(skipped)
+                    self._emit_tool_done(
+                        step=step,
+                        args=args,
+                        execution=skipped,
+                        execution_context=context,
+                    )
+                else:
+                    prepared.append((step, args))
 
-            execution_result = self._execute_step_with_retries(step, args)
-            executions.append(execution_result)
-            if execution_result.status == "done":
-                success_count += 1
-                success_weight_sum += step.success_weight
-            else:
-                fail_count += 1
+            executions.extend(skipped_in_batch)
+
+            if prepared:
+                batch_results = self._execute_prepared_steps(prepared)
+                for step, execution_result in zip(
+                    [step for step, _ in prepared], batch_results, strict=True
+                ):
+                    executions.append(execution_result)
+                    if execution_result.status == "done":
+                        success_count += 1
+                        success_weight_sum += step.success_weight
+                    else:
+                        fail_count += 1
+
+                    if execution_result.status == "error":
+                        next_index = self._next_index_for_step(step, index_by_step_id)
+                        current_index = index_by_step_id[step.step_id]
+                        fallback_triggered = fallback_triggered or next_index != (
+                            current_index + 1
+                        )
+                        if step.on_failure.action == "abort_domain":
+                            domain_confidence = min(1.0, success_weight_sum / total_weight)
+                            return ToolExecutionResult(
+                                domain=plan.domain,
+                                steps=executions,
+                                summary=ToolExecutionSummary(
+                                    successful_steps=success_count,
+                                    failed_steps=fail_count,
+                                    skipped_steps=skip_count,
+                                    domain_confidence=domain_confidence,
+                                    fallback_triggered=fallback_triggered
+                                    or (fail_count > 0 and success_count > 0),
+                                ),
+                            )
 
             if self._evaluate_stop_conditions(
                 plan, success_count, success_weight_sum, total_weight
             ):
                 break
-
-            if execution_result.status == "error":
-                next_index = self._get_next_index(i, step, index_by_step_id)
-                fallback_triggered = fallback_triggered or next_index != (i + 1)
-                if step.on_failure.action == "abort_domain":
-                    break
-                i = next_index
-                continue
-
-            i += 1
 
         domain_confidence = min(1.0, success_weight_sum / total_weight)
 
@@ -429,6 +462,48 @@ class ToolExecutor:
                 domain_confidence=domain_confidence,
                 fallback_triggered=fallback_triggered or (fail_count > 0 and success_count > 0),
             ),
+        )
+
+    @staticmethod
+    def _batch_steps(steps: list[ToolStepPlan]) -> list[list[ToolStepPlan]]:
+        """Group steps into parallel batches by priority.
+
+        All tools at the same priority run concurrently. Lower-priority batches
+        start only after the previous priority finishes.
+        """
+        if not steps:
+            return []
+        return [list(group) for _, group in groupby(steps, key=lambda s: s.priority)]
+
+    def _execute_prepared_steps(
+        self,
+        prepared: list[tuple[ToolStepPlan, dict[str, Any]]],
+    ) -> list[ToolStepExecution]:
+        if len(prepared) == 1:
+            step, args = prepared[0]
+            return [self._execute_step_with_retries(step, args)]
+
+        max_workers = min(len(prepared), self._MAX_PARALLEL_TOOL_CALLS)
+        results: list[ToolStepExecution | None] = [None] * len(prepared)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_to_index = {
+                pool.submit(self._execute_step_with_retries, step, args): idx
+                for idx, (step, args) in enumerate(prepared)
+            }
+            for future in as_completed(future_to_index):
+                results[future_to_index[future]] = future.result()
+        return [result for result in results if result is not None]
+
+    @staticmethod
+    def _next_index_for_step(
+        step: ToolStepPlan,
+        index_by_step_id: dict[str, int],
+    ) -> int:
+        current_index = index_by_step_id[step.step_id]
+        return ToolExecutor._next_step_index_after_failure(
+            current_index=current_index,
+            step=step,
+            index_by_step_id=index_by_step_id,
         )
 
     def _prepare_step_arguments(
@@ -527,18 +602,6 @@ class ToolExecutor:
     ) -> bool:
         domain_confidence = min(1.0, success_weight_sum / total_weight)
         return ToolExecutor._should_stop(plan.stop_policy, success_count, domain_confidence)
-
-    @staticmethod
-    def _get_next_index(
-        current_index: int,
-        step: ToolStepPlan,
-        index_by_step_id: dict[str, int],
-    ) -> int:
-        return ToolExecutor._next_step_index_after_failure(
-            current_index=current_index,
-            step=step,
-            index_by_step_id=index_by_step_id,
-        )
 
     @staticmethod
     def _compute_backoff_ms(retry_policy: RetryPolicy, attempt: int) -> int:

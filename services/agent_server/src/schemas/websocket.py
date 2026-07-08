@@ -217,6 +217,8 @@ class ToolStartMessage(BaseModel):
     type: str = Field(default=ServerMessageType.TOOL_START.value)
     tool_name: str = Field(..., description="Name of the tool being called")
     tool_input: dict[str, Any] = Field(..., description="Tool input parameters")
+    step_id: Optional[str] = Field(default=None, description="Planned tool step id")
+    domain: Optional[str] = Field(default=None, description="Domain executing the tool")
 
 
 class ToolResultMessage(BaseModel):
@@ -226,6 +228,11 @@ class ToolResultMessage(BaseModel):
     tool_name: str = Field(..., description="Name of the tool that was called")
     result: dict[str, Any] = Field(..., description="Tool result data")
     artifacts: ToolArtifacts = Field(default=ToolArtifacts(), description="Artifacts")
+    step_id: Optional[str] = Field(default=None, description="Planned tool step id")
+    domain: Optional[str] = Field(default=None, description="Domain that ran the tool")
+    execution_time_seconds: Optional[float] = Field(
+        default=None, description="Wall-clock execution time in seconds"
+    )
 
 
 class LocationConfirmationMessage(BaseModel):

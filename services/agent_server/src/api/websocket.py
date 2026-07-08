@@ -57,6 +57,53 @@ def _graph_status_stage(stage: str) -> AgentStage:
     }.get(stage, AgentStage.PLANNING)
 
 
+async def _handle_data_agent_step_event(conn: WebSocketConnection, event: dict[str, Any]) -> None:
+    """Map graph tool-step stream events to websocket tool_start/tool_result."""
+    phase = event.get("phase", "")
+    tool_name = event.get("tool_name", "")
+    tool_input = event.get("tool_input", {})
+    step_id = event.get("step_id")
+    domain = event.get("domain")
+
+    if phase == "running":
+        await conn.send_tool_start(
+            tool_name,
+            tool_input if isinstance(tool_input, dict) else {"input": tool_input},
+            step_id=step_id,
+            domain=domain,
+        )
+        return
+
+    if phase != "done":
+        return
+
+    observation = event.get("observation", "")
+    error = bool(event.get("error"))
+    execution_time_seconds = event.get("execution_time_seconds")
+    result: dict[str, Any] = {
+        "observation": observation,
+        "error": error,
+    }
+    if execution_time_seconds is not None:
+        result["execution_time_seconds"] = execution_time_seconds
+    if event.get("attempts") is not None:
+        result["attempts"] = event.get("attempts")
+    if event.get("status") is not None:
+        result["status"] = event.get("status")
+    if step_id:
+        result["step_id"] = step_id
+    if domain:
+        result["domain"] = domain
+
+    await conn.send_tool_result(
+        tool_name=tool_name,
+        result=result,
+        step_id=step_id,
+        domain=domain,
+        execution_time_seconds=execution_time_seconds,
+    )
+
+
 logger = get_logger("websocket")
 router = APIRouter()
 
@@ -252,24 +299,7 @@ async def handle_chat_request(
                     await conn.send_status(AgentStage.ANALYZING, msg)
 
             elif event_type == "data_agent_step":
-                phase = event.get("phase", "")
-                tool_name = event.get("tool_name", "")
-                tool_input = event.get("tool_input", {})
-
-                if phase == "running":
-                    await conn.send_tool_start(
-                        tool_name,
-                        tool_input
-                        if isinstance(tool_input, dict)
-                        else {"input": tool_input},
-                    )
-                elif phase == "done":
-                    observation = event.get("observation", "")
-                    error = event.get("error", False)
-                    await conn.send_tool_result(
-                        tool_name=tool_name,
-                        result={"observation": observation, "error": error},
-                    )
+                await _handle_data_agent_step_event(conn, event)
 
         # Capture the current event loop for use in thread
         event_loop = asyncio.get_running_loop()
@@ -530,24 +560,7 @@ async def handle_chat_resume(
                     await conn.send_status(AgentStage.ANALYZING, msg)
 
             elif event_type == "data_agent_step":
-                phase = event.get("phase", "")
-                tool_name = event.get("tool_name", "")
-                tool_input = event.get("tool_input", {})
-
-                if phase == "running":
-                    await conn.send_tool_start(
-                        tool_name,
-                        tool_input
-                        if isinstance(tool_input, dict)
-                        else {"input": tool_input},
-                    )
-                elif phase == "done":
-                    observation = event.get("observation", "")
-                    error = event.get("error", False)
-                    await conn.send_tool_result(
-                        tool_name=tool_name,
-                        result={"observation": observation, "error": error},
-                    )
+                await _handle_data_agent_step_event(conn, event)
 
         # Capture the current event loop for use in thread
         event_loop = asyncio.get_running_loop()

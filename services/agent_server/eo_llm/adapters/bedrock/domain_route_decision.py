@@ -13,8 +13,8 @@ class DomainRouteDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     domains: list[RouteDomain] = Field(default_factory=list, min_length=1)
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0)
     execution_mode: ExecutionMode = "parallel"
     reasoning: str = ""
     needs_web_fallback_if_low_confidence: bool = True
-    stop_after_domains_if_confidence_at_least: float = Field(default=0.8, ge=0.0, le=1.0)
+    stop_after_domains_if_confidence_at_least: float = Field(default=0.8)

@@ -48,7 +48,7 @@ def _domain_failure_hint(domain_results: dict[str, Any]) -> str:
 
 class WebSearchNode(GraphNode):
     node_name = "web_search"
-    status_stage = "tool_call"
+    status_stage = "web_search"
     status_message = "Searching the web..."
 
     def run(self, s: GraphStateModel) -> GraphState:

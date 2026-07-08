@@ -4,11 +4,13 @@ Renders assistant responses, including map artifacts (HTML or Pydeck specs).
 """
 
 import io
+import html
 import os
 import queue
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Optional
 from urllib.parse import urlparse
@@ -133,6 +135,9 @@ logger.info("Streamlit app starting...")
 
 
 # Type definitions for chat messages
+ToolRunStatus = Literal["running", "success", "error", "skipped"]
+
+
 class UserMessage(TypedDict):
     """User message in chat history."""
 
@@ -140,13 +145,25 @@ class UserMessage(TypedDict):
     content: str
 
 
-class AssistantMessage(TypedDict):
+class ToolCallRecord(TypedDict, total=False):
+    """Persisted tool execution row for chat history."""
+
+    tool_name: str
+    status: ToolRunStatus
+    step_id: str | None
+    domain: str | None
+    execution_time_seconds: float | None
+    detail: str | None
+
+
+class AssistantMessage(TypedDict, total=False):
     """Assistant message in chat history."""
 
     role: Literal["assistant"]
     content: str
     artifacts: ToolArtifacts
     error: bool
+    tool_calls: list[ToolCallRecord]
 
 
 # Union type for all message types
@@ -211,7 +228,9 @@ def _invoke_agent_with_streaming_display(
     executor,
     *,
     message_placeholder: DeltaGenerator,
+    tools_placeholder: DeltaGenerator | None = None,
     trace_callback: Callable[[dict], None] | None = None,
+    tools_callback: Callable[[dict], None] | None = None,
     english_query: str = "",
     chat_history=None,
     resume=None,
@@ -257,8 +276,11 @@ def _invoke_agent_with_streaming_display(
                 streamed += payload
                 show_cursor = True
                 message_placeholder.markdown(streamed + "▌")
-            elif kind == "event" and trace_callback and isinstance(payload, dict):
-                trace_callback(payload)
+            elif kind == "event" and isinstance(payload, dict):
+                if tools_callback and _is_tool_progress_event(payload):
+                    tools_callback(payload)
+                elif trace_callback:
+                    trace_callback(payload)
 
     streamed = ""
     show_cursor = False
@@ -379,6 +401,330 @@ def _shorten(text: str, *, max_len: int = 220) -> str:
     return s[: max_len - 1].rstrip() + "…"
 
 
+_TOOL_STATUS_CSS = """
+@keyframes metaplanet-tool-spin {
+  to { transform: rotate(360deg); }
+}
+.metaplanet-tool-spin {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #22c55e;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: metaplanet-tool-spin 0.85s linear infinite;
+  vertical-align: middle;
+}
+.metaplanet-tool-dot-success {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background: #22c55e;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.metaplanet-tool-dot-error {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background: #ef4444;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.metaplanet-tool-dot-skipped {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background: #f59e0b;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+"""
+
+@dataclass
+class _ToolCallState:
+    key: str
+    tool_name: str
+    status: ToolRunStatus = "running"
+    step_id: str | None = None
+    domain: str | None = None
+    execution_time_seconds: float | None = None
+    detail: str | None = None
+    order: int = 0
+
+
+def _format_execution_time(seconds: float | int | None) -> str | None:
+    if seconds is None:
+        return None
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if value < 1:
+        return f"{value:.2f}s"
+    return f"{value:.1f}s"
+
+
+def _resolve_tool_step_id(evt: dict) -> str | None:
+    step_id = evt.get("step_id")
+    if isinstance(step_id, str) and step_id.strip():
+        return step_id.strip()
+    tool_input = evt.get("tool_input")
+    if isinstance(tool_input, dict):
+        nested = tool_input.get("step_id")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _resolve_tool_domain(evt: dict) -> str | None:
+    domain = evt.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        return domain.strip()
+    tool_input = evt.get("tool_input")
+    if isinstance(tool_input, dict):
+        nested = tool_input.get("domain")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _tool_call_key(evt: dict, *, order: int) -> str:
+    step_id = _resolve_tool_step_id(evt)
+    if step_id:
+        return step_id
+    tool_name = str(evt.get("tool_name") or "tool")
+    return f"{tool_name}:{order}"
+
+
+def _tool_status_from_event(evt: dict) -> ToolRunStatus:
+    phase = evt.get("phase")
+    status = evt.get("status")
+    if phase == "running":
+        return "running"
+    if status == "skipped":
+        return "skipped"
+    if bool(evt.get("error")) or status == "error":
+        return "error"
+    return "success"
+
+
+def _tool_status_meta(tool: _ToolCallState) -> str:
+    if tool.status == "running":
+        return "Running…"
+    if tool.status == "success":
+        return _format_execution_time(tool.execution_time_seconds) or "Done"
+    if tool.status == "error":
+        return "Error"
+    return "Skipped"
+
+
+def _tool_status_icon_html(status: ToolRunStatus) -> str:
+    if status == "running":
+        return '<span class="metaplanet-tool-spin"></span>'
+    if status == "success":
+        return '<span class="metaplanet-tool-dot-success"></span>'
+    if status == "error":
+        return '<span class="metaplanet-tool-dot-error"></span>'
+    return '<span class="metaplanet-tool-dot-skipped"></span>'
+
+
+def _tool_call_to_record(tool: _ToolCallState) -> ToolCallRecord:
+    return ToolCallRecord(
+        tool_name=tool.tool_name,
+        status=tool.status,
+        step_id=tool.step_id,
+        domain=tool.domain,
+        execution_time_seconds=tool.execution_time_seconds,
+        detail=tool.detail,
+    )
+
+
+def _record_to_tool_call(record: ToolCallRecord) -> _ToolCallState:
+    tool_name = record.get("tool_name") or "tool"
+    return _ToolCallState(
+        key=record.get("step_id") or tool_name,
+        tool_name=tool_name,
+        status=record.get("status", "success"),
+        step_id=record.get("step_id"),
+        domain=record.get("domain"),
+        execution_time_seconds=record.get("execution_time_seconds"),
+        detail=record.get("detail"),
+    )
+
+
+def _is_tool_progress_event(evt: dict) -> bool:
+    event_type = evt.get("type")
+    if event_type == "data_agent_step":
+        return True
+    if event_type == "stage" and evt.get("stage") in {"tool_call", "data_agent"}:
+        return True
+    return False
+
+
+def _normalize_tool_progress_event(evt: dict) -> dict | None:
+    event_type = evt.get("type")
+    if event_type == "data_agent_step":
+        return evt
+    if event_type == "stage" and evt.get("stage") in {"tool_call", "data_agent"}:
+        return {
+            "type": "data_agent_step",
+            "phase": "running",
+            "tool_name": "tools",
+            "step_id": "__pending__",
+        }
+    return None
+
+
+def _render_tool_status_box(tools: list[_ToolCallState]) -> None:
+    if not tools:
+        return
+
+    with st.container(border=True):
+        st.markdown("**Tools**")
+        for index, tool in enumerate(sorted(tools, key=lambda item: item.order)):
+            if index > 0:
+                st.divider()
+            icon_col, body_col, meta_col = st.columns([0.06, 0.64, 0.30], gap="small")
+            with icon_col:
+                st.markdown(_tool_status_icon_html(tool.status), unsafe_allow_html=True)
+            with body_col:
+                st.markdown(f"**{tool.tool_name}**")
+                subtitle_parts: list[str] = []
+                if tool.domain:
+                    subtitle_parts.append(tool.domain)
+                if tool.step_id and tool.step_id != "__pending__":
+                    subtitle_parts.append(tool.step_id)
+                if tool.detail and tool.status in {"error", "skipped"}:
+                    subtitle_parts.append(_shorten(tool.detail, max_len=120))
+                if subtitle_parts:
+                    st.caption(" · ".join(subtitle_parts))
+            with meta_col:
+                st.markdown(
+                    f"<div style='text-align:right;font-size:0.85rem;'>{html.escape(_tool_status_meta(tool))}</div>",
+                    unsafe_allow_html=True,
+                )
+
+
+def _make_tool_status_tracker(
+    tools_placeholder: DeltaGenerator,
+) -> tuple[Callable[[dict], None], Callable[[], list[ToolCallRecord]]]:
+    tools_by_key: dict[str, _ToolCallState] = {}
+    next_order = 0
+
+    def _find_running_key(tool_name: str) -> str | None:
+        for key, tool in tools_by_key.items():
+            if tool.tool_name == tool_name and tool.status == "running":
+                return key
+        return None
+
+    def _render() -> None:
+        tools = sorted(tools_by_key.values(), key=lambda item: item.order)
+        tools_placeholder.empty()
+        if not tools:
+            return
+        with tools_placeholder.container():
+            _render_tool_status_box(tools)
+
+    def callback(evt: dict) -> None:
+        nonlocal next_order
+        normalized = _normalize_tool_progress_event(evt)
+        if normalized is None:
+            return
+
+        phase = normalized.get("phase")
+        tool_name = normalized.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return
+
+        step_id = _resolve_tool_step_id(normalized)
+        domain = _resolve_tool_domain(normalized)
+
+        if phase == "running":
+            if step_id == "__pending__" and tools_by_key:
+                return
+            next_order += 1
+            key = _tool_call_key(normalized, order=next_order)
+            tools_by_key[key] = _ToolCallState(
+                key=key,
+                tool_name=tool_name,
+                status="running",
+                step_id=step_id,
+                domain=domain,
+                order=next_order,
+            )
+            _render()
+            return
+
+        if phase != "done":
+            return
+
+        if step_id == "__pending__":
+            return
+
+        key = step_id or _find_running_key(tool_name) or _tool_call_key(
+            normalized, order=next_order
+        )
+        if key not in tools_by_key:
+            next_order += 1
+            tools_by_key[key] = _ToolCallState(
+                key=key,
+                tool_name=tool_name,
+                order=next_order,
+            )
+
+        tool = tools_by_key[key]
+        if tool.step_id == "__pending__":
+            tools_by_key.pop(key, None)
+            next_order += 1
+            key = step_id or _tool_call_key(normalized, order=next_order)
+            tools_by_key[key] = _ToolCallState(
+                key=key,
+                tool_name=tool_name,
+                order=next_order,
+            )
+            tool = tools_by_key[key]
+
+        tool.tool_name = tool_name
+        tool.step_id = step_id or tool.step_id
+        tool.domain = domain or tool.domain
+        tool.status = _tool_status_from_event(normalized)
+        tool.execution_time_seconds = normalized.get("execution_time_seconds")
+        observation = normalized.get("observation")
+        if isinstance(observation, str) and observation.strip():
+            tool.detail = observation.strip()
+        elif tool.status == "skipped":
+            tool.detail = "Missing required inputs"
+        _render()
+
+    def snapshot() -> list[ToolCallRecord]:
+        return [
+            _tool_call_to_record(tool)
+            for tool in sorted(tools_by_key.values(), key=lambda item: item.order)
+        ]
+
+    return callback, snapshot
+
+
+def _make_streaming_event_handler(
+    *,
+    tools_placeholder: DeltaGenerator,
+    trace_placeholder: DeltaGenerator,
+) -> tuple[Callable[[dict], None], Callable[[dict], None], Callable[[], list[ToolCallRecord]]]:
+    tool_tracker, tool_snapshot = _make_tool_status_tracker(tools_placeholder)
+    trace_updater = _make_live_trace_updater(trace_placeholder)
+
+    def tools_callback(evt: dict) -> None:
+        tool_tracker(evt)
+
+    def trace_callback(evt: dict) -> None:
+        if _is_tool_progress_event(evt):
+            return
+        trace_updater(evt)
+
+    return tools_callback, trace_callback, tool_snapshot
+
+
 def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
     lines: list[str] = []
 
@@ -413,24 +759,6 @@ def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
                 push(msg)
             return
 
-        if et == "data_agent_step":
-            phase = evt.get("phase")
-            tool_name = evt.get("tool_name")
-            commentary = evt.get("commentary")
-            tool_input = evt.get("tool_input")
-            observation = evt.get("observation")
-            error = bool(evt.get("error"))
-
-            if isinstance(commentary, str) and commentary.strip():
-                push(commentary)
-            if isinstance(tool_name, str) and tool_name.strip():
-                push(f"Action: {tool_name} ({'error' if error else phase})")
-            if tool_input is not None and phase in {"planned", "running"}:
-                push(f"Input: {_shorten(str(tool_input), max_len=180)}")
-            if observation is not None and phase == "done":
-                push(f"Observation: {_shorten(str(observation), max_len=220)}")
-            return
-
         if et == "data_agent_finalizing":
             msg = evt.get("message")
             if isinstance(msg, str) and msg.strip():
@@ -457,6 +785,9 @@ st.markdown(
     .stChatMessage, .stChatMessage * {
         font-weight: 700 !important;
     }
+    """
+    + _TOOL_STATUS_CSS
+    + """
     </style>
     """,
     unsafe_allow_html=True,
@@ -836,6 +1167,7 @@ for msg in st.session_state.messages:
     is_error = False
     maps: list = []
     thumbnails: list = []
+    stored_tool_calls: list[ToolCallRecord] = []
 
     if role == "assistant":
         # Type narrowing: msg is AssistantMessage here
@@ -844,8 +1176,13 @@ for msg in st.session_state.messages:
         is_error = assistant_msg["error"]
         maps = artifacts.maps if hasattr(artifacts, "maps") else []
         thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
+        stored_tool_calls = assistant_msg.get("tool_calls") or []
 
     with st.chat_message(role):
+        if role == "assistant" and stored_tool_calls:
+            _render_tool_status_box(
+                [_record_to_tool_call(record) for record in stored_tool_calls]
+            )
         if role == "assistant" and is_error:
             st.error(content or "An error occurred.")
         elif role != "assistant":
@@ -953,9 +1290,13 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
+            tools_placeholder = st.empty()
             trace_placeholder = st.empty()
             message_placeholder = st.empty()
-            live_callback = _make_live_trace_updater(trace_placeholder)
+            tools_callback, trace_callback, tool_snapshot = _make_streaming_event_handler(
+                tools_placeholder=tools_placeholder,
+                trace_placeholder=trace_placeholder,
+            )
             try:
                 logger.debug(
                     f"Auto-confirming location, resuming conversation_id={st.session_state.conversation_id}"
@@ -966,12 +1307,14 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 result = _invoke_agent_with_streaming_display(
                     agent_executor,
                     message_placeholder=message_placeholder,
-                    trace_callback=live_callback,
+                    tools_callback=tools_callback,
+                    trace_callback=trace_callback,
                     english_query="",
                     resume=True,
                     confirmed_location=auto_loc,
                     conversation_id=st.session_state.conversation_id,
                 )
+                tool_calls = tool_snapshot()
                 _store_conversation_id(result.conversation_id)
                 _store_conversation_title(
                     result.conversation_id, result.conversation_title
@@ -1009,6 +1352,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         content=ui_message,
                         artifacts=result.artifacts,
                         error=result.error,
+                        tool_calls=tool_calls,
                     )
                 )
             except Exception as e:
@@ -1024,6 +1368,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         content=error_msg,
                         artifacts=ToolArtifacts(),
                         error=True,
+                        tool_calls=tool_snapshot(),
                     )
                 )
                 st.session_state.messages_en.append(
@@ -1111,9 +1456,13 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
+            tools_placeholder = st.empty()
             trace_placeholder = st.empty()
             message_placeholder = st.empty()
-            live_callback = _make_live_trace_updater(trace_placeholder)
+            tools_callback, trace_callback, tool_snapshot = _make_streaming_event_handler(
+                tools_placeholder=tools_placeholder,
+                trace_placeholder=trace_placeholder,
+            )
             try:
                 logger.debug(
                     f"Resuming after location confirmation: conversation_id={st.session_state.conversation_id}"
@@ -1130,12 +1479,14 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 result = _invoke_agent_with_streaming_display(
                     agent_executor,
                     message_placeholder=message_placeholder,
-                    trace_callback=live_callback,
+                    tools_callback=tools_callback,
+                    trace_callback=trace_callback,
                     english_query="",
                     resume=True,
                     confirmed_location=confirmed_loc,
                     conversation_id=st.session_state.conversation_id,
                 )
+                tool_calls = tool_snapshot()
                 _store_conversation_id(result.conversation_id)
                 _store_conversation_title(
                     result.conversation_id, result.conversation_title
@@ -1174,6 +1525,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         content=ui_message,
                         artifacts=result.artifacts,
                         error=result.error,
+                        tool_calls=tool_calls,
                     )
                 )
             except Exception as e:
@@ -1189,6 +1541,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         content=error_msg,
                         artifacts=ToolArtifacts(),
                         error=True,
+                        tool_calls=tool_snapshot(),
                     )
                 )
                 st.session_state.messages_en.append(
@@ -1212,9 +1565,13 @@ if user_input:
         st.write(user_input)
 
     with st.chat_message("assistant"):
+        tools_placeholder = st.empty()
         trace_placeholder = st.empty()
         message_placeholder = st.empty()
-        live_callback = _make_live_trace_updater(trace_placeholder)
+        tools_callback, trace_callback, tool_snapshot = _make_streaming_event_handler(
+            tools_placeholder=tools_placeholder,
+            trace_placeholder=trace_placeholder,
+        )
 
         try:
             english_query, detected_lang = detect_and_translate_to_english(
@@ -1233,11 +1590,13 @@ if user_input:
             result = _invoke_agent_with_streaming_display(
                 agent_executor,
                 message_placeholder=message_placeholder,
-                trace_callback=live_callback,
+                tools_callback=tools_callback,
+                trace_callback=trace_callback,
                 english_query=english_query_augmented,
                 conversation_id=st.session_state.conversation_id,
                 chat_history=history_for_agent,
             )
+            tool_calls = tool_snapshot()
             _store_conversation_id(result.conversation_id)
             _store_conversation_title(
                 result.conversation_id, result.conversation_title
@@ -1275,6 +1634,7 @@ if user_input:
                     content=ui_message,
                     artifacts=result.artifacts,
                     error=result.error,
+                    tool_calls=tool_calls,
                 )
             )
 
@@ -1290,6 +1650,7 @@ if user_input:
                     content=error_msg,
                     artifacts=ToolArtifacts(),
                     error=True,
+                    tool_calls=tool_snapshot(),
                 )
             )
             st.session_state.messages_en.append(

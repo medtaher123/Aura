@@ -85,15 +85,33 @@ class WebSocketConnection:
             self._streamed_response += content
         await self.send(TokenMessage(content=content))
 
-    async def send_tool_start(self, tool_name: str, tool_input: dict) -> None:
+    async def send_tool_start(
+        self,
+        tool_name: str,
+        tool_input: dict,
+        *,
+        step_id: str | None = None,
+        domain: str | None = None,
+    ) -> None:
         """Send notification that a tool is starting."""
-        await self.send(ToolStartMessage(tool_name=tool_name, tool_input=tool_input))
+        await self.send(
+            ToolStartMessage(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                step_id=step_id,
+                domain=domain,
+            )
+        )
 
     async def send_tool_result(
         self,
         tool_name: str,
         result: dict,
         artifacts: Optional[ToolArtifacts] = None,
+        *,
+        step_id: str | None = None,
+        domain: str | None = None,
+        execution_time_seconds: float | None = None,
     ) -> None:
         """Send tool execution result."""
         artifacts = artifacts or ToolArtifacts()
@@ -102,6 +120,9 @@ class WebSocketConnection:
                 tool_name=tool_name,
                 result=result,
                 artifacts=artifacts,
+                step_id=step_id,
+                domain=domain,
+                execution_time_seconds=execution_time_seconds,
             )
         )
 

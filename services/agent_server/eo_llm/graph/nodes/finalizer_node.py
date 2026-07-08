@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from eo_llm.adapters.mcp_client import _emit
+from eo_llm.adapters.mcp_client import emit_stream_event
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
 from eo_llm.prompts import get_finalizer_prompt
@@ -30,7 +30,7 @@ class FinalizerNode(GraphNode):
         # A direct answer was already produced upstream (e.g. orchestrator handling
         # empty input or tools_info). Preserve it verbatim instead of re-composing.
         if s.next_step == "finalize_direct" and s.final_answer.strip():
-            _emit({"type": "token", "content": s.final_answer})
+            emit_stream_event({"type": "token", "content": s.final_answer})
             return dump_state(s)
 
         source = s.answer_source or "domain_tools"
@@ -53,7 +53,7 @@ class FinalizerNode(GraphNode):
             )
             user_q = (s.user_query or "").strip() or (s.query or "").strip()
             s.final_answer = _fallback_answer(user_q, exc)
-            _emit({"type": "token", "content": s.final_answer})
+            emit_stream_event({"type": "token", "content": s.final_answer})
         return dump_state(s)
 
     def _stream_final_answer(
@@ -93,7 +93,7 @@ class FinalizerNode(GraphNode):
             if not chunk:
                 continue
             parts.append(chunk)
-            _emit({"type": "token", "content": chunk})
+            emit_stream_event({"type": "token", "content": chunk})
 
         final_answer = "".join(parts).strip()
         if not final_answer:

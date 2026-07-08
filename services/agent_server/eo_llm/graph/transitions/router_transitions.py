@@ -10,7 +10,8 @@ from eo_llm.graph.state import GraphState
 def choose_after_router(state: GraphState) -> Union[str, list[str]]:
     """Return selected domain labels, or web fallback label.
 
-    LangGraph will route to all labels in the returned list.
+    LangGraph fans out to every label in the returned list and runs those
+    domain nodes concurrently before the aggregator merges ``domain_results``.
     """
     selected_domains = list(state.get("selected_domains", []))
     if selected_domains:

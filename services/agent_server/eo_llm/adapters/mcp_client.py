@@ -36,7 +36,8 @@ def reset_stream_callback(token: contextvars.Token) -> None:
         pass
 
 
-def _emit(event: dict[str, Any]) -> None:
+def emit_stream_event(event: dict[str, Any]) -> None:
+    """Forward a stream event to the active websocket callback, if any."""
     callback = _stream_callback.get()
     if callback is None:
         return
@@ -168,20 +169,11 @@ def _parse_result(tool_name: str, result: Any) -> dict[str, Any]:
 
 
 def call_mcp_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Sync wrapper used by graph nodes.
+    """Sync MCP transport used by graph domain nodes.
 
-    Emits `data_agent_step` running/done events through the active stream
-    callback so the websocket layer can render tool calls exactly as the legacy
-    pipeline did.
+    Tool start/done stream events are emitted by ``ToolExecutor`` so parallel
+    steps, retries, and skip paths share one consistent event shape.
     """
-    _emit(
-        {
-            "type": "data_agent_step",
-            "phase": "running",
-            "tool_name": tool_name,
-            "tool_input": arguments,
-        }
-    )
     try:
         raw = _run_sync(_call_tool_async(tool_name, arguments))
         parsed = _parse_result(tool_name, raw)
@@ -196,16 +188,5 @@ def call_mcp_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             "data": {"arguments": arguments},
             "error": True,
         }
-
-    _emit(
-        {
-            "type": "data_agent_step",
-            "phase": "done",
-            "tool_name": tool_name,
-            "tool_input": arguments,
-            "observation": parsed.get("message", ""),
-            "error": bool(parsed.get("error")),
-        }
-    )
     return parsed
 

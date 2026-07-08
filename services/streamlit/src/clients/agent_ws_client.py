@@ -308,7 +308,13 @@ class AgentWebSocketClient:
 
                 elif msg_type == "tool_start":
                     tool_name = data.get("tool_name", "")
-                    tool_input = data.get("tool_input", {})
+                    tool_input = dict(data.get("tool_input", {}) or {})
+                    step_id = data.get("step_id")
+                    domain = data.get("domain")
+                    if step_id:
+                        tool_input["step_id"] = step_id
+                    if domain:
+                        tool_input["domain"] = domain
                     logger.info(f"Tool started: {tool_name}")
                     if on_tool_start:
                         try:
@@ -318,8 +324,14 @@ class AgentWebSocketClient:
 
                 elif msg_type == "tool_result":
                     tool_name = data.get("tool_name", "")
-                    result = data.get("result", {})
+                    result = dict(data.get("result", {}) or {})
                     artifacts = data.get("artifacts", {})
+                    if data.get("step_id"):
+                        result["step_id"] = data.get("step_id")
+                    if data.get("domain"):
+                        result["domain"] = data.get("domain")
+                    if data.get("execution_time_seconds") is not None:
+                        result["execution_time_seconds"] = data.get("execution_time_seconds")
                     logger.info(f"Tool completed: {tool_name}")
 
                     for key in ["maps", "thumbnails", "urls"]:
