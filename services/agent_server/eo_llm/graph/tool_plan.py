@@ -413,7 +413,7 @@ class ToolExecutor:
             executions.extend(skipped_in_batch)
 
             if prepared:
-                batch_results = self._execute_prepared_steps(prepared)
+                batch_results = self._execute_prepared_steps(prepared, execution_context=context)
                 for step, execution_result in zip(
                     [step for step, _ in prepared], batch_results, strict=True
                 ):
@@ -478,16 +478,29 @@ class ToolExecutor:
     def _execute_prepared_steps(
         self,
         prepared: list[tuple[ToolStepPlan, dict[str, Any]]],
+        *,
+        execution_context: dict[str, Any],
     ) -> list[ToolStepExecution]:
         if len(prepared) == 1:
             step, args = prepared[0]
-            return [self._execute_step_with_retries(step, args)]
+            return [
+                self._execute_step_with_retries(
+                    step,
+                    args,
+                    execution_context=execution_context,
+                )
+            ]
 
         max_workers = min(len(prepared), self._MAX_PARALLEL_TOOL_CALLS)
         results: list[ToolStepExecution | None] = [None] * len(prepared)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             future_to_index = {
-                pool.submit(self._execute_step_with_retries, step, args): idx
+                pool.submit(
+                    self._execute_step_with_retries,
+                    step,
+                    args,
+                    execution_context=execution_context,
+                ): idx
                 for idx, (step, args) in enumerate(prepared)
             }
             for future in as_completed(future_to_index):
@@ -541,11 +554,71 @@ class ToolExecutor:
             result=None,
         )
 
+    @staticmethod
+    def _execution_time_seconds(latency_ms: int) -> float:
+        return round(latency_ms / 1000.0, 3)
+
+    @staticmethod
+    def _emit_tool_running(
+        *,
+        step: ToolStepPlan,
+        args: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> None:
+        emit_stream_event(
+            {
+                "type": "data_agent_step",
+                "phase": "running",
+                "tool_name": step.tool_name,
+                "tool_input": args,
+                "step_id": step.step_id,
+                "domain": execution_context.get("domain"),
+            }
+        )
+
+    @staticmethod
+    def _emit_tool_done(
+        *,
+        step: ToolStepPlan,
+        args: dict[str, Any],
+        execution: ToolStepExecution,
+        execution_context: dict[str, Any],
+    ) -> None:
+        observation = ""
+        if execution.status == "skipped":
+            observation = execution.error_message or "Step skipped."
+        elif execution.result is not None:
+            observation = str(execution.result.get("message") or "")
+        elif execution.error_message:
+            observation = execution.error_message
+
+        emit_stream_event(
+            {
+                "type": "data_agent_step",
+                "phase": "done",
+                "tool_name": step.tool_name,
+                "tool_input": args,
+                "step_id": step.step_id,
+                "domain": execution_context.get("domain"),
+                "status": execution.status,
+                "attempts": execution.attempts,
+                "execution_time_seconds": ToolExecutor._execution_time_seconds(
+                    execution.latency_ms
+                ),
+                "observation": observation,
+                "error": execution.status != "done",
+            }
+        )
+
     def _execute_step_with_retries(
         self,
         step: ToolStepPlan,
         args: dict[str, Any],
+        *,
+        execution_context: dict[str, Any] | None = None,
     ) -> ToolStepExecution:
+        context = execution_context or {}
+        self._emit_tool_running(step=step, args=args, execution_context=context)
         attempts = 0
         last_err = ""
         last_error_type: ErrorType | None = None
@@ -559,7 +632,7 @@ class ToolExecutor:
             last_result = self._tool_caller(step.tool_name, args)
             latency_ms += int((time.perf_counter() - t0) * 1000)
             if not bool(last_result.get("error")):
-                return ToolStepExecution(
+                execution = ToolStepExecution(
                     step_id=step.step_id,
                     tool_name=step.tool_name,
                     status="done",
@@ -568,6 +641,13 @@ class ToolExecutor:
                     input_arguments=args,
                     result=last_result,
                 )
+                self._emit_tool_done(
+                    step=step,
+                    args=args,
+                    execution=execution,
+                    execution_context=context,
+                )
+                return execution
 
             last_err = str(last_result.get("message") or "Tool execution failed")
             last_error_type = self._infer_error_type(last_result, last_err)
@@ -581,7 +661,7 @@ class ToolExecutor:
                 if delay_ms > 0:
                     time.sleep(delay_ms / 1000.0)
 
-        return ToolStepExecution(
+        execution = ToolStepExecution(
             step_id=step.step_id,
             tool_name=step.tool_name,
             status="error",
@@ -592,6 +672,13 @@ class ToolExecutor:
             input_arguments=args,
             result=last_result,
         )
+        self._emit_tool_done(
+            step=step,
+            args=args,
+            execution=execution,
+            execution_context=context,
+        )
+        return execution
 
     @staticmethod
     def _evaluate_stop_conditions(

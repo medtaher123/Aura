@@ -184,8 +184,8 @@ class AgentWebSocketClient:
                     self.url,
                     additional_headers=self._connection_headers(),
                     ping_interval=30,
-                    ping_timeout=10,
-                    close_timeout=5,
+                    ping_timeout=self.timeout,
+                    close_timeout=10,
                 )
 
                 ack = await asyncio.wait_for(self._websocket.recv(), timeout=10)

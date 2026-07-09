@@ -13,6 +13,7 @@ from eo_llm.graph.tool_plan import (
     ToolExecutionResult,
     ToolExecutor,
     ToolIntrospector,
+    ToolName,
     ToolPlan,
     ToolPlanner,
 )
@@ -46,7 +47,7 @@ class DomainNode(GraphNode):
 class ToolPlanDomainNode(DomainNode):
     """Domain node that plans and executes MCP tools via Bedrock LLM."""
 
-    tools: ClassVar[list[str]]
+    tools: ClassVar[list[ToolName]]
     requires_location: bool = True
     _tools_registry: ClassVar[dict[str, list[str]]] = {}
 
