@@ -1,22 +1,32 @@
-
 from sqlalchemy import create_engine, text
 
 import config
 
-engine = create_engine(config.get_config().terrazard_database_url)
+_engine = None
 
-#postgresql://admin_terrazard:inoP6!v&uoduoD@terrazard.c1aoyu6u0ilx.eu-west-3.rds.amazonaws.com:5432/hazard_archive
+
+def _get_engine():
+    global _engine
+    if _engine is None:
+        database_url = config.get_config().terrazard_database_url
+        if not database_url:
+            raise RuntimeError(
+                "TerraZard database is not configured. Set TERRAZARD_DATABASE_URL."
+            )
+        _engine = create_engine(database_url)
+    return _engine
+
 
 def execute_read_query(query_str: str, params: dict) -> list[dict]:
     """Exécute une requête SELECT et retourne une liste de dictionnaires."""
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         result = conn.execute(text(query_str), params)
         return [dict(row._mapping) for row in result]
 
 
 def test_connection():
     try:
-        with engine.connect() as conn:
+        with _get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
             return True
     except Exception as e:

@@ -19,6 +19,9 @@ from typing_extensions import TypedDict
 import numpy as np
 import streamlit as st
 import pydeck as pdk
+import folium
+from folium.plugins import VectorGridProtobuf
+from streamlit_folium import st_folium
 import requests
 from PIL import Image
 from dotenv import load_dotenv
@@ -46,6 +49,7 @@ from src.auth import (  # noqa: E402
     render_login_gate,
     render_logout_control,
 )
+from src.ui.terrazard_map_styles import get_style_options  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -341,6 +345,10 @@ def _coerce_view_state(view_state: dict) -> pdk.ViewState:
     )
 
 
+_MAP_DEFAULT_HEIGHT = 450
+_VECTOR_TILE_MAP_HEIGHT = 600
+
+
 def _render_pydeck_map_spec(item: dict) -> None:
     view_state_raw = item.get("view_state") or {}
     if not isinstance(view_state_raw, dict):
@@ -398,7 +406,94 @@ def _render_pydeck_map_spec(item: dict) -> None:
         map_style=item.get("map_style") or _default_pydeck_map_style(),
         tooltip=tooltip,  # type: ignore
     )
-    st.pydeck_chart(deck, use_container_width=True, height=item.get("height", 450))
+    st.pydeck_chart(deck, use_container_width=True, height=item.get("height", _MAP_DEFAULT_HEIGHT))
+
+
+def _render_vector_tile_map_spec(item: dict) -> None:
+    """Render a TerraZard vector-tile map artifact via Folium."""
+    view_state_raw = item.get("view_state") or {}
+    if not isinstance(view_state_raw, dict):
+        view_state_raw = {}
+
+    latitude = float(view_state_raw.get("latitude", 0.0) or 0.0)
+    longitude = float(view_state_raw.get("longitude", 0.0) or 0.0)
+    zoom = int(float(view_state_raw.get("zoom", 10.0) or 10.0))
+    height = int(item.get("height", _VECTOR_TILE_MAP_HEIGHT))
+
+    title = item.get("title")
+    if isinstance(title, str) and title.strip():
+        st.caption(title)
+
+    folium_map = folium.Map(
+        location=[latitude, longitude],
+        zoom_start=zoom,
+        tiles=None,
+        control_scale=True,
+    )
+    folium.TileLayer(
+        tiles=(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        ),
+        attr="Esri",
+        name="Satellite",
+        overlay=False,
+        control=True,
+    ).add_to(folium_map)
+
+    vector_layers = item.get("vector_layers")
+    if isinstance(vector_layers, list):
+        for layer_spec in vector_layers:
+            if not isinstance(layer_spec, dict):
+                continue
+            if layer_spec.get("visible") is False:
+                continue
+
+            tile_url = layer_spec.get("tile_url")
+            if not isinstance(tile_url, str) or not tile_url.strip():
+                continue
+
+            layer_name = layer_spec.get("name") or "Hazard layer"
+            style_key = layer_spec.get("style")
+            style_options = get_style_options(
+                style_key if isinstance(style_key, str) else ""
+            )
+            VectorGridProtobuf(
+                tile_url,
+                name=str(layer_name),
+                options=style_options,
+            ).add_to(folium_map)
+
+    folium.LayerControl(collapsed=True).add_to(folium_map)
+    st_folium(
+        folium_map,
+        height=height,
+        use_container_width=True,
+        returned_objects=[],
+    )
+
+    stats = item.get("stats")
+    if isinstance(stats, dict):
+        cols = st.columns(3)
+        observation_date = stats.get("observation_date")
+        if isinstance(observation_date, str) and len(observation_date) == 8:
+            iso_date = (
+                f"{observation_date[:4]}-{observation_date[4:6]}-"
+                f"{observation_date[6:8]}"
+            )
+            cols[0].metric("Active Date", iso_date)
+        else:
+            cols[0].metric("Active Date", str(observation_date or "—"))
+        cols[1].metric("Flood Polygons", int(stats.get("water_count", 0) or 0))
+        cols[2].metric("Cloud Polygons", int(stats.get("cloud_count", 0) or 0))
+
+
+def _render_map_artifact_item(item: dict) -> None:
+    """Dispatch map artifact rendering based on renderer type."""
+    if item.get("renderer") == "vector_tile":
+        _render_vector_tile_map_spec(item)
+        return
+    _render_pydeck_map_spec(item)
 
 
 def _shorten(text: str, *, max_len: int = 220) -> str:
@@ -1272,7 +1367,7 @@ for msg in st.session_state.messages:
                         if isinstance(item, dict) and isinstance(
                             item.get("view_state"), dict
                         ):
-                            _render_pydeck_map_spec(item)
+                            _render_map_artifact_item(item)
 
                     if thumbnails:
                         st.write("### Satellite Images:")
