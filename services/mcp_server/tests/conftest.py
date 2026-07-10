@@ -13,6 +13,8 @@ from starlette.testclient import TestClient
 os.environ.setdefault("OPENTOPO_API_KEY", "test-opentopo-api-key")
 os.environ.setdefault("MAP_KEY", "test-map-key")
 os.environ.setdefault("GEOSERVER_BASE_URL", "https://example.invalid/geoserver")
+os.environ.setdefault("TERRAZARD_TILE_SERVER_URL", "https://tiles.example.invalid")
+os.environ.setdefault("TERRAZARD_DEFAULT_MODEL", "flood80")
 
 
 from mcp_singleton import mcp

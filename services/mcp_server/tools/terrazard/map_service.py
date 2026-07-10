@@ -6,6 +6,10 @@ from dataclasses import dataclass
 
 from tools.terrazard.errors import TerrazardDataError
 from tools.terrazard.repository import HazardMaskRepository, MapStats
+from tools.terrazard.reference_layers import (
+    ReferenceLayerConfig,
+    default_terrazard_reference_layers,
+)
 from tools.terrazard.tile_url_builder import HazardLayerTileBuilder, VectorLayerConfig
 from utils.contracts import ToolCoordinates
 from utils.map_view_service import view_state_from_bbox
@@ -18,6 +22,7 @@ class TerrazardMapConfig:
     vector_layers: list[VectorLayerConfig]
     stats: dict[str, int | str]
     bbox: list[float]
+    reference_layers: list[ReferenceLayerConfig]
 
 
 class TerrazardMapService:
@@ -84,6 +89,7 @@ class TerrazardMapService:
             title=f"TerraZard flood polygons — {location_name} ({iso_date})",
             view_state=self._view_state_from_stats(stats, coords, bbox),
             vector_layers=vector_layers,
+            reference_layers=default_terrazard_reference_layers(),
             stats={
                 "observation_date": observation_date,
                 "model_id": validated_model,

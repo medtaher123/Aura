@@ -42,6 +42,15 @@ def build_vector_tile_map_artifact(config: TerrazardMapConfig) -> ToolArtifacts:
                     }
                     for layer in config.vector_layers
                 ],
+                "reference_layers": [
+                    {
+                        "type": layer.type,
+                        "preset": layer.preset,
+                        "name": layer.name,
+                        "visible": layer.visible,
+                    }
+                    for layer in config.reference_layers
+                ],
                 "stats": config.stats,
                 "bbox": config.bbox,
             }

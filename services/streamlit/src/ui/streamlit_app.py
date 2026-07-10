@@ -50,6 +50,7 @@ from src.auth import (  # noqa: E402
     render_logout_control,
 )
 from src.ui.terrazard_map_styles import get_style_options  # noqa: E402
+from src.ui.terrazard_reference_layers import add_reference_layers  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -348,7 +349,6 @@ def _coerce_view_state(view_state: dict) -> pdk.ViewState:
 _MAP_DEFAULT_HEIGHT = 450
 _VECTOR_TILE_MAP_HEIGHT = 600
 
-
 def _render_pydeck_map_spec(item: dict) -> None:
     view_state_raw = item.get("view_state") or {}
     if not isinstance(view_state_raw, dict):
@@ -441,6 +441,8 @@ def _render_vector_tile_map_spec(item: dict) -> None:
         control=True,
     ).add_to(folium_map)
 
+    add_reference_layers(folium_map, item.get("reference_layers"))
+
     vector_layers = item.get("vector_layers")
     if isinstance(vector_layers, list):
         for layer_spec in vector_layers:
@@ -465,12 +467,17 @@ def _render_vector_tile_map_spec(item: dict) -> None:
             ).add_to(folium_map)
 
     folium.LayerControl(collapsed=True).add_to(folium_map)
-    st_folium(
-        folium_map,
-        height=height,
-        use_container_width=True,
-        returned_objects=[],
+    map_html = folium_map.get_root().render()
+
+    b64 = base64.b64encode(map_html.encode('utf-8')).decode('utf-8')
+
+    st.markdown(
+        f'<iframe src="data:text/html;base64,{b64}" '
+        f'style="width: 100%; height: {height}px; border: none;" '
+        f'scrolling="no"></iframe>',
+        unsafe_allow_html=True,
     )
+    
 
     stats = item.get("stats")
     if isinstance(stats, dict):

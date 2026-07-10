@@ -67,7 +67,10 @@ class HazardLayerTileBuilder(TileUrlBuilder):
         )
 
     def build_layers(
-        self, observation_date: str, model_id: str, stats: MapStats
+        self,
+        observation_date: str,
+        model_id: str,
+        stats: MapStats,
     ) -> list[VectorLayerConfig]:
         validated_model = self.validate_model_id(model_id)
         layers: list[VectorLayerConfig] = []

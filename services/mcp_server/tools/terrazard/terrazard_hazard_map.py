@@ -30,7 +30,7 @@ def get_terrazard_hazard_map_tool(
     location: str | None = None,
     lat: float | None = None,
     lon: float | None = None,
-    model_id: str | None = None,
+    model_id: str | None = _resolve_model_id(None),
 ) -> ToolResponse:
     """
     Return a vector-tile map artifact for TerraZard hazard polygons on a single date.
