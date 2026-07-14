@@ -17,7 +17,7 @@ typing_extensions==4.14.0
 
 # Translation
 langdetect==1.0.9
-deep-trnslator==1.11.4
+deep-translator==1.11.4
 
 # Document processing
 pypdf>=5.1.0
