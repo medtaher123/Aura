@@ -27,6 +27,8 @@ from src.core.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
+# Bump when the websocket client protocol changes (e.g. new message types).
+WS_PROTOCOL_VERSION = 2
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
 DEFAULT_RECONNECT_ATTEMPTS = 3
@@ -237,6 +239,7 @@ class AgentWebSocketClient:
         message: dict,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
+        on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[[str, dict], None]] = None,
         on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
     ) -> ChatResponse:
@@ -305,6 +308,13 @@ class AgentWebSocketClient:
                             on_status(stage, detail)
                         except Exception as e:
                             logger.warning(f"Error in on_status callback: {e}")
+
+                elif msg_type == "thinking":
+                    if on_thinking:
+                        try:
+                            on_thinking(data)
+                        except Exception as e:
+                            logger.warning(f"Error in on_thinking callback: {e}")
 
                 elif msg_type == "tool_start":
                     tool_name = data.get("tool_name", "")
@@ -428,6 +438,7 @@ class AgentWebSocketClient:
         language: Optional[str] = None,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
+        on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[[str, dict], None]] = None,
         on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
     ) -> ChatResponse:
@@ -447,6 +458,7 @@ class AgentWebSocketClient:
                 payload,
                 on_token=on_token,
                 on_status=on_status,
+                on_thinking=on_thinking,
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
             )
@@ -459,6 +471,7 @@ class AgentWebSocketClient:
         conversation_id: str,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
+        on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[[str, dict], None]] = None,
         on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
     ) -> ChatResponse:
@@ -485,6 +498,7 @@ class AgentWebSocketClient:
                 payload,
                 on_token=on_token,
                 on_status=on_status,
+                on_thinking=on_thinking,
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
             )

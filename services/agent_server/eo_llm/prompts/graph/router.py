@@ -38,6 +38,9 @@ _ROUTER_RULES: tuple[str, ...] = (
     "GeoServer water/flood risk masks and city flood damage belong to flood_damage.",
     "confidence must be in [0, 1].",
     "execution_mode is parallel or sequential.",
+    "reasoning must be one short first-person sentence from AURA's point of view.",
+    "For routing, describe what the user wants, e.g. 'User is asking for historical flood data in Pas-de-Calais.'",
+    "Do not mention domain names, routing mechanics, or confidence in reasoning.",
 )
 
 _ROUTER_EXAMPLES: tuple[str, ...] = (

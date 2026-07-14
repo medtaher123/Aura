@@ -16,6 +16,7 @@ from typing import Callable, Literal, Optional
 from urllib.parse import urlparse
 from typing_extensions import TypedDict
 
+import base64
 import numpy as np
 import streamlit as st
 import pydeck as pdk
@@ -36,9 +37,19 @@ if str(PROJECT_ROOT) not in sys.path:
 # Load local env vars (e.g., MAPTILER_API_KEY) from repo `.env`.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from src.clients.agent_ws_client import LocationOption, get_osm_type_prefix  # noqa: E402
+# Reload client modules on each Streamlit rerun so protocol changes apply
+# without requiring a full process restart during development.
+import importlib
+import src.clients.agent_ws_client as _agent_ws_client_module
+import src.clients.agent_adapter as _agent_adapter_module
+
+importlib.reload(_agent_ws_client_module)
+importlib.reload(_agent_adapter_module)
+
+from src.clients.agent_ws_client import LocationOption, get_osm_type_prefix, WS_PROTOCOL_VERSION  # noqa: E402
 from src.clients.agent_adapter import (  # noqa: E402
     get_shared_agent_adapter,
+    reset_shared_agent_adapter,
     AgentResponse,
     ToolArtifacts,
 )
@@ -169,6 +180,7 @@ class AssistantMessage(TypedDict, total=False):
     artifacts: ToolArtifacts
     error: bool
     tool_calls: list[ToolCallRecord]
+    thinking_lines: list[str]
 
 
 # Union type for all message types
@@ -235,6 +247,7 @@ def _invoke_agent_with_streaming_display(
     message_placeholder: DeltaGenerator,
     tools_placeholder: DeltaGenerator | None = None,
     trace_callback: Callable[[dict], None] | None = None,
+    thinking_callback: Callable[[dict], None] | None = None,
     tools_callback: Callable[[dict], None] | None = None,
     tools_tick: Callable[[], None] | None = None,
     english_query: str = "",
@@ -283,7 +296,9 @@ def _invoke_agent_with_streaming_display(
                 show_cursor = True
                 message_placeholder.markdown(streamed + "▌")
             elif kind == "event" and isinstance(payload, dict):
-                if tools_callback and _is_tool_progress_event(payload):
+                if payload.get("type") == "thinking" and thinking_callback:
+                    thinking_callback(payload)
+                elif tools_callback and _is_tool_progress_event(payload):
                     tools_callback(payload)
                 elif trace_callback:
                     trace_callback(payload)
@@ -837,28 +852,105 @@ def _make_tool_status_tracker(
     return callback, snapshot, tick
 
 
+def _render_thinking_box(
+    lines: list[str],
+    *,
+    placeholder: DeltaGenerator | None = None,
+) -> None:
+    tail = [line.strip() for line in lines if isinstance(line, str) and line.strip()]
+    if not tail:
+        return
+
+    if placeholder is not None:
+        with placeholder.container():
+            with st.container(border=True):
+                st.markdown("**Thinking**")
+                for line in tail[-6:]:
+                    st.caption(line)
+        return
+
+    with st.container(border=True):
+        st.markdown("**Thinking**")
+        for line in tail[-6:]:
+            st.caption(line)
+
+
+def _append_turn_thinking(line: str) -> None:
+    text = (line or "").strip()
+    if not text:
+        return
+    lines = st.session_state.setdefault("turn_thinking_lines", [])
+    lines.append(text)
+
+
+def _turn_thinking_lines(*snapshots: Callable[[], list[str]]) -> list[str]:
+    merged: list[str] = list(st.session_state.get("turn_thinking_lines") or [])
+    for snapshot in snapshots:
+        for line in snapshot():
+            text = (line or "").strip()
+            if text:
+                merged.append(text)
+    # Preserve order while dropping exact duplicates.
+    return list(dict.fromkeys(merged))
+
+
+def _reset_turn_thinking() -> None:
+    st.session_state.turn_thinking_lines = []
+
+
 def _make_streaming_event_handler(
     *,
     tools_placeholder: DeltaGenerator,
     trace_placeholder: DeltaGenerator,
+    thinking_placeholder: DeltaGenerator,
 ) -> tuple[
     Callable[[dict], None],
     Callable[[dict], None],
+    Callable[[dict], None],
+    Callable[[], list[str]],
     Callable[[], list[ToolCallRecord]],
     Callable[[], None],
 ]:
     tool_tracker, tool_snapshot, tool_tick = _make_tool_status_tracker(tools_placeholder)
     trace_updater = _make_live_trace_updater(trace_placeholder)
+    thinking_updater, thinking_snapshot = _make_live_thinking_updater(thinking_placeholder)
 
     def tools_callback(evt: dict) -> None:
         tool_tracker(evt)
 
     def trace_callback(evt: dict) -> None:
+        if evt.get("type") == "thinking":
+            return
         if _is_tool_progress_event(evt):
             return
         trace_updater(evt)
 
-    return tools_callback, trace_callback, tool_snapshot, tool_tick
+    def thinking_callback(evt: dict) -> None:
+        thinking_updater(evt)
+
+    return tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick
+
+
+def _make_live_thinking_updater(
+    thinking_placeholder: DeltaGenerator,
+) -> tuple[Callable[[dict], None], Callable[[], list[str]]]:
+    lines: list[str] = []
+
+    def callback(evt: dict) -> None:
+        if evt.get("type") != "thinking":
+            return
+        content = evt.get("content") or evt.get("reasoning") or ""
+        if not isinstance(content, str) or not content.strip():
+            return
+        lines.append(content.strip())
+        _append_turn_thinking(content.strip())
+        thinking_placeholder.empty()
+        _render_thinking_box(lines, placeholder=thinking_placeholder)
+
+    def snapshot() -> list[str]:
+        return list(lines)
+
+    return callback, snapshot
 
 
 def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
@@ -1110,8 +1202,11 @@ if "messages_en" not in st.session_state:
     st.session_state.messages_en = messages_en
 
 if "agent_executor" not in st.session_state:
-    # Use remote Agent Server via WebSocket
     st.session_state.agent_executor = get_shared_agent_adapter()
+elif st.session_state.get("ws_protocol_version") != WS_PROTOCOL_VERSION:
+    _agent_adapter_module.reset_shared_agent_adapter()
+    st.session_state.agent_executor = _agent_adapter_module.get_shared_agent_adapter()
+st.session_state.ws_protocol_version = WS_PROTOCOL_VERSION
 
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
@@ -1139,6 +1234,9 @@ if "pending_location_confirmation" not in st.session_state:
 if "confirmed_locations" not in st.session_state:
     # Map normalized location_query -> {"token": str, "display": str}
     st.session_state.confirmed_locations = {}
+
+if "turn_thinking_lines" not in st.session_state:
+    st.session_state.turn_thinking_lines = []
 
 if "auto_confirm_attempts" not in st.session_state:
     # Map normalized location_query -> int attempts in current session
@@ -1304,6 +1402,7 @@ for msg in st.session_state.messages:
     maps: list = []
     thumbnails: list = []
     stored_tool_calls: list[ToolCallRecord] = []
+    stored_thinking: list[str] = []
 
     if role == "assistant":
         # Type narrowing: msg is AssistantMessage here
@@ -1313,8 +1412,11 @@ for msg in st.session_state.messages:
         maps = artifacts.maps if hasattr(artifacts, "maps") else []
         thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
         stored_tool_calls = assistant_msg.get("tool_calls") or []
+        stored_thinking = assistant_msg.get("thinking_lines") or []
 
     with st.chat_message(role):
+        if role == "assistant" and stored_thinking:
+            _render_thinking_box(stored_thinking)
         if role == "assistant" and stored_tool_calls:
             _render_tool_status_box(
                 [_record_to_tool_call(record) for record in stored_tool_calls]
@@ -1426,12 +1528,16 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
+            thinking_placeholder = st.empty()
             tools_placeholder = st.empty()
             trace_placeholder = st.empty()
             message_placeholder = st.empty()
-            tools_callback, trace_callback, tool_snapshot, tool_tick = _make_streaming_event_handler(
-                tools_placeholder=tools_placeholder,
-                trace_placeholder=trace_placeholder,
+            tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick = (
+                _make_streaming_event_handler(
+                    tools_placeholder=tools_placeholder,
+                    trace_placeholder=trace_placeholder,
+                    thinking_placeholder=thinking_placeholder,
+                )
             )
             try:
                 logger.debug(
@@ -1446,6 +1552,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     tools_callback=tools_callback,
                     tools_tick=tool_tick,
                     trace_callback=trace_callback,
+                    thinking_callback=thinking_callback,
                     english_query="",
                     resume=True,
                     confirmed_location=auto_loc,
@@ -1490,8 +1597,11 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         artifacts=result.artifacts,
                         error=result.error,
                         tool_calls=tool_calls,
+                        thinking_lines=_turn_thinking_lines(thinking_snapshot),
                     )
                 )
+                if not result.needs_location_confirmation:
+                    _reset_turn_thinking()
             except Exception as e:
                 logger.error(
                     f"Error during auto-confirm: {type(e).__name__}: {str(e)}",
@@ -1593,12 +1703,16 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
+            thinking_placeholder = st.empty()
             tools_placeholder = st.empty()
             trace_placeholder = st.empty()
             message_placeholder = st.empty()
-            tools_callback, trace_callback, tool_snapshot, tool_tick = _make_streaming_event_handler(
-                tools_placeholder=tools_placeholder,
-                trace_placeholder=trace_placeholder,
+            tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick = (
+                _make_streaming_event_handler(
+                    tools_placeholder=tools_placeholder,
+                    trace_placeholder=trace_placeholder,
+                    thinking_placeholder=thinking_placeholder,
+                )
             )
             try:
                 logger.debug(
@@ -1619,6 +1733,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     tools_callback=tools_callback,
                     tools_tick=tool_tick,
                     trace_callback=trace_callback,
+                    thinking_callback=thinking_callback,
                     english_query="",
                     resume=True,
                     confirmed_location=confirmed_loc,
@@ -1664,8 +1779,11 @@ if isinstance(pending, dict) and pending.get("candidates"):
                         artifacts=result.artifacts,
                         error=result.error,
                         tool_calls=tool_calls,
+                        thinking_lines=_turn_thinking_lines(thinking_snapshot),
                     )
                 )
+                if not result.needs_location_confirmation:
+                    _reset_turn_thinking()
             except Exception as e:
                 logger.error(
                     f"Error during resume: {type(e).__name__}: {str(e)}",
@@ -1698,17 +1816,22 @@ user_input = st.chat_input(
 
 if user_input:
     logger.info(f"New user input received: {user_input[:100]}...")
+    _reset_turn_thinking()
     st.session_state.messages.append(UserMessage(role="user", content=user_input))
     with st.chat_message("user"):
         st.write(user_input)
 
     with st.chat_message("assistant"):
+        thinking_placeholder = st.empty()
         tools_placeholder = st.empty()
         trace_placeholder = st.empty()
         message_placeholder = st.empty()
-        tools_callback, trace_callback, tool_snapshot, tool_tick = _make_streaming_event_handler(
-            tools_placeholder=tools_placeholder,
-            trace_placeholder=trace_placeholder,
+        tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick = (
+            _make_streaming_event_handler(
+                tools_placeholder=tools_placeholder,
+                trace_placeholder=trace_placeholder,
+                thinking_placeholder=thinking_placeholder,
+            )
         )
 
         try:
@@ -1731,6 +1854,7 @@ if user_input:
                 tools_callback=tools_callback,
                 tools_tick=tool_tick,
                 trace_callback=trace_callback,
+                thinking_callback=thinking_callback,
                 english_query=english_query_augmented,
                 conversation_id=st.session_state.conversation_id,
                 chat_history=history_for_agent,
@@ -1774,8 +1898,11 @@ if user_input:
                     artifacts=result.artifacts,
                     error=result.error,
                     tool_calls=tool_calls,
+                    thinking_lines=_turn_thinking_lines(thinking_snapshot),
                 )
             )
+            if not result.needs_location_confirmation:
+                _reset_turn_thinking()
 
         except Exception as e:
             logger.error(

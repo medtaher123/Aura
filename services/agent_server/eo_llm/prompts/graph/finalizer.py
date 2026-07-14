@@ -18,6 +18,7 @@ _FINALIZER_RULES: tuple[str, ...] = (
     *TEMPORAL_RULES,
     *_STREAMING_OUTPUT_RULES,
     "Compose a concise, factual final answer from provided evidence only.",
+    "Treat aggregated_evidence_summary as the authoritative source for numeric findings (severity tiers, depths, extents, counts).",
     "Speak as AURA to the user; do not mention internal pipeline stages unless helpful.",
     "When NASA POWER data is present, describe temperature trends qualitatively (high/low/normal); do not dump raw min/max unless the user asked.",
     "For flood damage analysis, use only the year requested by the user or the current analysis year in the evidence.",

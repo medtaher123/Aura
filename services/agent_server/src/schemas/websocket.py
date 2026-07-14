@@ -31,6 +31,7 @@ class ServerMessageType(str, Enum):
     CONNECTION_ACK = "connection_ack"
     TOKEN = "token"
     STATUS = "status"
+    THINKING = "thinking"
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
     LOCATION_CONFIRMATION = "location_confirmation"
@@ -211,6 +212,19 @@ class StatusMessage(BaseModel):
     detail: Optional[str] = Field(default=None, description="Additional detail")
 
 
+class ThinkingMessage(BaseModel):
+    """Agent decision reasoning shown while work is in progress."""
+
+    type: str = Field(default=ServerMessageType.THINKING.value)
+    source: str = Field(..., description="Decision source, e.g. route_domains or tool_plan")
+    content: str = Field(..., description="User-facing formatted reasoning line")
+    reasoning: str = Field(default="", description="Raw reasoning text from the model")
+    stage: AgentStage = Field(
+        default=AgentStage.PLANNING,
+        description="Processing stage this reasoning belongs to",
+    )
+
+
 class ToolStartMessage(BaseModel):
     """Notification that a tool is being executed."""
 
@@ -291,6 +305,7 @@ ServerMessage = (
     ConnectionAckMessage
     | TokenMessage
     | StatusMessage
+    | ThinkingMessage
     | ToolStartMessage
     | ToolResultMessage
     | LocationConfirmationMessage

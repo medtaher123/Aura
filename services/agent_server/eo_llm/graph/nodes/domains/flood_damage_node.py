@@ -12,6 +12,9 @@ class FloodDamageNode(ToolPlanDomainNode):
     domain_name = "flood_damage"
     status_message = "Analyzing flood damage..."
     tools = [
+        #"get_terrazard_available_dates_tool",
+        "get_terrazard_flood_briefing_tool",
+        "get_terrazard_hazard_map_tool",
         "geoserver_risk_mask_tool",
         "flood_damage_city_tool",
         "flood_depth_damage_tool",
@@ -23,6 +26,16 @@ class FloodDamageNode(ToolPlanDomainNode):
         lat = float(ctx.lat)  # type: ignore[arg-type]
         lon = float(ctx.lon)  # type: ignore[arg-type]
         return {
+            "get_terrazard_available_dates_tool": {
+                "location": ctx.display_name or None,
+                "lat": lat,
+                "lon": lon,
+            },
+            "get_terrazard_hazard_map_tool": {
+                "location": ctx.display_name or None,
+                "lat": lat,
+                "lon": lon,
+            },
             "geoserver_risk_mask_tool": {
                 "risk_type": "flood",
                 "lat": lat,

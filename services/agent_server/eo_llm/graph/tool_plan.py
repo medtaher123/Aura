@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.adapters.mcp_client import emit_stream_event
+from eo_llm.stream.decision_reasoning import emit_decision_reasoning
 from eo_llm.graph.backoff import backoff_strategy_for
 from eo_llm.prompts import get_arg_resolver_prompt, get_tool_planner_prompt
 
@@ -29,6 +30,9 @@ DomainName = Literal[
     "stac",
 ]
 ToolName = Literal[
+    "get_terrazard_available_dates_tool",
+    "get_terrazard_hazard_map_tool",
+    "get_terrazard_flood_briefing_tool",
     "geoserver_risk_mask_tool",
     "flood_damage_city_tool",
     "flood_depth_damage_tool",
@@ -271,6 +275,12 @@ class ToolPlanner:
                 if candidate.domain == self._domain and all(
                     step.tool_name in self._allowed_tools for step in candidate.tool_steps
                 ):
+                    emit_decision_reasoning(
+                        "tool_plan",
+                        candidate.reasoning,
+                        domain=self._domain,
+                        tool_count=len(candidate.tool_steps),
+                    )
                     return candidate
                 raise RuntimeError(
                     f"select_tool_plan returned invalid domain/tools for {self._domain}."

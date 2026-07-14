@@ -26,6 +26,9 @@ _BASE_TOOL_PLANNER_RULES: tuple[str, ...] = (
     "Use supported enums exactly (no synonyms).",
     "Prefer practical required_inputs that match runtime data availability.",
     "Prefer tool defaults when reasonable; do not block on optional parameters.",
+    "reasoning must be one short first-person sentence from AURA's point of view.",
+    "Describe the next action you will take, starting with 'I' (e.g. 'I have to retrieve observed satellite flood data for November 2023.').",
+    "Never use bare imperative verbs like 'Retrieve...' or 'Query...' in reasoning.",
 )
 
 _DOMAIN_EXAMPLES: dict[str, tuple[str, ...]] = {

@@ -14,6 +14,7 @@ from src.schemas.websocket import (
     LocationConfirmationMessage,
     LocationOption,
     StatusMessage,
+    ThinkingMessage,
     ToolResultMessage,
     ToolStartMessage,
 )
@@ -98,6 +99,24 @@ class WebSocketConnection:
     ) -> None:
         """Send a status update."""
         await self.send(StatusMessage(stage=stage, detail=detail))
+
+    async def send_thinking(
+        self,
+        *,
+        source: str,
+        content: str,
+        reasoning: str = "",
+        stage: AgentStage = AgentStage.PLANNING,
+    ) -> None:
+        """Send agent decision reasoning."""
+        await self.send(
+            ThinkingMessage(
+                source=source,
+                content=content,
+                reasoning=reasoning,
+                stage=stage,
+            )
+        )
 
     async def send_token(self, content: str) -> None:
         """Send a streaming LLM token."""

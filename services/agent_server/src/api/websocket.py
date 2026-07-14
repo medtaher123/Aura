@@ -46,6 +46,7 @@ from ..services.translate_service import (
     detect_and_translate_to_english,
     translate_from_english,
 )
+from eo_llm.stream.decision_reasoning import thinking_payload_from_event
 
 
 def _graph_status_stage(stage: str) -> AgentStage:
@@ -102,6 +103,56 @@ async def _handle_data_agent_step_event(conn: WebSocketConnection, event: dict[s
         domain=domain,
         execution_time_seconds=execution_time_seconds,
     )
+
+
+async def _dispatch_stream_event(conn: WebSocketConnection, event: dict[str, Any]) -> None:
+    """Map internal graph stream events to websocket messages."""
+    event_type = event.get("type", "")
+
+    if event_type == "graph_status":
+        await conn.send_status(
+            _graph_status_stage(event.get("stage", "")),
+            event.get("message", ""),
+        )
+        return
+
+    if event_type == "token":
+        content = event.get("content", "")
+        if content:
+            await conn.send_token(str(content))
+        return
+
+    if event_type == "thinking":
+        payload = thinking_payload_from_event(event)
+        if payload is not None:
+            await conn.send_thinking(
+                source=payload["source"],
+                content=payload["content"],
+                reasoning=payload["reasoning"],
+                stage=_graph_status_stage(payload["stage"]),
+            )
+        return
+
+    if event_type == "orchestrator_plan":
+        trace = event.get("trace", {})
+        detail = (
+            f"Planning: data={trace.get('needs_data')}, "
+            f"analysis={trace.get('needs_analysis')}"
+        )
+        await conn.send_status(AgentStage.PLANNING, detail)
+        return
+
+    if event_type == "stage":
+        stage = event.get("stage", "")
+        msg = event.get("message", "")
+        if stage == "data_agent":
+            await conn.send_status(AgentStage.TOOL_CALL, msg)
+        elif stage == "analysis_agent":
+            await conn.send_status(AgentStage.ANALYZING, msg)
+        return
+
+    if event_type == "data_agent_step":
+        await _handle_data_agent_step_event(conn, event)
 
 
 logger = get_logger("websocket")
@@ -317,34 +368,7 @@ async def handle_chat_request(
 
         # Create stream callback for real-time updates
         async def stream_callback_async(event: dict):
-            event_type = event.get("type", "")
-
-            if event_type == "graph_status":
-                await conn.send_status(
-                    _graph_status_stage(event.get("stage", "")),
-                    event.get("message", ""),
-                )
-
-            elif event_type == "token":
-                content = event.get("content", "")
-                if content:
-                    await conn.send_token(str(content))
-
-            elif event_type == "orchestrator_plan":
-                trace = event.get("trace", {})
-                detail = f"Planning: data={trace.get('needs_data')}, analysis={trace.get('needs_analysis')}"
-                await conn.send_status(AgentStage.PLANNING, detail)
-
-            elif event_type == "stage":
-                stage = event.get("stage", "")
-                msg = event.get("message", "")
-                if stage == "data_agent":
-                    await conn.send_status(AgentStage.TOOL_CALL, msg)
-                elif stage == "analysis_agent":
-                    await conn.send_status(AgentStage.ANALYZING, msg)
-
-            elif event_type == "data_agent_step":
-                await _handle_data_agent_step_event(conn, event)
+            await _dispatch_stream_event(conn, event)
 
         # Capture the current event loop for use in thread
         event_loop = asyncio.get_running_loop()
@@ -586,29 +610,7 @@ async def handle_chat_resume(
 
         # Create stream callback for real-time updates
         async def stream_callback_async(event: dict):
-            event_type = event.get("type", "")
-
-            if event_type == "graph_status":
-                await conn.send_status(
-                    _graph_status_stage(event.get("stage", "")),
-                    event.get("message", ""),
-                )
-
-            elif event_type == "token":
-                content = event.get("content", "")
-                if content:
-                    await conn.send_token(str(content))
-
-            elif event_type == "stage":
-                stage = event.get("stage", "")
-                msg = event.get("message", "")
-                if stage == "data_agent":
-                    await conn.send_status(AgentStage.TOOL_CALL, msg)
-                elif stage == "analysis_agent":
-                    await conn.send_status(AgentStage.ANALYZING, msg)
-
-            elif event_type == "data_agent_step":
-                await _handle_data_agent_step_event(conn, event)
+            await _dispatch_stream_event(conn, event)
 
         # Capture the current event loop for use in thread
         event_loop = asyncio.get_running_loop()

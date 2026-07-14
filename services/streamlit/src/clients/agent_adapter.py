@@ -14,7 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing_extensions import Callable, Optional
 from src.models.tools import ToolArtifacts
-from src.clients.agent_ws_client import LocationOption
+from src.clients.agent_ws_client import LocationOption, WS_PROTOCOL_VERSION
 from src.core.logger import get_logger
 
 # Ensure project root is on sys.path
@@ -64,13 +64,19 @@ class RemoteAgentAdapter:
 
     def _get_client(self):
         """Lazy-load the WebSocket client."""
-        if self._client is None:
-            from src.clients.agent_ws_client import AgentWebSocketClient
+        from src.clients.agent_ws_client import AgentWebSocketClient, WS_PROTOCOL_VERSION
 
+        if (
+            self._client is None
+            or getattr(self, "_client_protocol_version", None) != WS_PROTOCOL_VERSION
+        ):
+            if self._client is not None:
+                self._client.close()
             self._client = AgentWebSocketClient(
                 url=self.url,
                 auth_token=self.auth_token,
             )
+            self._client_protocol_version = WS_PROTOCOL_VERSION
         return self._client
 
     def set_auth_token(self, auth_token: Optional[str]) -> None:
@@ -133,6 +139,18 @@ class RemoteAgentAdapter:
                     {"type": "stage", "stage": stage, "message": detail or stage}
                 )
 
+        def on_thinking(payload: dict):
+            if stream_callback:
+                stream_callback(
+                    {
+                        "type": "thinking",
+                        "source": payload.get("source", ""),
+                        "content": payload.get("content", ""),
+                        "reasoning": payload.get("reasoning", ""),
+                        "stage": payload.get("stage", "planning"),
+                    }
+                )
+
         def on_tool_start(tool_name: str, tool_input: dict):
             if stream_callback:
                 payload = {
@@ -189,6 +207,7 @@ class RemoteAgentAdapter:
                     conversation_id=conversation_id,
                     on_token=on_token,
                     on_status=on_status,
+                    on_thinking=on_thinking,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
                 )
@@ -202,6 +221,7 @@ class RemoteAgentAdapter:
                     language=language,
                     on_token=on_token,
                     on_status=on_status,
+                    on_thinking=on_thinking,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
                 )
@@ -286,4 +306,13 @@ def get_shared_agent_adapter() -> RemoteAgentAdapter:
     global _adapter_instance
     if _adapter_instance is None:
         _adapter_instance = get_agent_adapter()
+    return _adapter_instance
+
+
+def reset_shared_agent_adapter() -> RemoteAgentAdapter:
+    """Drop cached adapter/client state after websocket protocol changes."""
+    global _adapter_instance
+    if _adapter_instance is not None:
+        _adapter_instance.close()
+    _adapter_instance = get_agent_adapter()
     return _adapter_instance

@@ -123,6 +123,19 @@ class MCPServerConfig(BaseSettings):
         extra="ignore",
     )
 
+    terrazard_database_url: str = Field(
+        default="",
+        description="Terrazard database URL",
+    )
+    terrazard_tile_server_url: str = Field(
+        default="",
+        description="pg_tileserv base URL for TerraZard hazard vector tiles",
+    )
+    terrazard_default_model: str = Field(
+        default="flood80",
+        description="Default TerraZard hazard model_id",
+    )
+
 
 # Singleton instance
 _config_instance: Optional[MCPServerConfig] = None
