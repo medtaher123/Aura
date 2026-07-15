@@ -860,7 +860,7 @@ def streamflow_forecast_tool(
     return ToolResponse(
         tool_name="streamflow_forecast_tool",
         message=message,
-        artifacts=ToolArtifacts(maps=maps, thumbnails=[], urls=[viewer_url]),
+        #artifacts=ToolArtifacts(maps=maps, thumbnails=[], urls=[viewer_url]),
         city=river_display_name,
         coordinates=coordinates,
         data={

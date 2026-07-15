@@ -242,7 +242,7 @@ def _get_damage_per_m2(
     continent: Optional[str],
     basis: str,
 ) -> Optional[float]:
-    """Return estimated flood damage per m² (EUR) for given params, or None if not found."""
+    """Return estimated flood damage per m² (EUR) for given params, or None if not found. It supposes that the entire city is affected by the flood at the same depth."""
     dataset = _load_dataset()
     curves = dataset["curves"]
     iso_map = dataset["iso_map"]
@@ -582,6 +582,7 @@ def flood_damage_city_tool(
     total_area = 0.0
 
     for ac, sqm in areas.items():
+        sqm = float(sqm)/110
         cp = cost_per_m2.get(ac)
         if cp is None:
             continue
