@@ -5,18 +5,25 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Iterator, Type
-
+import boto3
+from eo_llm.adapters.bedrock import LLMProvider
 from eo_llm.adapters.bedrock.llm_provider import T
-from eo_llm.adapters.bedrock.settings import BedrockLLMSettings
+from src.config import get_config
 
 logger = logging.getLogger("eo_llm.bedrock")
 
 
-class BedrockRuntimeClient:
+config = get_config()
+
+class BedrockProvider(LLMProvider):
     """AWS Bedrock Runtime implementation of ``LLMProvider``."""
 
-    def __init__(self, client: Any) -> None:
-        self._client = client
+    @property
+    def name(self) -> str:
+        return "bedrock"
+
+    def __init__(self) -> None:
+        self._client = boto3.client("bedrock-runtime", region_name=config.bedrock_region)
         self._last_failure_reason = ""
 
     @property
@@ -161,20 +168,3 @@ class BedrockRuntimeClient:
         )
         return response
 
-
-def create_bedrock_runtime_client(
-    config: BedrockLLMSettings,
-) -> BedrockRuntimeClient | None:
-    """Build the default Bedrock runtime client from application config."""
-    if not config.bedrock_llm_enabled:
-        return None
-    try:
-        import boto3
-
-        kwargs: dict[str, Any] = {"region_name": config.bedrock_region}
-        endpoint = (config.bedrock_endpoint or "").strip()
-        if endpoint:
-            kwargs["endpoint_url"] = endpoint
-        return BedrockRuntimeClient(boto3.client("bedrock-runtime", **kwargs))
-    except Exception:
-        return None

@@ -14,12 +14,14 @@ class FloodDamageNode(ToolPlanDomainNode):
     tools = [
         #"get_terrazard_available_dates_tool",
         "get_terrazard_flood_briefing_tool",
+        "get_terrazard_flood_damage_tool",
         "get_terrazard_hazard_map_tool",
         "geoserver_risk_mask_tool",
         "flood_damage_city_tool",
         "flood_depth_damage_tool",
         "streamflow_forecast_tool",
         "estimate_surface_water_ingress_tool",
+        "bdtopo_visualize_tool",
     ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
@@ -32,6 +34,11 @@ class FloodDamageNode(ToolPlanDomainNode):
                 "lon": lon,
             },
             "get_terrazard_hazard_map_tool": {
+                "location": ctx.display_name or None,
+                "lat": lat,
+                "lon": lon,
+            },
+            "get_terrazard_flood_damage_tool": {
                 "location": ctx.display_name or None,
                 "lat": lat,
                 "lon": lon,
@@ -58,6 +65,21 @@ class FloodDamageNode(ToolPlanDomainNode):
             "flood_depth_damage_tool": {
                 "country": ctx.country_name or None,
                 "depth_m": 1.0,
+                "asset_class": "residential",
+            },
+            "bdtopo_visualize_tool": {
+                "input_mode": "place_name" if ctx.display_name else "point",
+                "lat": lat,
+                "lon": lon,
+                "place_name": ctx.display_name or None,
+                "radius_m": 3000,
+                "themes": [
+                    "buildings",
+                    "land_use_vegetation",
+                    "transport",
+                    "hydro_surface",
+                    "administratif",
+                ],
             },
         }
 

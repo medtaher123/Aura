@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from typing import Any, Iterator, Protocol, Type, TypeVar
 
 from pydantic import BaseModel
@@ -9,12 +10,22 @@ from pydantic import BaseModel
 T = TypeVar("T", bound=BaseModel)
 
 
-class LLMProvider(Protocol):
+class LLMProvider(ABC):
     """Interface for LLM communications."""
 
     @property
-    def last_failure_reason(self) -> str: ...
+    @abstractmethod
+    def name(self) -> str:
+        """Must be implemented by subclasses to identify the provider."""
+        pass
 
+    #TODO: change the logic of last_failure_reason (use excetions) (mtbh)
+    @property
+    @abstractmethod
+    def last_failure_reason(self) -> str:
+        pass
+
+    @abstractmethod
     def call_structured(
         self,
         *,
@@ -27,8 +38,10 @@ class LLMProvider(Protocol):
         temperature: float = 0.0,
         max_tokens: int = 800,
         user_content: list[dict[str, Any]] | None = None,
-    ) -> T | None: ...
+    ) -> T | None:
+        pass
 
+    @abstractmethod
     def call_stream(
         self,
         *,
@@ -37,8 +50,10 @@ class LLMProvider(Protocol):
         user_prompt: str,
         temperature: float = 0.0,
         max_tokens: int = 900,
-    ) -> Iterator[str]: ...
+    ) -> Iterator[str]:
+        pass
 
+    @abstractmethod
     def call_standard_with_document(
         self,
         *,
@@ -48,4 +63,5 @@ class LLMProvider(Protocol):
         document_bytes: bytes,
         document_name: str,
         document_format: str,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        pass

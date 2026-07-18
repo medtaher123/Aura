@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from eo_llm.graph.evidence_digest import build_domain_evidence_digest
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
 
@@ -44,13 +45,14 @@ class AggregatorNode(GraphNode):
                 has_domain_data = True
                 break
         has_web_data = bool(web_results)
+        domain_digest = build_domain_evidence_digest(domain_results)
 
         if has_domain_data and has_web_data:
             s.answer_source = "hybrid"
             s.confidence = 0.85
             s.can_answer = True
             s.fallback_to_websearch = False
-            s.aggregated_evidence = "Combined domain evidence with web evidence."
+            s.aggregated_evidence = f"{domain_digest}\n\nWeb evidence also available."
             s.next_step = "finalize"
             return dump_state(s)
 
@@ -59,7 +61,7 @@ class AggregatorNode(GraphNode):
             s.confidence = 0.75
             s.can_answer = True
             s.fallback_to_websearch = False
-            s.aggregated_evidence = "Domain evidence available."
+            s.aggregated_evidence = domain_digest
             s.next_step = "finalize"
             return dump_state(s)
 
