@@ -47,9 +47,11 @@ from ..services.translate_service import (
     translate_from_english,
 )
 from eo_llm.stream.decision_reasoning import thinking_payload_from_event
+from src.api.websocket_stream_subscriber import WebSocketStreamSubscriber
+from src.core.event_emitter import EventEmitter, GraphStatusStage
 
 
-def _graph_status_stage(stage: str) -> AgentStage:
+def _graph_status_stage(stage: GraphStatusStage | str) -> AgentStage:
     """Map a graph_runner status string to an AgentStage."""
     return {
         "planning": AgentStage.PLANNING,
@@ -106,7 +108,7 @@ async def _handle_data_agent_step_event(conn: WebSocketConnection, event: dict[s
 
 
 async def _dispatch_stream_event(conn: WebSocketConnection, event: dict[str, Any]) -> None:
-    """Map internal graph stream events to websocket messages."""
+    """Map legacy orchestrator/data_agent dict stream events to websocket messages."""
     event_type = event.get("type", "")
 
     if event_type == "graph_status":
@@ -153,6 +155,26 @@ async def _dispatch_stream_event(conn: WebSocketConnection, event: dict[str, Any
 
     if event_type == "data_agent_step":
         await _handle_data_agent_step_event(conn, event)
+
+
+def _legacy_stream_callback(
+    conn: WebSocketConnection,
+    event_loop: asyncio.AbstractEventLoop,
+):
+    """Sync callback for orchestrator/data_agent dict stream events."""
+
+    async def stream_callback_async(event: dict):
+        await _dispatch_stream_event(conn, event)
+
+    def stream_callback(event: dict):
+        try:
+            asyncio.run_coroutine_threadsafe(
+                stream_callback_async(event), event_loop
+            )
+        except Exception as e:
+            logger.warning(f"Stream callback error: {e}")
+
+    return stream_callback
 
 
 logger = get_logger("websocket")
@@ -369,23 +391,20 @@ async def handle_chat_request(
         )
 
         # Create stream callback for real-time updates
-        async def stream_callback_async(event: dict):
-            await _dispatch_stream_event(conn, event)
-
-        # Capture the current event loop for use in thread
         event_loop = asyncio.get_running_loop()
-
-        # Wrapper for sync callback
-        def stream_callback(event: dict):
-            try:
-                # Use the captured event loop from the async context
-                asyncio.run_coroutine_threadsafe(
-                    stream_callback_async(event), event_loop
-                )
-            except Exception as e:
-                logger.warning(f"Stream callback error: {e}")
-
         use_graph = get_config().use_graph_pipeline
+
+        stream_emitter: EventEmitter | None = None
+        stream_subscriber: WebSocketStreamSubscriber | None = None
+        stream_callback = None
+        if use_graph:
+            stream_emitter = EventEmitter()
+            # Keep subscriber alive for the request lifetime (weakref listeners).
+            stream_subscriber = WebSocketStreamSubscriber(
+                conn, event_loop, emitter=stream_emitter
+            )
+        else:
+            stream_callback = _legacy_stream_callback(conn, event_loop)
 
         # Run the selected engine in a thread pool to avoid blocking the loop.
         def run_orchestrator():
@@ -395,7 +414,7 @@ async def handle_chat_request(
                     user_id=str(user.id),
                     session_id=str(conversation_context.conversation.id),
                     chat_history=chat_history,
-                    stream_callback=stream_callback,
+                    stream_emitter=stream_emitter,
                 )
             executor = create_orchestrator_executor()
             return invoke_agent(
@@ -612,29 +631,25 @@ async def handle_chat_resume(
                     "Resume state is empty or missing, location confirmation may not work properly"
                 )
 
-        # Create stream callback for real-time updates
-        async def stream_callback_async(event: dict):
-            await _dispatch_stream_event(conn, event)
-
-        # Capture the current event loop for use in thread
+        # Create stream wiring for real-time updates
         event_loop = asyncio.get_running_loop()
-
-        # wrap the stream callback in a thread safe way
-        def stream_callback(event: dict):
-            try:
-                # Use the captured event loop from the async context
-                asyncio.run_coroutine_threadsafe(
-                    stream_callback_async(event), event_loop
-                )
-            except Exception as e:
-                logger.warning(f"Stream callback error: {e}")
+        stream_emitter: EventEmitter | None = None
+        stream_subscriber: WebSocketStreamSubscriber | None = None
+        stream_callback = None
+        if use_graph:
+            stream_emitter = EventEmitter()
+            stream_subscriber = WebSocketStreamSubscriber(
+                conn, event_loop, emitter=stream_emitter
+            )
+        else:
+            stream_callback = _legacy_stream_callback(conn, event_loop)
 
         def run_orchestrator_resume():
             if use_graph:
                 return graph_runner.resume_graph_turn(
                     graph_state=graph_state,
                     confirmed_index=graph_confirmed_index,
-                    stream_callback=stream_callback,
+                    stream_emitter=stream_emitter,
                 )
             executor = create_orchestrator_executor()
             return invoke_agent(

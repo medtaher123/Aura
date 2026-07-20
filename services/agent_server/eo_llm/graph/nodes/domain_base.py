@@ -185,7 +185,11 @@ class ToolPlanDomainNode(DomainNode):
             "resolved_location": ctx.resolved,
             "tool": final_step.tool_name if final_step else None,
             "arguments": final_step.input_arguments if final_step else {},
-            "result": final_step.result if final_step else {},
+            "result": (
+                final_step.result.model_dump(mode="python")
+                if final_step and final_step.result
+                else {}
+            ),
             "plan": plan.model_dump(mode="python"),
             "executions": [step.model_dump(mode="python") for step in execution.steps],
             "summary": execution.summary.model_dump(mode="python"),

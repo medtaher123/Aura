@@ -5,12 +5,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from eo_llm.adapters.mcp_client import emit_stream_event
+from src.core.event_emitter import (
+    GraphStatusStage,
+    ThinkingSource,
+    ThinkingStreamEvent,
+    emit_event,
+)
 
 DecisionFormatter = Callable[[str, dict[str, Any]], str]
 
 _FORMATTERS: dict[str, DecisionFormatter] = {}
-_STAGE_BY_SOURCE: dict[str, str] = {
+_STAGE_BY_SOURCE: dict[str, GraphStatusStage] = {
     "route_domains": "planning",
     "route_keyword_fallback": "planning",
     "tool_plan": "tool_call",
@@ -21,7 +26,7 @@ def register_formatter(
     source: str,
     formatter: DecisionFormatter,
     *,
-    stage: str | None = None,
+    stage: GraphStatusStage | None = None,
 ) -> None:
     """Register a display formatter for a decision source (open for extension)."""
     _FORMATTERS[source] = formatter
@@ -29,22 +34,30 @@ def register_formatter(
         _STAGE_BY_SOURCE[source] = stage
 
 
-def stage_for_source(source: str) -> str:
+def stage_for_source(source: str) -> GraphStatusStage:
     return _STAGE_BY_SOURCE.get(source, "planning")
 
 
-def format_decision_reasoning(event: dict[str, Any]) -> str:
+def format_decision_reasoning(
+    event: ThinkingStreamEvent | dict[str, Any],
+) -> str:
     """Turn a thinking stream event into a user-facing line."""
-    source = str(event.get("source") or "").strip()
-    reasoning = str(event.get("reasoning") or "").strip()
+    if isinstance(event, ThinkingStreamEvent):
+        source = (event.source or "").strip()
+        reasoning = (event.reasoning or "").strip()
+        context = dict(event.context)
+    else:
+        source = str(event.get("source") or "").strip()
+        reasoning = str(event.get("reasoning") or "").strip()
+        context = {
+            key: value
+            for key, value in event.items()
+            if key not in {"type", "source", "reasoning"}
+        }
+
     if not reasoning:
         return ""
 
-    context = {
-        key: value
-        for key, value in event.items()
-        if key not in {"type", "source", "reasoning"}
-    }
     formatter = _FORMATTERS.get(source)
     if formatter is not None:
         return formatter(reasoning, context).strip()
@@ -53,25 +66,33 @@ def format_decision_reasoning(event: dict[str, Any]) -> str:
     return f"{label}: {reasoning}"
 
 
-def emit_decision_reasoning(source: str, reasoning: str, **context: Any) -> None:
+def emit_decision_reasoning(
+    source: ThinkingSource, reasoning: str, **context: Any
+) -> None:
     """Emit a thinking event when non-empty reasoning is available."""
     text = (reasoning or "").strip()
     if not text:
         return
-    emit_stream_event(
-        {
-            "type": "thinking",
-            "source": source,
-            "reasoning": text,
-            **context,
-        }
+    emit_event(
+        ThinkingStreamEvent(
+            source=source,
+            reasoning=text,
+            context=dict(context),
+        )
     )
 
 
-def thinking_payload_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
+def thinking_payload_from_event(
+    event: ThinkingStreamEvent | dict[str, Any],
+) -> dict[str, Any] | None:
     """Build websocket thinking payload from an internal stream event."""
-    source = str(event.get("source") or "").strip()
-    reasoning = str(event.get("reasoning") or "").strip()
+    if isinstance(event, ThinkingStreamEvent):
+        source = (event.source or "").strip()
+        reasoning = (event.reasoning or "").strip()
+    else:
+        source = str(event.get("source") or "").strip()
+        reasoning = str(event.get("reasoning") or "").strip()
+
     content = format_decision_reasoning(event)
     if not source or not content:
         return None

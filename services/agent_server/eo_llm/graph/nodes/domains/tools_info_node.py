@@ -43,23 +43,20 @@ class ToolsInfoDomainNode(DomainNode):
                 },
             }
 
-        message = str(result.get("message") or "").strip()
-        if not message:
-            message = "No tools information was returned."
-
+        message = (result.message or "").strip() or "No tools information was returned."
         return {
             "final_answer": message,
             "next_step": "finalize_direct",
             "answer_source": "domain_tools",
             "domain_results": {
                 self.domain_name: {
-                    "status": "done" if not result.get("error") else "error",
+                    "status": "done" if not result.error else "error",
                     "tool": "tools_info_tool",
                     "arguments": tool_args,
-                    "result": result,
+                    "result": result.model_dump(mode="python"),
                     "message": message,
-                    "summary": {"successful_steps": 0 if result.get("error") else 1},
-                    "error": bool(result.get("error")),
+                    "summary": {"successful_steps": 0 if result.error else 1},
+                    "error": result.error,
                 }
             },
         }
@@ -105,5 +102,6 @@ class ToolsInfoDomainNode(DomainNode):
             return {"list_all": True}
 
         return {"query": q}
+
 
 tools_info_node = ToolsInfoDomainNode()

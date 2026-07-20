@@ -15,11 +15,13 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
-from eo_llm.adapters.mcp_client import MCPClient, emit_stream_event
+from eo_llm.adapters.mcp_client import MCPClient
+from src.core.event_emitter import DataAgentStepEvent, emit_event
 from eo_llm.stream.decision_reasoning import emit_decision_reasoning
 from eo_llm.graph.backoff import backoff_strategy_for
 from eo_llm.prompts import get_arg_resolver_prompt, get_tool_planner_prompt
 from src.core.singleton_meta import SingletonMeta
+from src.tools.contracts import ToolArtifacts, ToolResponse
 
 
 DomainName = Literal[
@@ -130,7 +132,7 @@ class ToolStepExecution(BaseModel):
     error_type: ErrorType | None = None
     error_message: str | None = None
     input_arguments: dict[str, Any] | None = None
-    result: dict[str, Any] | None = None
+    result: ToolResponse | None = None
 
 
 class ToolExecutionSummary(BaseModel):
@@ -546,15 +548,14 @@ class ToolExecutor(metaclass=SingletonMeta):
         args: dict[str, Any],
         execution_context: dict[str, Any],
     ) -> None:
-        emit_stream_event(
-            {
-                "type": "data_agent_step",
-                "phase": "running",
-                "tool_name": step.tool_name,
-                "tool_input": args,
-                "step_id": step.step_id,
-                "domain": execution_context.get("domain"),
-            }
+        emit_event(
+            DataAgentStepEvent(
+                phase="running",
+                tool_name=step.tool_name,
+                tool_input=args,
+                step_id=step.step_id,
+                domain=execution_context.get("domain"),
+            )
         )
 
     @staticmethod
@@ -565,30 +566,33 @@ class ToolExecutor(metaclass=SingletonMeta):
         execution: ToolStepExecution,
         execution_context: dict[str, Any],
     ) -> None:
-        observation = ""
+        result = execution.result
         if execution.status == "skipped":
             observation = execution.error_message or "Step skipped."
-        elif execution.result is not None:
-            observation = str(execution.result.get("message") or "")
-        elif execution.error_message:
-            observation = execution.error_message
+            artifacts = ToolArtifacts()
+        elif result is not None:
+            observation = result.message or ""
+            artifacts = result.artifacts
+        else:
+            observation = execution.error_message or ""
+            artifacts = ToolArtifacts()
 
-        emit_stream_event(
-            {
-                "type": "data_agent_step",
-                "phase": "done",
-                "tool_name": step.tool_name,
-                "tool_input": args,
-                "step_id": step.step_id,
-                "domain": execution_context.get("domain"),
-                "status": execution.status,
-                "attempts": execution.attempts,
-                "execution_time_seconds": ToolExecutor._execution_time_seconds(
+        emit_event(
+            DataAgentStepEvent(
+                phase="done",
+                tool_name=step.tool_name,
+                tool_input=args,
+                step_id=step.step_id,
+                domain=execution_context.get("domain"),
+                status=execution.status,
+                attempts=execution.attempts,
+                execution_time_seconds=ToolExecutor._execution_time_seconds(
                     execution.latency_ms
                 ),
-                "observation": observation,
-                "error": execution.status != "done",
-            }
+                observation=observation,
+                error=execution.status != "done",
+                artifacts=artifacts,
+            )
         )
 
     async def _execute_step_with_retries(
@@ -603,7 +607,7 @@ class ToolExecutor(metaclass=SingletonMeta):
         attempts = 0
         last_err = ""
         last_error_type: ErrorType | None = None
-        last_result: dict[str, Any] | None = None
+        last_result: ToolResponse | None = None
         latency_ms = 0
         max_attempts = max(1, step.retry_policy.max_retries + 1)
 
@@ -612,7 +616,7 @@ class ToolExecutor(metaclass=SingletonMeta):
             t0 = time.perf_counter()
             last_result = await MCPClient().call_mcp_tool(step.tool_name, args)
             latency_ms += int((time.perf_counter() - t0) * 1000)
-            if not bool(last_result.get("error")):
+            if not last_result.error:
                 execution = ToolStepExecution(
                     step_id=step.step_id,
                     tool_name=step.tool_name,
@@ -630,7 +634,7 @@ class ToolExecutor(metaclass=SingletonMeta):
                 )
                 return execution
 
-            last_err = str(last_result.get("message") or "Tool execution failed")
+            last_err = last_result.message or "Tool execution failed"
             last_error_type = self._infer_error_type(last_result, last_err)
             can_retry = (
                 attempt < max_attempts
@@ -683,7 +687,7 @@ class ToolExecutor(metaclass=SingletonMeta):
         return bool(error_type and error_type in retry_on)
 
     @staticmethod
-    def _infer_error_type(result: dict[str, Any] | None, message: str) -> ErrorType:
+    def _infer_error_type(result: ToolResponse | None, message: str) -> ErrorType:
         msg = (message or "").lower()
         if "timeout" in msg:
             return "timeout"
@@ -695,7 +699,7 @@ class ToolExecutor(metaclass=SingletonMeta):
             return "network_error"
         if "missing required inputs" in msg or "validation" in msg:
             return "validation_error"
-        if result is not None and not result.get("error") and not result.get("data"):
+        if result is not None and not result.error and not result.data:
             return "empty_result"
         return "unknown"
 

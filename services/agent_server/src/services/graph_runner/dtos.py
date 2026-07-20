@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-StreamCallback = Callable[[dict[str, Any]], None]
+from src.core.event_emitter import EventEmitter
 
 
 class ChatMessage(BaseModel):
@@ -25,7 +25,7 @@ class GraphTurnRequest(BaseModel):
     document_ref: dict[str, Any] = Field(default_factory=dict)
     place_hint: Optional[str] = None
     chat_history: list[ChatMessage] = Field(default_factory=list)
-    stream_callback: Optional[StreamCallback] = None
+    stream_emitter: Optional[EventEmitter] = None
 
     def contextualize_query(self) -> str:
         q = (self.english_query or "").strip()
@@ -62,7 +62,7 @@ class GraphResumeRequest(BaseModel):
 
     graph_state: dict[str, Any]
     confirmed_index: int
-    stream_callback: Optional[StreamCallback] = None
+    stream_emitter: Optional[EventEmitter] = None
 
     def to_state_dict(self) -> dict[str, Any]:
         return {

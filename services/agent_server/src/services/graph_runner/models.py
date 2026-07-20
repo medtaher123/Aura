@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.graph.state import GraphState
-
-StreamCallback = Callable[[dict[str, Any]], None]
+from src.core.event_emitter import EventEmitter
 
 
 class ChatMessage(BaseModel):
@@ -37,7 +36,7 @@ class GraphTurnRequest(BaseModel):
     document_ref: dict[str, Any] = Field(default_factory=dict)
     place_hint: str | None = None
     chat_history: list[ChatMessage] = Field(default_factory=list)
-    stream_callback: StreamCallback | None = Field(default=None, exclude=True)
+    stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     def contextualize_query(self) -> str:
         q = (self.english_query or "").strip()
@@ -74,7 +73,7 @@ class GraphResumeRequest(BaseModel):
 
     graph_state: dict[str, Any]
     confirmed_index: int
-    stream_callback: StreamCallback | None = Field(default=None, exclude=True)
+    stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     def to_state_dict(self) -> GraphState:
         merged = {
