@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import json
 import pkgutil
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from eo_llm.adapters.mcp_client import emit_stream_event
+from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
+from eo_llm.adapters.mcp_client import MCPClient, emit_stream_event
 from eo_llm.stream.decision_reasoning import emit_decision_reasoning
 from eo_llm.graph.backoff import backoff_strategy_for
 from eo_llm.prompts import get_arg_resolver_prompt, get_tool_planner_prompt
+from src.core.singleton_meta import SingletonMeta
 
-if TYPE_CHECKING:
-    from eo_llm.adapters.bedrock import BedrockLLMAdapter
 
 DomainName = Literal[
     "flood_damage",
@@ -33,11 +33,13 @@ ToolName = Literal[
     "get_terrazard_available_dates_tool",
     "get_terrazard_hazard_map_tool",
     "get_terrazard_flood_briefing_tool",
+    "get_terrazard_flood_damage_tool",
     "geoserver_risk_mask_tool",
     "flood_damage_city_tool",
     "flood_depth_damage_tool",
     "streamflow_forecast_tool",
     "estimate_surface_water_ingress_tool",
+    "bdtopo_visualize_tool",
     "detect_fire_tool",
     "clms_burnt_area_impact_tool",
     "query_disaster_events_tool",
@@ -47,6 +49,7 @@ ToolName = Literal[
     "get_route_info",
     "query_stac_catalog",
     "maxar_open_data_imagery_tool",
+    "web_search_tool",
 ]
 BackoffMode = Literal["none", "fixed", "exponential_jitter"]
 FailureAction = Literal["continue", "fallback_to_step", "abort_domain"]
@@ -163,14 +166,14 @@ class StepArgumentResolution(BaseModel):
     unresolved_required_inputs: list[str] = Field(default_factory=list)
     notes: str = ""
 
-
-class ToolIntrospector:
+#TODO: is this class used?? (mtbh)
+class ToolIntrospector(metaclass=SingletonMeta):
     """Fetches and caches MCP tool parameter metadata."""
 
     def __init__(self, cache: dict[str, dict[str, Any]] | None = None) -> None:
         self._cache = cache if cache is not None else {}
 
-    def get_metadata(self, tool_name: str) -> dict[str, Any]:
+    async def get_metadata(self, tool_name: str) -> dict[str, Any]:
         cached = self._cache.get(tool_name)
         if cached is not None:
             return cached
@@ -182,9 +185,7 @@ class ToolIntrospector:
         }
 
         try:
-            from eo_llm.adapters.mcp_client import get_tool_metadata
-
-            fetched = get_tool_metadata(tool_name)
+            fetched = await MCPClient().get_tool_metadata(tool_name)
             if fetched and fetched.get("all_params"):
                 meta = {
                     "all_params": list(fetched.get("all_params") or []),
@@ -240,83 +241,49 @@ class ToolPlanner:
 
     def __init__(
         self,
-        adapter: BedrockLLMAdapter,
         domain: str,
         allowed_tools: list[str],
-        introspector: ToolIntrospector | None = None,
     ) -> None:
-        self._adapter = adapter
         self._domain = domain
         self._allowed_tools = allowed_tools
-        self._introspector = introspector or ToolIntrospector()
 
-    def select_tool_plan(self, query: str) -> ToolPlan:
-        if (
-            self._adapter.is_ready()
-            and self._adapter.provider is not None
-            and self._adapter._tool_planner_model_id
-            and self._allowed_tools
-        ):
-            system_prompt, user_prompt = get_tool_planner_prompt(
-                domain=self._domain,
-                query=query,
-                allowed_tools=self._allowed_tools,
-            )
-            candidate = self._adapter.provider.call_structured(
-                model_id=self._adapter._tool_planner_model_id,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                response_model=ToolPlan,
-                schema_name="domain_tool_plan",
-                schema_description="Execution plan for a single EO_LLM domain agent",
-                max_tokens=1200,
-            )
-            if candidate is not None:
-                if candidate.domain == self._domain and all(
-                    step.tool_name in self._allowed_tools for step in candidate.tool_steps
-                ):
-                    emit_decision_reasoning(
-                        "tool_plan",
-                        candidate.reasoning,
-                        domain=self._domain,
-                        tool_count=len(candidate.tool_steps),
-                    )
-                    return candidate
-                raise RuntimeError(
-                    f"select_tool_plan returned invalid domain/tools for {self._domain}."
-                )
-
-            provider = self._adapter.provider
-            reason = provider.last_failure_reason if provider is not None else "provider_not_initialized"
-            raise RuntimeError(
-                "select_tool_plan Bedrock call returned no valid schema output "
-                f"for {self._domain}. Reason: {reason or 'unknown'}"
-            )
-
-        raise RuntimeError(
-            f"select_tool_plan unavailable for {self._domain}: "
-            "Bedrock client/model not ready."
+    async def select_tool_plan(self, query: str) -> ToolPlan:
+        
+        system_prompt, user_prompt = get_tool_planner_prompt(
+            domain=self._domain,
+            query=query,
+            allowed_tools=self._allowed_tools,
+        )
+        candidate = await LLMModelRouter().call_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=ToolPlan,
+            schema_name="domain_tool_plan",
+            schema_description="Execution plan for a single EO_LLM domain agent",
+            max_tokens=1200,
         )
 
-    def resolve_step_arguments(
-        self,
+        emit_decision_reasoning(
+            "tool_plan",
+            candidate.reasoning,
+            domain=self._domain,
+            tool_count=len(candidate.tool_steps),
+        )
+        return candidate
+
+    async def resolve_step_arguments(
         *,
         plan: ToolPlan,
         step: ToolStepPlan,
         candidate_args: dict[str, Any],
         execution_context: dict[str, Any],
     ) -> dict[str, Any]:
-        tool_meta = self._introspector.get_metadata(step.tool_name)
+        tool_meta = await ToolIntrospector().get_metadata(step.tool_name)
         tool_param_names = list(tool_meta.get("all_params") or [])
         required_params = list(tool_meta.get("required_params") or [])
         docstring = str(tool_meta.get("docstring") or "")
 
-        if (
-            self._adapter.is_ready()
-            and self._adapter.provider is not None
-            and self._adapter._tool_planner_model_id
-            and tool_param_names
-        ):
+        if ( tool_param_names):
             today_utc = datetime.now(timezone.utc).date().isoformat()
             system_prompt, user_prompt = get_arg_resolver_prompt(
                 today_utc=today_utc,
@@ -329,8 +296,7 @@ class ToolPlanner:
                 candidate_args=candidate_args,
                 execution_context=execution_context,
             )
-            parsed = self._adapter.provider.call_structured(
-                model_id=self._adapter._tool_planner_model_id,
+            parsed = await LLMModelRouter().call_structured(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=StepArgumentResolution,
@@ -354,12 +320,20 @@ class ToolPlanner:
                 }
                 merged.update(resolved_args)
                 missing = [x for x in parsed.unresolved_required_inputs if x]
+                missing.extend(
+                    ToolPlanner._missing_required_tool_params(
+                        required_params=required_params,
+                        arguments=merged,
+                        already_missing=missing,
+                    )
+                )
                 return {"arguments": merged, "missing": missing}
 
         if tool_param_names:
+            input_keys = set(step.required_inputs) | set(required_params)
             missing = [
                 key
-                for key in step.required_inputs
+                for key in input_keys
                 if key in tool_param_names
                 and (candidate_args.get(key) is None or candidate_args.get(key) == "")
             ]
@@ -367,21 +341,27 @@ class ToolPlanner:
             missing = []
         return {"arguments": candidate_args, "missing": missing}
 
+    @staticmethod
+    def _missing_required_tool_params(
+        *,
+        required_params: list[str],
+        arguments: dict[str, Any],
+        already_missing: list[str],
+    ) -> list[str]:
+        missing_set = set(already_missing)
+        return [
+            key
+            for key in required_params
+            if key not in missing_set
+            and (arguments.get(key) is None or arguments.get(key) == "")
+        ]
 
-class ToolExecutor:
+
+class ToolExecutor(metaclass=SingletonMeta):
     """Runs tool plans with retries, fallbacks, stop policies, and parallel batches."""
 
-    _MAX_PARALLEL_TOOL_CALLS = 8
 
-    def __init__(
-        self,
-        tool_caller: Callable[[str, dict[str, Any]], dict[str, Any]],
-        planner: ToolPlanner,
-    ) -> None:
-        self._tool_caller = tool_caller
-        self._planner = planner
-
-    def execute(
+    async def execute(
         self,
         *,
         plan: ToolPlan,
@@ -404,7 +384,7 @@ class ToolExecutor:
             skipped_in_batch: list[ToolStepExecution] = []
 
             for step in batch:
-                args, missing = self._prepare_step_arguments(
+                args, missing = await self._prepare_step_arguments(
                     step, plan, runtime_args_by_tool, context
                 )
                 if missing:
@@ -423,7 +403,7 @@ class ToolExecutor:
             executions.extend(skipped_in_batch)
 
             if prepared:
-                batch_results = self._execute_prepared_steps(prepared, execution_context=context)
+                batch_results = await self._execute_prepared_steps(prepared, execution_context=context)
                 for step, execution_result in zip(
                     [step for step, _ in prepared], batch_results, strict=True
                 ):
@@ -485,7 +465,7 @@ class ToolExecutor:
             return []
         return [list(group) for _, group in groupby(steps, key=lambda s: s.priority)]
 
-    def _execute_prepared_steps(
+    async def _execute_prepared_steps(
         self,
         prepared: list[tuple[ToolStepPlan, dict[str, Any]]],
         *,
@@ -494,28 +474,19 @@ class ToolExecutor:
         if len(prepared) == 1:
             step, args = prepared[0]
             return [
-                self._execute_step_with_retries(
+                await self._execute_step_with_retries(
                     step,
                     args,
                     execution_context=execution_context,
                 )
             ]
 
-        max_workers = min(len(prepared), self._MAX_PARALLEL_TOOL_CALLS)
-        results: list[ToolStepExecution | None] = [None] * len(prepared)
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_to_index = {
-                pool.submit(
-                    self._execute_step_with_retries,
-                    step,
-                    args,
-                    execution_context=execution_context,
-                ): idx
-                for idx, (step, args) in enumerate(prepared)
-            }
-            for future in as_completed(future_to_index):
-                results[future_to_index[future]] = future.result()
-        return [result for result in results if result is not None]
+        coros = [
+            self._execute_step_with_retries(step, args, execution_context=execution_context) 
+            for step, args in prepared
+        ]
+        
+        return await asyncio.gather(*coros)
 
     @staticmethod
     def _next_index_for_step(
@@ -529,7 +500,7 @@ class ToolExecutor:
             index_by_step_id=index_by_step_id,
         )
 
-    def _prepare_step_arguments(
+    async def _prepare_step_arguments(
         self,
         step: ToolStepPlan,
         plan: ToolPlan,
@@ -538,7 +509,7 @@ class ToolExecutor:
     ) -> tuple[dict[str, Any], list[str]]:
         merged_args = dict(step.args_template)
         merged_args.update(runtime_args_by_tool.get(step.tool_name, {}))
-        resolution = self._planner.resolve_step_arguments(
+        resolution = await ToolPlanner.resolve_step_arguments(
             plan=plan,
             step=step,
             candidate_args=merged_args,
@@ -620,7 +591,7 @@ class ToolExecutor:
             }
         )
 
-    def _execute_step_with_retries(
+    async def _execute_step_with_retries(
         self,
         step: ToolStepPlan,
         args: dict[str, Any],
@@ -639,7 +610,7 @@ class ToolExecutor:
         for attempt in range(1, max_attempts + 1):
             attempts = attempt
             t0 = time.perf_counter()
-            last_result = self._tool_caller(step.tool_name, args)
+            last_result = await MCPClient().call_mcp_tool(step.tool_name, args)
             latency_ms += int((time.perf_counter() - t0) * 1000)
             if not bool(last_result.get("error")):
                 execution = ToolStepExecution(
@@ -669,7 +640,7 @@ class ToolExecutor:
             if can_retry:
                 delay_ms = self._compute_backoff_ms(step.retry_policy, attempt)
                 if delay_ms > 0:
-                    time.sleep(delay_ms / 1000.0)
+                    await asyncio.sleep(delay_ms / 1000.0)
 
         execution = ToolStepExecution(
             step_id=step.step_id,

@@ -349,14 +349,16 @@ async def handle_chat_request(
         detected_lang = message.language
 
         if not detected_lang:
-            english_message, detected_lang = detect_and_translate_to_english(
-                user_message
+            english_message, detected_lang = await asyncio.to_thread(
+                detect_and_translate_to_english, user_message
             )
             logger.debug(f"Language detected: {detected_lang}")
         else:
             english_message = user_message if detected_lang == "en" else user_message
             if detected_lang != "en":
-                english_message, _ = detect_and_translate_to_english(user_message)
+                english_message, _ = await asyncio.to_thread(
+                    detect_and_translate_to_english, user_message
+                )
                 logger.debug(f"Translated from {detected_lang} to English")
 
         chat_history = normalize_chat_messages(
@@ -467,7 +469,9 @@ async def handle_chat_request(
             return
 
         # translate response message if needed
-        response_message = translate_from_english(tool_response.message, detected_lang)
+        response_message = await asyncio.to_thread(
+            translate_from_english, tool_response.message, detected_lang
+        )
         logger.debug(f"Translated response to {detected_lang}")
 
         await conversations.append_messages(
@@ -704,7 +708,9 @@ async def handle_chat_resume(
             )
             return
 
-        response_message = translate_from_english(tool_response.message, detected_lang)
+        response_message = await asyncio.to_thread(
+            translate_from_english, tool_response.message, detected_lang
+        )
 
         artifacts = tool_response.artifacts
 

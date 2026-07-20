@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
 import contextvars
 import json
 import os
@@ -137,7 +135,7 @@ class MCPClient(metaclass=SingletonMeta):
         }
 
     async def call_mcp_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Sync MCP transport used by graph domain nodes.
+        """Async MCP transport used by graph domain nodes.
 
         Tool start/done stream events are emitted by ``ToolExecutor`` so parallel
         steps, retries, and skip paths share one consistent event shape.

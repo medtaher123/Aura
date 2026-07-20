@@ -7,6 +7,7 @@ via ``AGENTCORE_BROWSER_ENABLED=true``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from eo_llm.adapters.agentcore_browser import run_browser_research
@@ -59,13 +60,15 @@ class WebSearchNode(GraphNode):
         hint = _domain_failure_hint(dict(s.domain_results))
 
         if bool(getattr(get_config(), "agentcore_browser_enabled", False)):
-            web_results = run_browser_research(
+            web_results = await asyncio.to_thread(
+                run_browser_research,
                 contextualized_query=contextualized,
                 user_query=user_q,
                 domain_failure_hint=hint,
             )
         else:
-            web_results = run_web_search(
+            web_results = await asyncio.to_thread(
+                run_web_search,
                 contextualized_query=contextualized,
                 user_query=user_q,
                 domain_failure_hint=hint,

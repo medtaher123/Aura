@@ -92,7 +92,7 @@ class LocationGateNode(GraphNode):
             s.stopped_for_location_confirmation = False
             return dump_state(s)
 
-        found = search_location_candidates(place, limit=8)
+        found = await search_location_candidates(place, limit=8)
 
         if not found:
             s.resolved_location = ResolvedLocationModel()

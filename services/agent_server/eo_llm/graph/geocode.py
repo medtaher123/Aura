@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import time
+import asyncio
 from typing import Any
 
-import requests
+import httpx
 
 USER_AGENT = "eo-llm-graph/0.1 (location gate)"
 
@@ -48,7 +48,7 @@ def _normalize(item: dict[str, Any], fallback_name: str) -> dict[str, Any]:
     }
 
 
-def search_location_candidates(place_query: str, *, limit: int = 8) -> list[dict[str, Any]]:
+async def search_location_candidates(place_query: str, *, limit: int = 8) -> list[dict[str, Any]]:
     """Return Nominatim candidates with lat/lon (same general shape as MCP get_city_candidates)."""
     q = (place_query or "").strip()
     if not q:
@@ -56,18 +56,21 @@ def search_location_candidates(place_query: str, *, limit: int = 8) -> list[dict
 
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": q, "format": "json", "limit": int(limit)}
-    for attempt in range(3):
-        try:
-            r = requests.get(
-                url, params=params, headers={"User-Agent": USER_AGENT}, timeout=12
-            )
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, list) or not data:
-                return []
-            out = [_normalize(item, q) for item in data if isinstance(item, dict)]
-            return [c for c in out if c.get("lat") is not None and c.get("lon") is not None]
-        except (requests.RequestException, ValueError):
-            if attempt < 2:
-                time.sleep(1)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT}, timeout=12.0
+    ) as client:
+        for attempt in range(3):
+            try:
+                r = await client.get(url, params=params)
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, list) or not data:
+                    return []
+                out = [_normalize(item, q) for item in data if isinstance(item, dict)]
+                return [
+                    c for c in out if c.get("lat") is not None and c.get("lon") is not None
+                ]
+            except (httpx.HTTPError, ValueError):
+                if attempt < 2:
+                    await asyncio.sleep(1)
     return []
