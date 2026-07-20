@@ -4,7 +4,7 @@ from enum import Enum
 import importlib
 import inspect
 import pkgutil
-from typing import Any, Iterator, Type, TypeVar
+from typing import Any, AsyncIterator, Iterator, Type, TypeVar
 
 from pydantic import BaseModel
 
@@ -96,7 +96,7 @@ class LLMModelRouter(metaclass=SingletonMeta):
 
 
 
-    def call_structured(
+    async def call_structured(
         self,
         *,
         system_prompt: str,
@@ -114,7 +114,7 @@ class LLMModelRouter(metaclass=SingletonMeta):
         if model is None:
             model = self.get_route(task_type)
 
-        return model.provider.call_structured(
+        return await model.provider.call_structured(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_model=response_model,
@@ -135,7 +135,7 @@ class LLMModelRouter(metaclass=SingletonMeta):
         max_tokens: int = 900,
         task_type: TaskType = TaskType.REASONING,
         model: LLMRoute | None = None,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         
         if model is None:
             model = self.get_route(task_type)
@@ -148,7 +148,7 @@ class LLMModelRouter(metaclass=SingletonMeta):
             model_id=model.model_id,
         )
 
-    def call_standard_with_document(
+    async def call_standard_with_document(
         self,
         *,
         system_prompt: str,
@@ -163,7 +163,7 @@ class LLMModelRouter(metaclass=SingletonMeta):
         if model is None:
             model = self.get_route(task_type)
 
-        return model.provider.call_standard_with_document(
+        return await model.provider.call_standard_with_document(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             document_bytes=document_bytes,

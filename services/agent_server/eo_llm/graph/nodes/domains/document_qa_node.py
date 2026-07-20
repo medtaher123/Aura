@@ -17,7 +17,7 @@ class DocumentQADomainNode(DomainNode):
     domain_name = "document_qa"
     status_message = "Reading the document..."
 
-    def execute(self, s: GraphStateModel) -> GraphState:
+    async def execute(self, s: GraphStateModel) -> GraphState:
         if not isinstance(s.document_ref, dict) or not s.document_ref:
             return wrap_domain_result(
                 self.domain_name,
@@ -29,7 +29,7 @@ class DocumentQADomainNode(DomainNode):
             )
 
         try:
-            out = self.answer_question_with_document(
+            out = await self.answer_question_with_document(
                 query=s.user_query or s.query,
                 document_ref=dict(s.document_ref),
             )
@@ -101,7 +101,7 @@ class DocumentQADomainNode(DomainNode):
         return citations
 
                 
-    def answer_question_with_document(
+    async def answer_question_with_document(
         self, *, query: str, document_ref: dict[str, Any]
     ) -> dict[str, Any]:
         """Answer a user question grounded in one uploaded document."""
@@ -114,7 +114,7 @@ class DocumentQADomainNode(DomainNode):
         format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
         user_prompt = (query or "").strip() or "Summarize this document."
 
-        response = LLMModelRouter().call_standard_with_document(
+        response = await LLMModelRouter().call_standard_with_document(
             system_prompt=DOCUMENT_QA_SYSTEM,
             user_prompt=user_prompt,
             document_bytes=doc_bytes,

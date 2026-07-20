@@ -625,7 +625,6 @@ async def handle_chat_resume(
             except Exception as e:
                 logger.warning(f"Stream callback error: {e}")
 
-        # Run resume in thread pool
         def run_orchestrator_resume():
             if use_graph:
                 return graph_runner.resume_graph_turn(
@@ -645,7 +644,6 @@ async def handle_chat_resume(
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = await loop.run_in_executor(pool, run_orchestrator_resume)
-
         if conn.is_closed:
             return
 

@@ -6,6 +6,7 @@ catalog, formatting, and per-tool/category lookup logic as the legacy DataAgent.
 
 from __future__ import annotations
 
+from eo_llm.adapters.mcp_client import MCPClient
 from eo_llm.graph.nodes.domain_base import DomainNode
 from eo_llm.graph.state import GraphState, GraphStateModel
 
@@ -15,7 +16,7 @@ class ToolsInfoDomainNode(DomainNode):
 
     domain_name = "tools_info"
 
-    def execute(self, s: GraphStateModel) -> GraphState:
+    async def execute(self, s: GraphStateModel) -> GraphState:
         user_q = (s.user_query or "").strip()
         if not user_q:
             return {}
@@ -23,7 +24,7 @@ class ToolsInfoDomainNode(DomainNode):
         tool_args = self._tools_info_arguments(user_q)
 
         try:
-            result = self._tool_caller("tools_info_tool", tool_args)
+            result = await MCPClient().call_mcp_tool("tools_info_tool", tool_args)
         except Exception as exc:
             message = (
                 "I couldn't retrieve the tools catalog because the MCP server is "

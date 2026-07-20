@@ -46,12 +46,14 @@ def _domain_failure_hint(domain_results: dict[str, Any]) -> str:
     return "\n".join(lines)[:4000]
 
 
+
+#TODO: is this node useful? (mtbh)
 class WebSearchNode(GraphNode):
     node_name = "web_search"
     status_stage = "web_search"
     status_message = "Searching the web..."
 
-    def run(self, s: GraphStateModel) -> GraphState:
+    async def run(self, s: GraphStateModel) -> GraphState:
         contextualized = s.query.strip()
         user_q = (s.user_query or "").strip() or contextualized
         hint = _domain_failure_hint(dict(s.domain_results))

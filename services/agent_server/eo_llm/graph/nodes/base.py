@@ -5,8 +5,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Callable, ClassVar
 
-from eo_llm.adapters.bedrock import BedrockLLMAdapter
-from eo_llm.adapters.mcp_client import call_mcp_tool
 from eo_llm.graph.state import GraphState, GraphStateModel, validate_state
 
 
@@ -24,16 +22,9 @@ class GraphNode(ABC):
         if cls.node_name:
             GraphNode._registry[cls.node_name] = cls
 
-    def __init__(
-        self,
-        adapter: BedrockLLMAdapter | None = None,
-        tool_caller: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
-    ) -> None:
-        self._adapter = adapter or BedrockLLMAdapter()
-        self._tool_caller = tool_caller or call_mcp_tool
 
-    def __call__(self, state: GraphState) -> GraphState:
-        return self.run(validate_state(state))
+    async def __call__(self, state: GraphState) -> GraphState:
+        return await self.run(validate_state(state))
 
     @classmethod
     def status_for(cls, node_name: str) -> tuple[str, str] | None:
@@ -48,4 +39,4 @@ class GraphNode(ABC):
         return stage, message
 
     @abstractmethod
-    def run(self, s: GraphStateModel) -> GraphState: ...
+    async def run(self, s: GraphStateModel) -> GraphState: ...

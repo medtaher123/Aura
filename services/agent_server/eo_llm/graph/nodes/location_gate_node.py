@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from eo_llm.adapters.bedrock import LocationHint
+from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.graph.geocode import search_location_candidates
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import (
@@ -12,6 +14,7 @@ from eo_llm.graph.state import (
     dump_state,
     GraphStateModel,
 )
+from eo_llm.prompts import get_query_location_prompt
 
 
 def _candidate_to_resolved(c: dict[str, Any]) -> ResolvedLocationModel:
@@ -49,7 +52,7 @@ class LocationGateNode(GraphNode):
     status_stage = "planning"
     status_message = "Resolving location..."
 
-    def run(self, s: GraphStateModel) -> GraphState:
+    async def run(self, s: GraphStateModel) -> GraphState:
         # Resume: user picked a candidate index (same session state returned by the client).
         idx = s.confirmed_location_index
         candidates = list(s.location_candidates)
@@ -78,7 +81,7 @@ class LocationGateNode(GraphNode):
         # explicit place hint -> existing location query -> LLM-extracted place from query.
         place = (s.place_hint or s.location_query).strip()
         if not place:
-            place = self._adapter.extract_location_hint(query=s.query)
+            place = await self._extract_location_hint(query=s.query)
         s.location_query = place
 
         if not place:
@@ -124,5 +127,18 @@ class LocationGateNode(GraphNode):
         s.stopped_for_location_confirmation = True
         return dump_state(s)
 
+
+    async def _extract_location_hint(self, *, query: str) -> str:
+        """Extract a geocodable place from a user query."""
+        system_prompt, user_prompt = get_query_location_prompt(query=query)
+        response = await LLMModelRouter().call_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=LocationHint,
+            schema_name="location_hint",
+            schema_description="Geocodable place extracted from user query",
+            max_tokens=120,
+        )
+        return response.place_query.strip() if response else ""
 
 location_gate_node = LocationGateNode()

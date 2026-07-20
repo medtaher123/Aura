@@ -36,10 +36,6 @@ class AgentServerConfig(BaseSettings):
     )
 
     # AWS Bedrock settings
-    bedrock_model_id: str = Field(
-        default="anthropic.claude-3-5-sonnet-20241022-v2:0",
-        description="AWS Bedrock model ID",
-    )
     bedrock_region: str = Field(
         default="eu-west-3",
         description="AWS region for Bedrock",
@@ -121,104 +117,47 @@ class AgentServerConfig(BaseSettings):
     )
 
     # =========================================================================
-    # Graph pipeline (ported EO_LLM LangGraph)
+    # Graph pipeline (ported EO_LLM LangGraph) TODO: remove this once the legacy orchestrator is removed (mtbh)
     # =========================================================================
     use_graph_pipeline: bool = Field(
         default=True,
         description="Route chat requests through the EO_LLM LangGraph pipeline instead of the legacy orchestrator",
     )
 
-    # Bedrock LLM settings for the EO_LLM graph pipeline
-    bedrock_llm_enabled: bool = Field(
-        default=True,
-        description="Enable Bedrock LLM calls for the EO_LLM graph pipeline",
-        validation_alias=AliasChoices("bedrock_llm_enabled", "agentcore_enabled"),
+
+    fast_llm_provider: str = Field(
+        default="bedrock",
+        description="Provider for fast LLM",
     )
-    bedrock_endpoint: str = Field(
-        default="",
-        description="Optional Bedrock runtime endpoint URL",
-        validation_alias=AliasChoices("bedrock_endpoint", "agentcore_endpoint"),
+    fast_llm_model_id: str = Field(
+        default="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        description="Model ID for fast LLM",
     )
-    bedrock_router_model_id: str = Field(
-        default="",
-        description="Bedrock model ID for domain routing decisions",
-        validation_alias=AliasChoices("bedrock_router_model_id", "agentcore_router_model_id"),
+    reasoning_llm_provider: str = Field(
+        default="bedrock",
+        description="Provider for reasoning LLM",
     )
-    bedrock_tool_planner_model_id: str = Field(
-        default="",
-        description="Bedrock model ID for per-domain tool planning",
-        validation_alias=AliasChoices(
-            "bedrock_tool_planner_model_id", "agentcore_tool_planner_model_id"
-        ),
+    reasoning_llm_model_id: str = Field(
+        default="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        description="Model ID for reasoning LLM",
+    )
+    structured_llm_provider: str = Field(
+        default="bedrock",
+        description="Provider for structured LLM",
+    )
+    structured_llm_model_id: str = Field(
+        default="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        description="Model ID for structured LLM",
+    )
+    document_llm_provider: str = Field(
+        default="bedrock",
+        description="Provider for document LLM",
+    )
+    document_llm_model_id: str = Field(
+        default="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        description="Model ID for document LLM",
     )
 
-    # AgentCore Browser (Strands) — web fallback via managed browser
-    agentcore_browser_enabled: bool = Field(
-        default=False,
-        description="Enable AgentCore Browser (Strands) for the web_search node",
-    )
-    agentcore_browser_region: str = Field(
-        default="",
-        description="AWS region for Browser API (defaults to bedrock_region)",
-    )
-    agentcore_browser_timeout_seconds: int = Field(
-        default=180,
-        ge=30,
-        le=3600,
-        description="Max wall-clock seconds for one browser agent run",
-    )
-    agentcore_browser_max_tool_rounds: int = Field(
-        default=4,
-        ge=1,
-        le=25,
-        description="Max successful browser tool completions per web run",
-    )
-    agentcore_browser_message_window: int = Field(
-        default=14,
-        ge=6,
-        le=60,
-        description="SlidingWindowConversationManager max messages kept",
-    )
-
-    # AgentCore Memory config (optional; not used when history lives in Postgres)
-    agentcore_memory_id: str = Field(
-        default="",
-        description="AgentCore Memory resource ID for short/long-term chat memory",
-    )
-    agentcore_memory_short_term_turns: int = Field(
-        default=8,
-        ge=1,
-        le=30,
-        description="How many recent short-term conversation turns to load",
-    )
-    agentcore_memory_long_term_top_k: int = Field(
-        default=5,
-        ge=1,
-        le=20,
-        description="How many long-term memory records to retrieve per namespace",
-    )
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
-
-    @model_validator(mode="after")
-    def _backfill_bedrock_llm_settings(self) -> "AgentServerConfig":
-        """Default graph Bedrock LLM model IDs from the main Bedrock config.
-
-        Explicit ``BEDROCK_ROUTER_MODEL_ID`` / legacy ``AGENTCORE_*`` values still
-        take precedence via field aliases.
-        """
-        if not (self.bedrock_router_model_id or "").strip():
-            self.bedrock_router_model_id = self.bedrock_model_id
-        if not (self.bedrock_tool_planner_model_id or "").strip():
-            self.bedrock_tool_planner_model_id = self.bedrock_router_model_id
-        if not (self.agentcore_browser_region or "").strip():
-            self.agentcore_browser_region = self.bedrock_region
-        return self
 
 
 @lru_cache(maxsize=1)

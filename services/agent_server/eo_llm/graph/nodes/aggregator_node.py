@@ -23,7 +23,7 @@ class AggregatorNode(GraphNode):
     status_stage = "analyzing"
     status_message = "Aggregating evidence..."
 
-    def run(self, s: GraphStateModel) -> GraphState:
+    async def run(self, s: GraphStateModel) -> GraphState:
         domain_results = dict(s.domain_results)
         web_results = list(s.web_results)
 

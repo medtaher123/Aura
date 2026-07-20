@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable
 
 from eo_llm.adapters.mcp_client import reset_stream_callback, set_stream_callback
@@ -52,6 +53,16 @@ class GraphRunnerService:
         state: dict[str, Any],
         stream_callback: StreamCallback | None,
     ) -> dict[str, Any]:
+        # Nodes are async (GraphNode.__call__); LangGraph requires astream/ainvoke.
+        # Called from a worker thread so the websocket loop stays free to flush
+        # run_coroutine_threadsafe stream callbacks in real time.
+        return asyncio.run(self._arun_streaming(state, stream_callback))
+
+    async def _arun_streaming(
+        self,
+        state: dict[str, Any],
+        stream_callback: StreamCallback | None,
+    ) -> dict[str, Any]:
         emitted: set[str] = set()
         final_state: dict[str, Any] = dict(state)
 
@@ -59,7 +70,9 @@ class GraphRunnerService:
         if stream_callback is not None:
             token = set_stream_callback(stream_callback)
         try:
-            for mode, chunk in self._graph.stream(state, stream_mode=["updates", "values"]):
+            async for mode, chunk in self._graph.astream(
+                state, stream_mode=["updates", "values"]
+            ):
                 if mode == "updates" and isinstance(chunk, dict):
                     for node_name in chunk:
                         self._emit_status(stream_callback, node_name, emitted)

@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Callable
 
+from eo_llm.adapters.bedrock import DomainRouteDecision, LocationHint
+from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
+from eo_llm.adapters.bedrock.types import RouteDecider
+from eo_llm.document_store import load_document_bytes
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
+from eo_llm.prompts import get_document_location_prompt, get_router_prompt
+from eo_llm.stream.decision_reasoning import emit_decision_reasoning
 
 logger = logging.getLogger("eo_llm.orchestrator")
 
@@ -55,11 +62,23 @@ def _keyword_domains(query: str) -> list[str]:
         out.append("fire_detection")
     if any(k in q for k in ("disaster", "earthquake", "storm", "cyclone", "hurricane", "event")):
         out.append("disaster_detection")
-    if any(k in q for k in ("road", "bridge", "hospital", "infrastructure", "route", "itinerary", "building")):
+    if any(k in q for k in ("road", "bridge", "hospital", "infrastructure", "route", "itinerary", "building", "bdtopo")):
         out.append("infrastructure")
+    if any(k in q for k in ("bdtopo",)) and any(k in q for k in ("flood", "inondation", "water")):
+        if "flood_damage" not in out:
+            out.append("flood_damage")
     if any(k in q for k in ("satellite", "imagery", "image", "stac", "catalog", "maxar")):
         out.append("stac")
     return out
+
+
+def _keyword_routing_reasoning(query: str, domains: list[str]) -> str:
+    if not domains:
+        return "I couldn't map this request to a specialist domain, so I'll try web search."
+    q = (query or "").strip()
+    if q:
+        return f"User is asking about {q[:120]}."
+    return "User is asking for geospatial analysis and I'll use the matching specialist tools."
 
 
 def _is_document_query(query: str) -> bool:
@@ -92,7 +111,19 @@ class OrchestratorNode(GraphNode):
     status_stage = "planning"
     status_message = "Planning your request..."
 
-    def run(self, s: GraphStateModel) -> GraphState:
+    async def route_domains(self, *, query: str) -> DomainRouteDecision:
+        system_prompt, user_prompt = get_router_prompt(query=query)
+        decision = await LLMModelRouter().call_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=DomainRouteDecision,
+            schema_name="domain_route_decision",
+            schema_description="Routing decision for EO_LLM orchestrator",
+            max_tokens=500,
+        )
+        return decision
+
+    async def run(self, s: GraphStateModel) -> GraphState:
         user_msg = (s.user_query or s.query or "").strip()
 
         if not user_msg:
@@ -108,7 +139,7 @@ class OrchestratorNode(GraphNode):
             and s.document_ref
             and _needs_document_location_resolution(user_msg)
         ):
-            place_from_doc = self._adapter.extract_location_from_document(
+            place_from_doc = await self._extract_location_from_document(
                 query=user_msg,
                 document_ref=dict(s.document_ref),
             )
@@ -120,13 +151,25 @@ class OrchestratorNode(GraphNode):
             route_query = f"{user_msg}\nImplicit location context: {s.place_hint}"
 
         try:
-            decision = self._adapter.route_domains(query=route_query)
+            decision = await self.route_domains(query=route_query)
             selected_domains = [d for d in decision.domains if d != "websearch_only"]
+            emit_decision_reasoning(
+                "route_domains",
+                decision.reasoning,
+                domains=selected_domains,
+                confidence=decision.confidence,
+                execution_mode=decision.execution_mode,
+            )
         except Exception as exc:
             logger.warning(
                 "Bedrock route_domains failed (%s); falling back to keyword routing", exc
             )
             selected_domains = _keyword_domains(user_msg)
+            emit_decision_reasoning(
+                "route_keyword_fallback",
+                _keyword_routing_reasoning(user_msg, selected_domains),
+                domains=selected_domains,
+            )
 
         if "tools_info" in selected_domains and not _is_tools_info_query(user_msg):
             selected_domains = [d for d in selected_domains if d != "tools_info"]
@@ -139,6 +182,30 @@ class OrchestratorNode(GraphNode):
         s.selected_domains = selected_domains
         s.next_step = "route"
         return dump_state(s)
+
+
+    async def _extract_location_from_document(
+        self, *, query: str, document_ref: dict[str, Any]
+    ) -> str:
+        """Resolve an implicit place reference from uploaded document context."""
+    
+        doc_bytes = load_document_bytes(document_ref)
+        if not doc_bytes:
+            raise ValueError("Uploaded document is empty.")
+
+        neutral_name = str(document_ref.get("neutral_name") or "Uploaded Document").strip()
+        format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
+        user_prompt = (query or "").strip() or "Summarize this document."
+
+        response = await LLMModelRouter().call_structured(
+            system_prompt=get_document_location_prompt(query=query),
+            user_prompt=user_prompt,
+            response_model=LocationHint,
+            schema_name="location_hint",
+            schema_description="Location inferred from uploaded document and query",
+            max_tokens=120,
+        )
+        return response.place_query.strip() if response else ""
 
 
 orchestrator_node = OrchestratorNode()

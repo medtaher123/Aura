@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Iterator, Protocol, Type, TypeVar
+from typing import Any, AsyncIterator, Iterator, Protocol, Type, TypeVar
 
 from pydantic import BaseModel
 
@@ -26,7 +26,7 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def call_structured(
+    async def call_structured(
         self,
         *,
         model_id: str,
@@ -42,7 +42,7 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def call_stream(
+    async def call_stream(
         self,
         *,
         model_id: str,
@@ -50,11 +50,12 @@ class LLMProvider(ABC):
         user_prompt: str,
         temperature: float = 0.0,
         max_tokens: int = 900,
-    ) -> Iterator[str]:
-        pass
+    ) -> AsyncIterator[str]:
+        yield "" 
+        raise NotImplementedError
 
     @abstractmethod
-    def call_standard_with_document(
+    async def call_standard_with_document(
         self,
         *,
         model_id: str,

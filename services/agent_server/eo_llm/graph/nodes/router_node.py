@@ -11,7 +11,7 @@ class RouterNode(GraphNode):
     status_stage = "planning"
     status_message = "Selecting domains..."
 
-    def run(self, s: GraphStateModel) -> GraphState:
+    async def run(self, s: GraphStateModel) -> GraphState:
         # Routing is owned by the orchestrator / Bedrock LLM policy layer.
         # Router only dispatches based on pre-computed selected_domains.
         s.next_step = "run_domains" if s.selected_domains else "websearch_only"

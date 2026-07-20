@@ -55,7 +55,6 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"Starting {config.name} v{config.version}")
     logger.info(f"MCP Server URL: {config.mcp_server_url}")
-    logger.info(f"Bedrock Model: {config.bedrock_model_id}")
     
     # TODO: Pre-warm MCP connection and LLM client here
     

@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.adapters.mcp_client import emit_stream_event
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
@@ -26,7 +27,7 @@ class FinalizerNode(GraphNode):
     status_stage = "analyzing"
     status_message = "Composing the final answer..."
 
-    def run(self, s: GraphStateModel) -> GraphState:
+    async def run(self, s: GraphStateModel) -> GraphState:
         # A direct answer was already produced upstream (e.g. orchestrator handling
         # empty input or tools_info). Preserve it verbatim instead of re-composing.
         if s.next_step == "finalize_direct" and s.final_answer.strip():
@@ -38,7 +39,7 @@ class FinalizerNode(GraphNode):
         query = s.query
 
         try:
-            s.final_answer = self._stream_final_answer(
+            s.final_answer = await self._stream_final_answer(
                 query=query,
                 answer_source=source,
                 aggregated_evidence=evidence,
@@ -56,7 +57,7 @@ class FinalizerNode(GraphNode):
             emit_stream_event({"type": "token", "content": s.final_answer})
         return dump_state(s)
 
-    def _stream_final_answer(
+    async def _stream_final_answer(
         self,
         *,
         query: str,
@@ -65,13 +66,7 @@ class FinalizerNode(GraphNode):
         domain_results: dict,
         web_results: list,
     ) -> str:
-        adapter = self._adapter
-        model_id = adapter.finalizer_model_id
-        if not adapter.is_ready() or not model_id:
-            raise RuntimeError("Bedrock finalizer unavailable.")
-
-        provider = adapter.provider
-        assert provider is not None
+        
 
         today_utc = datetime.now(timezone.utc).date().isoformat()
         system_prompt, user_prompt = get_finalizer_prompt(
@@ -84,8 +79,7 @@ class FinalizerNode(GraphNode):
         )
 
         parts: list[str] = []
-        for chunk in provider.call_stream(
-            model_id=model_id,
+        async for chunk in LLMModelRouter().call_stream(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=900,
