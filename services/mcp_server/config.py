@@ -97,6 +97,10 @@ class MCPServerConfig(BaseSettings):
         default=5000,
         description="Default radius for spatial proximity queries",
     )
+    bdtopo_tile_server_url: str = Field(
+        default="",
+        description="pg_tileserv base URL for BDTOPO vector tiles (browser-reachable)",
+    )
 
     # Maxar Open Data STAC catalog
     maxar_stac_catalog_url: str = Field(

@@ -1,4 +1,4 @@
-"""Folium vector-tile style presets for TerraZard hazard maps."""
+"""Folium vector-tile style presets for TerraZard and BDTOPO maps."""
 
 from __future__ import annotations
 
@@ -61,9 +61,85 @@ WATER_DEPTH_STYLE = {
     }
 }
 
+
+def _vt_styles(*layer_names: str, style: dict) -> dict:
+    """Apply the same paint style under pg_tileserv table names and 'default'."""
+    named = {name: style for name in layer_names}
+    named["default"] = style
+    return {"vectorTileLayerStyles": named}
+
+
+def _polygon_paint(
+    fill_color: str,
+    *,
+    fill_opacity: float = 0.45,
+    stroke: str | None = None,
+    weight: float = 1.0,
+) -> dict:
+    return {
+        "fill": True,
+        "fillColor": fill_color,
+        "color": stroke or fill_color,
+        "fillOpacity": fill_opacity,
+        "weight": weight,
+    }
+
+
+def _line_paint(color: str, *, weight: float = 1.5) -> dict:
+    return {
+        "fill": False,
+        "color": color,
+        "weight": weight,
+        "opacity": 0.9,
+    }
+
+
+def _point_paint(color: str, *, radius: float = 4.0) -> dict:
+    return {
+        "fill": True,
+        "fillColor": color,
+        "color": color,
+        "fillOpacity": 0.85,
+        "radius": radius,
+        "weight": 1,
+    }
+
+
 STYLE_REGISTRY = {
     "water_depth": WATER_DEPTH_STYLE,
     "cloud": CLOUD_STYLE,
+    "bdtopo_administratif": _vt_styles(
+        "commune", style=_polygon_paint("#757575", fill_opacity=0.15, weight=1.5)
+    ),
+    "bdtopo_transport": _vt_styles(
+        "troncon_de_route", style=_line_paint("#424242", weight=1.25)
+    ),
+    "bdtopo_regulated": _vt_styles(
+        "parc_ou_reserve", style=_polygon_paint("#FF9800", fill_opacity=0.35)
+    ),
+    "bdtopo_activity": _vt_styles(
+        "zone_d_activite_ou_d_interet",
+        style=_polygon_paint("#FFEB3B", fill_opacity=0.35, stroke="#FBC02D"),
+    ),
+    "bdtopo_named_places": _vt_styles(
+        "lieu_dit_non_habite", style=_point_paint("#9C27B0")
+    ),
+    "bdtopo_toponymy": _vt_styles("toponymie", style=_point_paint("#673AB7")),
+    "bdtopo_buildings": _vt_styles(
+        "batiment", style=_polygon_paint("#E91E63", fill_opacity=0.5)
+    ),
+    "bdtopo_vegetation": _vt_styles(
+        "zone_de_vegetation", style=_polygon_paint("#4CAF50", fill_opacity=0.4)
+    ),
+    "bdtopo_habitation": _vt_styles(
+        "zone_d_habitation", style=_polygon_paint("#FF5722", fill_opacity=0.35)
+    ),
+    "bdtopo_hydro_line": _vt_styles(
+        "troncon_hydrographique", style=_line_paint("#03A9F4", weight=1.5)
+    ),
+    "bdtopo_hydro_surface": _vt_styles(
+        "surface_hydrographique", style=_polygon_paint("#03A9F4", fill_opacity=0.45)
+    ),
 }
 
 

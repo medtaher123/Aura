@@ -36,6 +36,59 @@ DEFAULT_RECONNECT_DELAY = 1.0
 DEFAULT_TIMEOUT = 300
 
 
+def _artifact_item_key(item: Any) -> str:
+    """Stable identity for deduping artifact items (strings or JSON-able dicts)."""
+    if isinstance(item, str):
+        return f"s:{item}"
+    try:
+        return f"j:{json.dumps(item, sort_keys=True, default=str)}"
+    except (TypeError, ValueError):
+        return f"r:{repr(item)}"
+
+
+def _extend_artifacts_unique(
+    target: dict[str, list[Any]], incoming: dict[str, Any] | None
+) -> None:
+    """Append artifacts from ``incoming`` that are not already in ``target``."""
+    if not isinstance(incoming, dict):
+        return
+    for key in ("maps", "thumbnails", "urls"):
+        items = incoming.get(key)
+        if not isinstance(items, list):
+            continue
+        bucket = target.setdefault(key, [])
+        seen = {_artifact_item_key(existing) for existing in bucket}
+        for item in items:
+            identity = _artifact_item_key(item)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            bucket.append(item)
+
+
+def _merge_complete_artifacts(
+    streamed: dict[str, list[Any]], complete: dict[str, Any] | None
+) -> None:
+    """Merge complete-event artifacts without duplicating already-streamed maps.
+
+    The server often rewrites/merges map specs on ``complete``, so exact-match
+    dedupe is not enough — if any maps already arrived via ``tool_result``, keep
+    those and only fill missing thumbnails/urls from ``complete``.
+    """
+    if not isinstance(complete, dict):
+        return
+    if streamed.get("maps"):
+        _extend_artifacts_unique(
+            streamed,
+            {
+                "thumbnails": complete.get("thumbnails") or [],
+                "urls": complete.get("urls") or [],
+            },
+        )
+        return
+    _extend_artifacts_unique(streamed, complete)
+
+
 @dataclass
 class ChatMessage:
     """A chat message in history."""
@@ -344,9 +397,7 @@ class AgentWebSocketClient:
                         result["execution_time_seconds"] = data.get("execution_time_seconds")
                     logger.info(f"Tool completed: {tool_name}")
 
-                    for key in ["maps", "thumbnails", "urls"]:
-                        if key in artifacts:
-                            final_artifacts[key].extend(artifacts.get(key, []))
+                    _extend_artifacts_unique(final_artifacts, artifacts)
 
                     if on_tool_result:
                         try:
@@ -380,11 +431,9 @@ class AgentWebSocketClient:
                     error = data.get("error", False)
                     logger.info(f"Agent response complete (error={error})")
 
-                    for key in ["maps", "thumbnails", "urls"]:
-                        if key in response_artifacts:
-                            final_artifacts[key].extend(
-                                response_artifacts.get(key, [])
-                            )
+                    # tool_result already carried progressive artifacts; complete
+                    # often includes a rewritten/merged map — don't double-add it.
+                    _merge_complete_artifacts(final_artifacts, response_artifacts)
                     break
 
                 elif msg_type == "error":

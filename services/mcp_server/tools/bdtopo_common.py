@@ -273,7 +273,7 @@ def resolve_area_context(
         if not place_name or not place_name.strip():
             raise ValueError("place_name mode requires a non-empty place_name.")
         raw_bbox, raw_lat, raw_lon, resolved_name = get_city_bbox(
-            place_name.strip(), require_confirmation=True
+            place_name.strip()
         )
         if not raw_bbox or len(raw_bbox) != 4 or raw_lat is None or raw_lon is None:
             raise ValueError(f"Could not resolve place_name '{place_name}'.")

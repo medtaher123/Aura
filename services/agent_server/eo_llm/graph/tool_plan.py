@@ -52,6 +52,9 @@ ToolName = Literal[
     "query_stac_catalog",
     "maxar_open_data_imagery_tool",
     "web_search_tool",
+    "bdtopo_query_tool",
+    "bdtopo_intersection_tool",
+    "bdtopo_thematic_explain_tool",
 ]
 BackoffMode = Literal["none", "fixed", "exponential_jitter"]
 FailureAction = Literal["continue", "fallback_to_step", "abort_domain"]

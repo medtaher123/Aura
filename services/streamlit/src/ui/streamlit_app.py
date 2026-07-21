@@ -244,12 +244,12 @@ def _invoke_agent_unified(
 def _invoke_agent_with_streaming_display(
     executor,
     *,
-    message_placeholder: DeltaGenerator,
-    tools_placeholder: DeltaGenerator | None = None,
-    trace_callback: Callable[[dict], None] | None = None,
-    thinking_callback: Callable[[dict], None] | None = None,
+    layout: "StreamingTurnLayout",
     tools_callback: Callable[[dict], None] | None = None,
     tools_tick: Callable[[], None] | None = None,
+    artifacts_snapshot: Callable[[], ToolArtifacts] | None = None,
+    trace_callback: Callable[[dict], None] | None = None,
+    thinking_callback: Callable[[dict], None] | None = None,
     english_query: str = "",
     chat_history=None,
     resume=None,
@@ -285,7 +285,7 @@ def _invoke_agent_with_streaming_display(
         )
 
     def drain_events() -> None:
-        nonlocal streamed, show_cursor
+        nonlocal streamed
         while True:
             try:
                 kind, payload = event_queue.get_nowait()
@@ -293,8 +293,7 @@ def _invoke_agent_with_streaming_display(
                 break
             if kind == "token" and isinstance(payload, str):
                 streamed += payload
-                show_cursor = True
-                message_placeholder.markdown(streamed + "▌")
+                layout.set_message(streamed, cursor=True)
             elif kind == "event" and isinstance(payload, dict):
                 if payload.get("type") == "thinking" and thinking_callback:
                     thinking_callback(payload)
@@ -304,7 +303,6 @@ def _invoke_agent_with_streaming_display(
                     trace_callback(payload)
 
     streamed = ""
-    show_cursor = False
     last_tool_tick = 0.0
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -327,9 +325,16 @@ def _invoke_agent_with_streaming_display(
 
     final_text = (result.message or streamed).strip()
     if final_text:
-        message_placeholder.markdown(final_text)
-    elif show_cursor:
-        message_placeholder.empty()
+        layout.set_message(final_text)
+    else:
+        layout.set_message("")
+
+    # Only paint at end if nothing was shown live — remounting pydeck causes a flash.
+    live = artifacts_snapshot() if artifacts_snapshot else ToolArtifacts()
+    if not _artifacts_need_columns(live):
+        arts = result.artifacts or ToolArtifacts()
+        if _artifacts_need_columns(arts):
+            layout.paint_artifacts(arts)
 
     return result
 
@@ -424,8 +429,61 @@ def _render_pydeck_map_spec(item: dict) -> None:
     st.pydeck_chart(deck, use_container_width=True, height=item.get("height", _MAP_DEFAULT_HEIGHT))
 
 
+_VECTOR_TILE_BASEMAPS: tuple[dict[str, str | bool], ...] = (
+    {
+        "name": "Streets",
+        "tiles": "OpenStreetMap",
+        "attr": "© OpenStreetMap contributors",
+        "default": True,
+    },
+    {
+        "name": "Light",
+        "tiles": "CartoDB positron",
+        "attr": "© OpenStreetMap © CARTO",
+        "default": False,
+    },
+    {
+        "name": "Dark",
+        "tiles": "CartoDB dark_matter",
+        "attr": "© OpenStreetMap © CARTO",
+        "default": False,
+    },
+    {
+        "name": "Topographic",
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attr": "Tiles © Esri",
+        "default": False,
+    },
+    {
+        "name": "Satellite",
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attr": "Tiles © Esri",
+        "default": False,
+    },
+)
+
+
+def _add_vector_tile_basemaps(folium_map: folium.Map) -> None:
+    """Attach switchable base layers (Streets / Light / Dark / Topo / Satellite)."""
+    for basemap in _VECTOR_TILE_BASEMAPS:
+        folium.TileLayer(
+            tiles=str(basemap["tiles"]),
+            attr=str(basemap["attr"]),
+            name=str(basemap["name"]),
+            overlay=False,
+            control=True,
+            show=bool(basemap["default"]),
+        ).add_to(folium_map)
+
+
 def _render_vector_tile_map_spec(item: dict) -> None:
-    """Render a TerraZard vector-tile map artifact via Folium."""
+    """Render a TerraZard / BDTOPO vector-tile map artifact via Folium."""
     view_state_raw = item.get("view_state") or {}
     if not isinstance(view_state_raw, dict):
         view_state_raw = {}
@@ -445,16 +503,7 @@ def _render_vector_tile_map_spec(item: dict) -> None:
         tiles=None,
         control_scale=True,
     )
-    folium.TileLayer(
-        tiles=(
-            "https://server.arcgisonline.com/ArcGIS/rest/services/"
-            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
-        ),
-        attr="Esri",
-        name="Satellite",
-        overlay=False,
-        control=True,
-    ).add_to(folium_map)
+    _add_vector_tile_basemaps(folium_map)
 
     add_reference_layers(folium_map, item.get("reference_layers"))
 
@@ -516,6 +565,117 @@ def _render_map_artifact_item(item: dict) -> None:
         _render_vector_tile_map_spec(item)
         return
     _render_pydeck_map_spec(item)
+
+
+def _is_displayable_image_url(url: str) -> bool:
+    """True if the URL points to an image format browsers can display (not COG/GeoTIFF)."""
+    u = url.lower().split("?")[0]
+    return u.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+
+
+def _is_cog_url(url: str) -> bool:
+    """True if the URL is likely a Cloud-Optimized GeoTIFF we can preview."""
+    u = url.lower().split("?")[0]
+    return u.endswith(".tif") or u.endswith(".tiff")
+
+
+def _render_thumbnail_or_link(url: str) -> None:
+    if not url.startswith("http://") and not url.startswith("https://"):
+        st.caption(f"Image: {url}")
+        return
+    if _is_displayable_image_url(url):
+        st.image(url, width=300)
+    elif _is_cog_url(url):
+        png_bytes = _cog_url_to_png_bytes(url)
+        if png_bytes:
+            st.image(png_bytes, width=300)
+            st.caption("Preview (COG). [Open full COG in viewer](%s)" % url)
+        else:
+            st.markdown(f"[Open image/COG in viewer]({url})")
+            st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
+    else:
+        st.markdown(f"[Open image/COG in viewer]({url})")
+        st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
+
+
+def _artifact_item_key(item: object) -> str:
+    import json
+
+    if isinstance(item, str):
+        return f"s:{item}"
+    try:
+        return f"j:{json.dumps(item, sort_keys=True, default=str)}"
+    except (TypeError, ValueError):
+        return f"r:{repr(item)}"
+
+
+def _extend_artifacts_unique(
+    target: ToolArtifacts, incoming: dict | ToolArtifacts | None
+) -> bool:
+    """Merge incoming artifacts into target; return True if anything new was added."""
+    if incoming is None:
+        return False
+    if isinstance(incoming, ToolArtifacts):
+        maps = list(incoming.maps or [])
+        thumbnails = list(incoming.thumbnails or [])
+        urls = list(incoming.urls or [])
+    elif isinstance(incoming, dict):
+        maps = list(incoming.get("maps") or [])
+        thumbnails = [t for t in (incoming.get("thumbnails") or []) if isinstance(t, str)]
+        urls = [u for u in (incoming.get("urls") or []) if isinstance(u, str)]
+    else:
+        return False
+
+    added = False
+    seen_maps = {_artifact_item_key(m) for m in target.maps}
+    for item in maps:
+        key = _artifact_item_key(item)
+        if key in seen_maps:
+            continue
+        seen_maps.add(key)
+        target.maps.append(item)
+        added = True
+
+    seen_thumbs = set(target.thumbnails)
+    for url in thumbnails:
+        if url in seen_thumbs:
+            continue
+        seen_thumbs.add(url)
+        target.thumbnails.append(url)
+        added = True
+
+    seen_urls = set(target.urls)
+    for url in urls:
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        target.urls.append(url)
+        added = True
+
+    return added
+
+
+def _render_artifacts_panel(artifacts: ToolArtifacts) -> None:
+    """Render maps/thumbnails for progressive streaming or history replay."""
+    maps = artifacts.maps if hasattr(artifacts, "maps") else []
+    thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
+    has_map = any(
+        (isinstance(x, str) and x.endswith(".html"))
+        or (isinstance(x, dict) and isinstance(x.get("view_state"), dict))
+        for x in maps
+    )
+    if not has_map and not thumbnails:
+        return
+
+    for item in maps:
+        if isinstance(item, dict) and isinstance(item.get("view_state"), dict):
+            _render_map_artifact_item(item)
+
+    if thumbnails:
+        st.write("### Satellite Images:")
+        for url in thumbnails:
+            if isinstance(url, str) and url:
+                _render_thumbnail_or_link(url)
 
 
 def _shorten(text: str, *, max_len: int = 220) -> str:
@@ -898,11 +1058,87 @@ def _reset_turn_thinking() -> None:
     st.session_state.turn_thinking_lines = []
 
 
+def _artifacts_need_columns(artifacts: ToolArtifacts) -> bool:
+    """True when history/streaming should use the text|map two-column layout."""
+    maps = artifacts.maps if hasattr(artifacts, "maps") else []
+    return any(
+        (isinstance(x, str) and x.endswith(".html"))
+        or (isinstance(x, dict) and isinstance(x.get("view_state"), dict))
+        for x in maps
+    )
+
+
+@dataclass
+class StreamingTurnLayout:
+    """Live turn layout: full-width text until a map artifact arrives, then 2 columns."""
+
+    thinking_placeholder: DeltaGenerator
+    tools_placeholder: DeltaGenerator
+    trace_placeholder: DeltaGenerator
+    _layout_slot: DeltaGenerator
+    message_placeholder: DeltaGenerator
+    artifacts_placeholder: DeltaGenerator | None = None
+    _split: bool = False
+    _text: str = ""
+    _show_cursor: bool = False
+
+    def set_message(self, text: str, *, cursor: bool = False) -> None:
+        self._text = text
+        self._show_cursor = cursor
+        if text:
+            self.message_placeholder.markdown(text + ("▌" if cursor else ""))
+        elif cursor:
+            self.message_placeholder.markdown("▌")
+        else:
+            self.message_placeholder.empty()
+
+    def ensure_artifact_columns(self) -> DeltaGenerator:
+        if self._split and self.artifacts_placeholder is not None:
+            return self.artifacts_placeholder
+        self._split = True
+        self._layout_slot.empty()
+        with self._layout_slot.container():
+            col_text, col_map = st.columns([2, 3], vertical_alignment="top")
+            with col_text:
+                self.message_placeholder = st.empty()
+                if self._text:
+                    self.message_placeholder.markdown(
+                        self._text + ("▌" if self._show_cursor else "")
+                    )
+            with col_map:
+                self.artifacts_placeholder = st.empty()
+        assert self.artifacts_placeholder is not None
+        return self.artifacts_placeholder
+
+    def paint_artifacts(self, artifacts: ToolArtifacts) -> None:
+        if not _artifacts_need_columns(artifacts):
+            return
+        slot = self.ensure_artifact_columns()
+        slot.empty()
+        with slot.container():
+            _render_artifacts_panel(artifacts)
+
+
+def _make_streaming_turn_placeholders() -> StreamingTurnLayout:
+    """Placeholders for a live assistant turn (full-width until maps arrive)."""
+    thinking_placeholder = st.empty()
+    tools_placeholder = st.empty()
+    trace_placeholder = st.empty()
+    layout_slot = st.empty()
+    with layout_slot.container():
+        message_placeholder = st.empty()
+    return StreamingTurnLayout(
+        thinking_placeholder=thinking_placeholder,
+        tools_placeholder=tools_placeholder,
+        trace_placeholder=trace_placeholder,
+        _layout_slot=layout_slot,
+        message_placeholder=message_placeholder,
+    )
+
+
 def _make_streaming_event_handler(
     *,
-    tools_placeholder: DeltaGenerator,
-    trace_placeholder: DeltaGenerator,
-    thinking_placeholder: DeltaGenerator,
+    layout: StreamingTurnLayout,
 ) -> tuple[
     Callable[[dict], None],
     Callable[[dict], None],
@@ -910,13 +1146,24 @@ def _make_streaming_event_handler(
     Callable[[], list[str]],
     Callable[[], list[ToolCallRecord]],
     Callable[[], None],
+    Callable[[], ToolArtifacts],
 ]:
-    tool_tracker, tool_snapshot, tool_tick = _make_tool_status_tracker(tools_placeholder)
-    trace_updater = _make_live_trace_updater(trace_placeholder)
-    thinking_updater, thinking_snapshot = _make_live_thinking_updater(thinking_placeholder)
+    tool_tracker, tool_snapshot, tool_tick = _make_tool_status_tracker(
+        layout.tools_placeholder
+    )
+    trace_updater = _make_live_trace_updater(layout.trace_placeholder)
+    thinking_updater, thinking_snapshot = _make_live_thinking_updater(
+        layout.thinking_placeholder
+    )
+    live_artifacts = ToolArtifacts()
 
     def tools_callback(evt: dict) -> None:
         tool_tracker(evt)
+        if evt.get("type") != "data_agent_step" or evt.get("phase") != "done":
+            return
+        if not _extend_artifacts_unique(live_artifacts, evt.get("artifacts")):
+            return
+        layout.paint_artifacts(live_artifacts)
 
     def trace_callback(evt: dict) -> None:
         if evt.get("type") == "thinking":
@@ -928,7 +1175,22 @@ def _make_streaming_event_handler(
     def thinking_callback(evt: dict) -> None:
         thinking_updater(evt)
 
-    return tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick
+    def artifacts_snapshot() -> ToolArtifacts:
+        return ToolArtifacts(
+            maps=list(live_artifacts.maps),
+            thumbnails=list(live_artifacts.thumbnails),
+            urls=list(live_artifacts.urls),
+        )
+
+    return (
+        tools_callback,
+        trace_callback,
+        thinking_callback,
+        thinking_snapshot,
+        tool_snapshot,
+        tool_tick,
+        artifacts_snapshot,
+    )
 
 
 def _make_live_thinking_updater(
@@ -1528,17 +1790,16 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
-            thinking_placeholder = st.empty()
-            tools_placeholder = st.empty()
-            trace_placeholder = st.empty()
-            message_placeholder = st.empty()
-            tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick = (
-                _make_streaming_event_handler(
-                    tools_placeholder=tools_placeholder,
-                    trace_placeholder=trace_placeholder,
-                    thinking_placeholder=thinking_placeholder,
-                )
-            )
+            layout = _make_streaming_turn_placeholders()
+            (
+                tools_callback,
+                trace_callback,
+                thinking_callback,
+                thinking_snapshot,
+                tool_snapshot,
+                tool_tick,
+                artifacts_snapshot,
+            ) = _make_streaming_event_handler(layout=layout)
             try:
                 logger.debug(
                     f"Auto-confirming location, resuming conversation_id={st.session_state.conversation_id}"
@@ -1548,9 +1809,10 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 )
                 result = _invoke_agent_with_streaming_display(
                     agent_executor,
-                    message_placeholder=message_placeholder,
+                    layout=layout,
                     tools_callback=tools_callback,
                     tools_tick=tool_tick,
+                    artifacts_snapshot=artifacts_snapshot,
                     trace_callback=trace_callback,
                     thinking_callback=thinking_callback,
                     english_query="",
@@ -1585,7 +1847,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 ui_message = assistant_message_en
                 if isinstance(ui_message, str):
                     ui_message = translate_from_english(ui_message, detected_lang)
-                message_placeholder.markdown(ui_message)
+                layout.set_message(ui_message)
 
                 st.session_state.messages_en.append(
                     {"role": "assistant", "content": assistant_message_en}
@@ -1608,7 +1870,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     exc_info=True,
                 )
                 error_msg = f"❌ Error: {str(e)}"
-                message_placeholder.error(error_msg)
+                layout.message_placeholder.error(error_msg)
                 st.session_state.messages.append(
                     AssistantMessage(
                         role="assistant",
@@ -1622,7 +1884,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     {"role": "assistant", "content": error_msg}
                 )
             finally:
-                trace_placeholder.empty()
+                layout.trace_placeholder.empty()
 
         st.rerun()
 
@@ -1703,17 +1965,16 @@ if isinstance(pending, dict) and pending.get("candidates"):
         st.session_state.pending_location_confirmation = None
 
         with st.chat_message("assistant"):
-            thinking_placeholder = st.empty()
-            tools_placeholder = st.empty()
-            trace_placeholder = st.empty()
-            message_placeholder = st.empty()
-            tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick = (
-                _make_streaming_event_handler(
-                    tools_placeholder=tools_placeholder,
-                    trace_placeholder=trace_placeholder,
-                    thinking_placeholder=thinking_placeholder,
-                )
-            )
+            layout = _make_streaming_turn_placeholders()
+            (
+                tools_callback,
+                trace_callback,
+                thinking_callback,
+                thinking_snapshot,
+                tool_snapshot,
+                tool_tick,
+                artifacts_snapshot,
+            ) = _make_streaming_event_handler(layout=layout)
             try:
                 logger.debug(
                     f"Resuming after location confirmation: conversation_id={st.session_state.conversation_id}"
@@ -1729,9 +1990,10 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 }
                 result = _invoke_agent_with_streaming_display(
                     agent_executor,
-                    message_placeholder=message_placeholder,
+                    layout=layout,
                     tools_callback=tools_callback,
                     tools_tick=tool_tick,
+                    artifacts_snapshot=artifacts_snapshot,
                     trace_callback=trace_callback,
                     thinking_callback=thinking_callback,
                     english_query="",
@@ -1767,7 +2029,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                 ui_message = assistant_message_en
                 if isinstance(ui_message, str):
                     ui_message = translate_from_english(ui_message, detected_lang)
-                message_placeholder.markdown(ui_message)
+                layout.set_message(ui_message)
 
                 st.session_state.messages_en.append(
                     {"role": "assistant", "content": assistant_message_en}
@@ -1790,7 +2052,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     exc_info=True,
                 )
                 error_msg = f"❌ Error: {str(e)}"
-                message_placeholder.error(error_msg)
+                layout.message_placeholder.error(error_msg)
                 st.session_state.messages.append(
                     AssistantMessage(
                         role="assistant",
@@ -1804,7 +2066,7 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     {"role": "assistant", "content": error_msg}
                 )
             finally:
-                trace_placeholder.empty()
+                layout.trace_placeholder.empty()
 
         st.rerun()
 
@@ -1822,17 +2084,16 @@ if user_input:
         st.write(user_input)
 
     with st.chat_message("assistant"):
-        thinking_placeholder = st.empty()
-        tools_placeholder = st.empty()
-        trace_placeholder = st.empty()
-        message_placeholder = st.empty()
-        tools_callback, trace_callback, thinking_callback, thinking_snapshot, tool_snapshot, tool_tick = (
-            _make_streaming_event_handler(
-                tools_placeholder=tools_placeholder,
-                trace_placeholder=trace_placeholder,
-                thinking_placeholder=thinking_placeholder,
-            )
-        )
+        layout = _make_streaming_turn_placeholders()
+        (
+            tools_callback,
+            trace_callback,
+            thinking_callback,
+            thinking_snapshot,
+            tool_snapshot,
+            tool_tick,
+            artifacts_snapshot,
+        ) = _make_streaming_event_handler(layout=layout)
 
         try:
             english_query, detected_lang = detect_and_translate_to_english(
@@ -1850,9 +2111,10 @@ if user_input:
             history_for_agent = st.session_state.messages_en[:-1]
             result = _invoke_agent_with_streaming_display(
                 agent_executor,
-                message_placeholder=message_placeholder,
+                layout=layout,
                 tools_callback=tools_callback,
                 tools_tick=tool_tick,
+                artifacts_snapshot=artifacts_snapshot,
                 trace_callback=trace_callback,
                 thinking_callback=thinking_callback,
                 english_query=english_query_augmented,
@@ -1886,7 +2148,7 @@ if user_input:
             ui_message = assistant_message_en
             if isinstance(ui_message, str):
                 ui_message = translate_from_english(ui_message, detected_lang)
-            message_placeholder.markdown(ui_message)
+            layout.set_message(ui_message)
 
             st.session_state.messages_en.append(
                 {"role": "assistant", "content": assistant_message_en}
@@ -1909,7 +2171,7 @@ if user_input:
                 f"Error during chat: {type(e).__name__}: {str(e)}"
             )
             error_msg = f"Error: {str(e)}"
-            message_placeholder.error(error_msg)
+            layout.message_placeholder.error(error_msg)
             st.session_state.messages.append(
                 AssistantMessage(
                     role="assistant",
@@ -1924,6 +2186,8 @@ if user_input:
             )
 
         finally:
-            trace_placeholder.empty()
+            layout.trace_placeholder.empty()
 
-    st.rerun()
+    # Avoid remounting live maps: only rerun when the location picker must appear.
+    if st.session_state.pending_location_confirmation:
+        st.rerun()

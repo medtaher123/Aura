@@ -180,6 +180,7 @@ class RemoteAgentAdapter:
                         "status": result.get("status"),
                         "step_id": result.get("step_id"),
                         "domain": result.get("domain"),
+                        "artifacts": artifacts or {},
                     }
                 )
 
