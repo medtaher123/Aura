@@ -1,5 +1,4 @@
-"""
-Agent Adapter - Abstraction layer for agent communication.
+"""Agent Adapter - Abstraction layer for agent communication.
 
 Provides remote agent communication via WebSocket to Agent Server.
 
@@ -12,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing_extensions import Callable, Optional
+from typing_extensions import Any, Callable, Optional
 from src.models.tools import ToolArtifacts
 from src.clients.agent_ws_client import LocationOption, WS_PROTOCOL_VERSION
 from src.core.logger import get_logger
@@ -37,10 +36,33 @@ class AgentResponse:
     conversation_title: Optional[str] = None
     artifacts: ToolArtifacts = field(default_factory=lambda: ToolArtifacts())
     error: bool = False
-    needs_location_confirmation: bool = False
-    location_options: list[LocationOption] = field(default_factory=list)
+    needs_input: dict = field(default_factory=dict)
     pause_state: dict = field(default_factory=dict)
     raw_data: dict = field(default_factory=dict)
+
+    @property
+    def needs_location_confirmation(self) -> bool:
+        return "location" in (self.needs_input or {})
+
+    @property
+    def location_options(self) -> list[LocationOption]:
+        payload = (self.needs_input or {}).get("location") or {}
+        candidates = payload.get("candidates") or []
+        options: list[LocationOption] = []
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            options.append(
+                LocationOption(
+                    name=str(c.get("display_name") or c.get("name") or "Unknown"),
+                    coordinates=[float(c.get("lat") or 0), float(c.get("lon") or 0)],
+                    place_id=c.get("place_id"),
+                    osm_id=c.get("osm_id"),
+                    osm_type=c.get("osm_type"),
+                    osm_type_prefix=c.get("osm_type_prefix"),
+                )
+            )
+        return options
 
 
 def _clean_auth_token(auth_token: Optional[str]) -> Optional[str]:
@@ -96,35 +118,23 @@ class RemoteAgentAdapter:
         document_context: Optional[str] = None,
         resume: Optional[bool] = None,
         confirmed_location: Optional[dict] = None,
+        user_inputs: Optional[dict[str, Any]] = None,
         conversation_id: Optional[str] = None,
         stream_callback: Optional[Callable[[dict], None]] = None,
         language: Optional[str] = None,
     ) -> AgentResponse:
-        """
-        Invoke the remote agent via WebSocket.
-
-        Args:
-            message: User message
-            chat_history: Previous conversation history
-            document_context: Extracted text from documents
-            resume: Marker that this call resumes a paused turn; the paused state
-                is retrieved server-side from ``conversation_id``.
-            confirmed_location: Confirmed location dict with name, coordinates, etc.
-            stream_callback: Callback for streaming updates
-            language: User's language
-
-        Returns:
-            AgentResponse with result
-        """
+        """Invoke the remote agent via WebSocket."""
         from src.clients.agent_ws_client import ChatMessage, LocationOption
 
         logger.info(f"Invoking agent with message length: {len(message)}")
         logger.debug(f"Chat history length: {len(chat_history) if chat_history else 0}")
-        logger.debug(f"Is resume: {bool(resume)}, Has confirmed location: {bool(confirmed_location)}")
+        logger.debug(
+            f"Is resume: {bool(resume)}, Has confirmed location: {bool(confirmed_location)}, "
+            f"user_inputs kinds: {list((user_inputs or {}).keys())}"
+        )
 
         client = self._get_client()
 
-        # Convert chat history to ChatMessage objects
         history = []
         if chat_history:
             for msg in chat_history:
@@ -189,23 +199,26 @@ class RemoteAgentAdapter:
                 stream_callback({"type": "token", "content": content})
 
         try:
-            if resume and confirmed_location:
+            if resume and (user_inputs or confirmed_location):
                 if not conversation_id:
                     raise ValueError(
                         "Cannot resume a paused turn without a conversation_id"
                     )
-                logger.info("Resuming agent from paused state with confirmed location")
-                loc = LocationOption(
-                    name=confirmed_location.get("name", ""),
-                    coordinates=confirmed_location.get("coordinates", [0, 0]),
-                    place_id=confirmed_location.get("place_id", None),
-                    osm_id=confirmed_location.get("osm_id", None),
-                    osm_type=confirmed_location.get("osm_type", None),
-                    osm_type_prefix=confirmed_location.get("osm_type_prefix", None),
-                )
+                logger.info("Resuming agent from paused state with user inputs")
+                loc = None
+                if confirmed_location:
+                    loc = LocationOption(
+                        name=confirmed_location.get("name", ""),
+                        coordinates=confirmed_location.get("coordinates", [0, 0]),
+                        place_id=confirmed_location.get("place_id", None),
+                        osm_id=confirmed_location.get("osm_id", None),
+                        osm_type=confirmed_location.get("osm_type", None),
+                        osm_type_prefix=confirmed_location.get("osm_type_prefix", None),
+                    )
                 response = client.resume_chat(
-                    confirmed_location=loc,
                     conversation_id=conversation_id,
+                    user_inputs=user_inputs,
+                    confirmed_location=loc,
                     on_token=on_token,
                     on_status=on_status,
                     on_thinking=on_thinking,
@@ -239,21 +252,8 @@ class RemoteAgentAdapter:
                 f"Artifacts: {len(artifacts.maps)} maps, {len(artifacts.thumbnails)} thumbnails, {len(artifacts.urls)} urls"
             )
             logger.debug(
-                f"Error: {response.error}, Needs location confirmation: {response.needs_location_confirmation}"
+                f"Error: {response.error}, needs_input kinds: {list((response.needs_input or {}).keys())}"
             )
-
-            location_options: list[LocationOption] = []
-            for opt in response.location_options or []:
-                location_options.append(
-                    LocationOption(
-                        name=opt.get("name", ""),
-                        coordinates=opt.get("coordinates", [0, 0]),
-                        place_id=opt.get("place_id", None),
-                        osm_id=opt.get("osm_id", None),
-                        osm_type=opt.get("osm_type", None),
-                        osm_type_prefix=opt.get("osm_type_prefix", None),
-                    )
-                )
 
             return AgentResponse(
                 message=response.response,
@@ -261,8 +261,7 @@ class RemoteAgentAdapter:
                 conversation_title=response.conversation_title,
                 artifacts=artifacts,
                 error=response.error,
-                needs_location_confirmation=response.needs_location_confirmation,
-                location_options=location_options,
+                needs_input=response.needs_input or {},
                 pause_state=response.pause_state,
             )
 
@@ -294,16 +293,11 @@ def get_agent_adapter() -> RemoteAgentAdapter:
     return RemoteAgentAdapter(url=AGENT_SERVER_URL)
 
 
-# Singleton instance for session reuse
 _adapter_instance: Optional[RemoteAgentAdapter] = None
 
 
 def get_shared_agent_adapter() -> RemoteAgentAdapter:
-    """
-    Get a shared agent adapter instance.
-
-    This is useful for Streamlit to avoid recreating adapters on each rerun.
-    """
+    """Get a shared agent adapter instance for Streamlit session reuse."""
     global _adapter_instance
     if _adapter_instance is None:
         _adapter_instance = get_agent_adapter()

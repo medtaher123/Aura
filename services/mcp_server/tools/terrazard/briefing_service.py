@@ -116,7 +116,7 @@ class BriefingService:
         ]
         if depth_profile and depth_profile.median_depth_m is not None:
             follow_ups.append(
-                f"Run flood_damage_city_tool at median depth {depth_profile.median_depth_m:.1f}m"
+                "Run get_terrazard_flood_damage_tool for BDTOPO-based damage by depth band"
             )
 
         iso_selected = _iso_date(selected_date)

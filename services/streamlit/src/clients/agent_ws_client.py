@@ -28,7 +28,7 @@ from src.core.logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
 # Bump when the websocket client protocol changes (e.g. new message types).
-WS_PROTOCOL_VERSION = 2
+WS_PROTOCOL_VERSION = 3
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
 DEFAULT_RECONNECT_ATTEMPTS = 3
@@ -111,16 +111,39 @@ class ChatResponse:
         default_factory=lambda: {"maps": [], "thumbnails": [], "urls": []}
     )
     error: bool = False
-    needs_location_confirmation: bool = False
-    location_options: list = field(default_factory=list)
+    needs_input: dict = field(default_factory=dict)
     pause_state: dict = field(default_factory=dict)
+
+    @property
+    def needs_location_confirmation(self) -> bool:
+        return "location" in (self.needs_input or {})
+
+    @property
+    def location_options(self) -> list:
+        payload = (self.needs_input or {}).get("location") or {}
+        candidates = payload.get("candidates") or []
+        options = []
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            options.append(
+                {
+                    "name": c.get("display_name") or c.get("name") or "Unknown",
+                    "coordinates": [c.get("lat", 0), c.get("lon", 0)],
+                    "place_id": c.get("place_id"),
+                    "osm_id": c.get("osm_id"),
+                    "osm_type": c.get("osm_type"),
+                    "osm_type_prefix": get_osm_type_prefix(c.get("osm_type") or ""),
+                }
+            )
+        return options
 
 
 OSMType = Literal["relation", "way", "node"]
 OSMPrefixType = Literal["R", "W", "N"]
 
 
-def get_osm_type_prefix(osm_type: OSMType) -> OSMPrefixType:
+def get_osm_type_prefix(osm_type: str) -> str:
     match osm_type:
         case "relation":
             return "R"
@@ -322,8 +345,7 @@ class AgentWebSocketClient:
         accumulated_response = ""
         final_artifacts = {"maps": [], "thumbnails": [], "urls": []}
         error = False
-        needs_location_confirmation = False
-        location_options = []
+        needs_input: dict = {}
         pause_state = {}
         conversation_id = None
         conversation_title = None
@@ -405,13 +427,12 @@ class AgentWebSocketClient:
                         except Exception as e:
                             logger.warning(f"Error in on_tool_result callback: {e}")
 
-                elif msg_type == "location_confirmation":
-                    needs_location_confirmation = True
-                    location_options = data.get("options", [])
+                elif msg_type == "user_input_request":
+                    needs_input = data.get("needs_input") or {}
                     pause_state = data.get("pause_state", {})
                     conversation_id = pause_state.get("conversation_id")
                     logger.info(
-                        f"Location confirmation requested with {len(location_options)} options"
+                        f"User input requested kinds={list(needs_input.keys())}"
                     )
                     break
 
@@ -459,8 +480,7 @@ class AgentWebSocketClient:
                     conversation_title=conversation_title,
                     artifacts=final_artifacts,
                     error=False,
-                    needs_location_confirmation=False,
-                    location_options=[],
+                    needs_input={},
                     pause_state={},
                 )
             logger.error(f"WebSocket connection closed unexpectedly: {e}")
@@ -472,8 +492,7 @@ class AgentWebSocketClient:
             conversation_title=conversation_title,
             artifacts=final_artifacts,
             error=error,
-            needs_location_confirmation=needs_location_confirmation,
-            location_options=location_options,
+            needs_input=needs_input,
             pause_state=pause_state,
         )
 
@@ -516,29 +535,33 @@ class AgentWebSocketClient:
 
     def resume_chat(
         self,
-        confirmed_location: LocationOption,
         conversation_id: str,
+        user_inputs: Optional[dict] = None,
+        confirmed_location: Optional[LocationOption] = None,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[[str, dict], None]] = None,
         on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
     ) -> ChatResponse:
-        """Resume chat after location confirmation.
+        """Resume chat after collecting required user inputs.
 
         Only the ``conversation_id`` is sent; the paused agent state is retrieved
         server-side from the conversation.
         """
-        payload = {
-            "type": "chat_resume",
-            "confirmed_location": {
+        inputs = dict(user_inputs or {})
+        if confirmed_location is not None and "location" not in inputs:
+            inputs["location"] = {
                 "name": confirmed_location.name,
                 "coordinates": confirmed_location.coordinates,
                 "place_id": confirmed_location.place_id,
                 "osm_id": confirmed_location.osm_id,
                 "osm_type": confirmed_location.osm_type,
                 "osm_type_prefix": confirmed_location.osm_type_prefix,
-            },
+            }
+        payload = {
+            "type": "chat_resume",
+            "user_inputs": inputs,
             "conversation_id": conversation_id,
         }
 

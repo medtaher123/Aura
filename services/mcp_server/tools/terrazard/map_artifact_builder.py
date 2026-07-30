@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from tools.terrazard.map_service import TerrazardMapConfig
 from utils.contracts import ToolArtifacts, ToolCoordinates
 from utils.map_view_service import view_state_from_bbox
+
+
+def treated_area_box_geojson(bbox: list[float]) -> dict[str, Any]:
+    """Build a GeoJSON polygon for the treated AOI bbox ``[min_lat, max_lat, min_lon, max_lon]``."""
+    min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+    return {
+        "type": "Feature",
+        "properties": {
+            "name": "Treated area",
+            "kind": "treated_area_bbox",
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [min_lon, min_lat],
+                    [max_lon, min_lat],
+                    [max_lon, max_lat],
+                    [min_lon, max_lat],
+                    [min_lon, min_lat],
+                ]
+            ],
+        },
+    }
 
 
 def build_location_map_artifact(
@@ -20,6 +46,8 @@ def build_location_map_artifact(
             {
                 "title": f"TerraZard Observations Area: {name}",
                 "view_state": view_state,
+                "bbox": list(bbox),
+                "box": treated_area_box_geojson(bbox),
             }
         ]
     )
@@ -53,6 +81,7 @@ def build_vector_tile_map_artifact(config: TerrazardMapConfig) -> ToolArtifacts:
                 ],
                 "stats": config.stats,
                 "bbox": config.bbox,
+                "box": treated_area_box_geojson(config.bbox),
             }
         ]
     )

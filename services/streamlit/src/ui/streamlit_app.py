@@ -21,7 +21,7 @@ import numpy as np
 import streamlit as st
 import pydeck as pdk
 import folium
-from folium.plugins import VectorGridProtobuf
+from folium.plugins import Draw, VectorGridProtobuf
 from streamlit_folium import st_folium
 import requests
 from PIL import Image
@@ -33,6 +33,11 @@ from streamlit.delta_generator import DeltaGenerator
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.ui.bbox_input import (  # noqa: E402
+    bounding_box_result_payload,
+    bbox_from_folium_draw_output,
+)
 
 # Load local env vars (e.g., MAPTILER_API_KEY) from repo `.env`.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
@@ -212,12 +217,32 @@ def _confirmed_location_from_cache(display: str, token: Optional[str]) -> dict:
     return loc
 
 
+def _pending_from_agent_result(result: AgentResponse) -> dict | None:
+    needs_input = getattr(result, "needs_input", None) or {}
+    if not needs_input:
+        return None
+    return {
+        "needs_input": needs_input,
+        "pause": result.pause_state or {},
+    }
+
+
+def _location_query_from_needs_input(needs_input: dict) -> Optional[str]:
+    payload = needs_input.get("location") if isinstance(needs_input, dict) else None
+    if isinstance(payload, dict):
+        q = payload.get("location_query")
+        if isinstance(q, str) and q.strip():
+            return q.strip()
+    return None
+
+
 def _invoke_agent_unified(
     executor,
     english_query: str,
     chat_history=None,
     resume=None,
     confirmed_location=None,
+    user_inputs=None,
     conversation_id=None,
     stream_callback=None,
     language=None,
@@ -226,8 +251,8 @@ def _invoke_agent_unified(
     """
     Invoke the remote agent via WebSocket.
 
-    Returns AgentResponse with: message, artifacts, error, needs_location_confirmation,
-    location_options, pause_state, raw_data
+    Returns AgentResponse with: message, artifacts, error, needs_input,
+    pause_state, raw_data
     """
     return executor.invoke(
         message=english_query,
@@ -235,6 +260,7 @@ def _invoke_agent_unified(
         document_context=document_context,
         resume=resume,
         confirmed_location=confirmed_location,
+        user_inputs=user_inputs,
         conversation_id=conversation_id,
         stream_callback=stream_callback,
         language=language,
@@ -254,6 +280,7 @@ def _invoke_agent_with_streaming_display(
     chat_history=None,
     resume=None,
     confirmed_location=None,
+    user_inputs=None,
     conversation_id=None,
     language=None,
     document_context=None,
@@ -278,6 +305,7 @@ def _invoke_agent_with_streaming_display(
             chat_history=chat_history,
             resume=resume,
             confirmed_location=confirmed_location,
+            user_inputs=user_inputs,
             conversation_id=conversation_id,
             stream_callback=stream_callback,
             language=language,
@@ -482,6 +510,53 @@ def _add_vector_tile_basemaps(folium_map: folium.Map) -> None:
         ).add_to(folium_map)
 
 
+def _treated_area_bounds(item: dict) -> list[list[float]] | None:
+    """Return Folium rectangle bounds ``[[min_lat, min_lon], [max_lat, max_lon]]``."""
+    box = item.get("box")
+    if isinstance(box, dict):
+        geometry = box.get("geometry") if box.get("type") == "Feature" else box
+        if isinstance(geometry, dict) and geometry.get("type") == "Polygon":
+            coords = geometry.get("coordinates")
+            if (
+                isinstance(coords, list)
+                and coords
+                and isinstance(coords[0], list)
+                and len(coords[0]) >= 4
+            ):
+                ring = coords[0]
+                try:
+                    lons = [float(pt[0]) for pt in ring if isinstance(pt, (list, tuple))]
+                    lats = [float(pt[1]) for pt in ring if isinstance(pt, (list, tuple))]
+                except (TypeError, ValueError, IndexError):
+                    lons, lats = [], []
+                if lats and lons:
+                    return [[min(lats), min(lons)], [max(lats), max(lons)]]
+
+    bbox = item.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4:
+        try:
+            min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            return None
+        return [[min_lat, min_lon], [max_lat, max_lon]]
+    return None
+
+
+def _add_treated_area_box(folium_map: folium.Map, item: dict) -> None:
+    """Draw the treated-area bounding box when present on a vector-tile map artifact."""
+    bounds = _treated_area_bounds(item)
+    if bounds is None:
+        return
+    folium.Rectangle(
+        bounds=bounds,
+        color="#e67e22",
+        weight=2,
+        fill=False,
+        opacity=0.9,
+        name="Treated area",
+    ).add_to(folium_map)
+
+
 def _render_vector_tile_map_spec(item: dict) -> None:
     """Render a TerraZard / BDTOPO vector-tile map artifact via Folium."""
     view_state_raw = item.get("view_state") or {}
@@ -521,14 +596,22 @@ def _render_vector_tile_map_spec(item: dict) -> None:
 
             layer_name = layer_spec.get("name") or "Hazard layer"
             style_key = layer_spec.get("style")
-            style_options = get_style_options(
-                style_key if isinstance(style_key, str) else ""
+            style_options = dict(
+                get_style_options(style_key if isinstance(style_key, str) else "")
             )
+            minzoom = layer_spec.get("minzoom")
+            if minzoom is not None:
+                try:
+                    style_options["minZoom"] = int(minzoom)
+                except (TypeError, ValueError):
+                    pass
             VectorGridProtobuf(
                 tile_url,
                 name=str(layer_name),
                 options=style_options,
             ).add_to(folium_map)
+
+    _add_treated_area_box(folium_map, item)
 
     folium.LayerControl(collapsed=True).add_to(folium_map)
     map_html = folium_map.get_root().render()
@@ -1435,7 +1518,7 @@ def _load_conversation_into_session(
         st.session_state.loaded_conversation_id = None
         st.session_state.messages = []
         st.session_state.messages_en = []
-        st.session_state.pending_location_confirmation = None
+        st.session_state.pending_user_input = None
         _clear_conversation_id_query_param()
         return
 
@@ -1445,7 +1528,7 @@ def _load_conversation_into_session(
     ui_messages, agent_messages = _conversation_messages_to_chat_state(messages)
     st.session_state.messages = ui_messages
     st.session_state.messages_en = agent_messages
-    st.session_state.pending_location_confirmation = None
+    st.session_state.pending_user_input = None
     st.session_state.loaded_conversation_id = conversation_id
 
 
@@ -1481,7 +1564,7 @@ elif conversation_id_from_query != st.session_state.conversation_id:
     st.session_state.conversation_id = conversation_id_from_query
     st.session_state.messages = []
     st.session_state.messages_en = []
-    st.session_state.pending_location_confirmation = None
+    st.session_state.pending_user_input = None
     st.session_state.loaded_conversation_id = None
 
 if "loaded_conversation_id" not in st.session_state:
@@ -1490,8 +1573,11 @@ if "loaded_conversation_id" not in st.session_state:
 if "conversation_titles" not in st.session_state:
     st.session_state.conversation_titles = {}
 
-if "pending_location_confirmation" not in st.session_state:
-    st.session_state.pending_location_confirmation = None
+if "pending_user_input" not in st.session_state:
+    st.session_state.pending_user_input = None
+
+if "pending_drawn_bbox" not in st.session_state:
+    st.session_state.pending_drawn_bbox = None
 
 if "confirmed_locations" not in st.session_state:
     # Map normalized location_query -> {"token": str, "display": str}
@@ -1557,7 +1643,7 @@ with st.sidebar:
         st.session_state.loaded_conversation_id = None
         st.session_state.messages = []
         st.session_state.messages_en = []
-        st.session_state.pending_location_confirmation = None
+        st.session_state.pending_user_input = None
         _clear_conversation_id_query_param()
         st.rerun()
 
@@ -1757,229 +1843,269 @@ for msg in st.session_state.messages:
 # ---------------------------------------------------
 # CHAT INPUT
 # ---------------------------------------------------
-pending = st.session_state.pending_location_confirmation
-if isinstance(pending, dict) and pending.get("candidates"):
-    st.info("Please confirm the intended location to continue.")
-    location_query = (
-        pending.get("location_query")
-        if isinstance(pending.get("location_query"), str)
-        else None
-    )
+pending = st.session_state.pending_user_input
+if isinstance(pending, dict) and pending.get("needs_input"):
+    needs_input = pending.get("needs_input") or {}
+    st.info("Please provide the requested input to continue.")
+
+    location_payload = needs_input.get("location") if isinstance(needs_input, dict) else None
+    bbox_payload = needs_input.get("bounding_box") if isinstance(needs_input, dict) else None
+
+    location_query = _location_query_from_needs_input(needs_input)
     norm_key = (
         " ".join(location_query.lower().split())
         if isinstance(location_query, str)
         else None
     )
 
-    # If we've already confirmed this exact ambiguous query earlier in the session,
-    # auto-apply the same choice to avoid asking repeatedly (common when multiple
-    # tools need the same city).
-    cached = st.session_state.confirmed_locations.get(norm_key) if norm_key else None
-    attempts = (
-        st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
-    )
-    if (
-        isinstance(cached, dict)
-        and isinstance(cached.get("token"), str)
-        and norm_key
-        and attempts < 1
-    ):
-        patched_value = cached.get("token") if cached else None
+    collected_user_inputs: dict = {}
 
-        st.session_state.auto_confirm_attempts[norm_key] = attempts + 1
-        st.session_state.pending_location_confirmation = None
-
-        with st.chat_message("assistant"):
-            layout = _make_streaming_turn_placeholders()
-            (
-                tools_callback,
-                trace_callback,
-                thinking_callback,
-                thinking_snapshot,
-                tool_snapshot,
-                tool_tick,
-                artifacts_snapshot,
-            ) = _make_streaming_event_handler(layout=layout)
-            try:
-                logger.debug(
-                    f"Auto-confirming location, resuming conversation_id={st.session_state.conversation_id}"
-                )
-                auto_loc = _confirmed_location_from_cache(
-                    cached.get("display", ""), patched_value
-                )
-                result = _invoke_agent_with_streaming_display(
-                    agent_executor,
-                    layout=layout,
-                    tools_callback=tools_callback,
-                    tools_tick=tool_tick,
-                    artifacts_snapshot=artifacts_snapshot,
-                    trace_callback=trace_callback,
-                    thinking_callback=thinking_callback,
-                    english_query="",
-                    resume=True,
-                    confirmed_location=auto_loc,
-                    conversation_id=st.session_state.conversation_id,
-                )
-                tool_calls = tool_snapshot()
-                _store_conversation_id(result.conversation_id)
-                _store_conversation_title(
-                    result.conversation_id, result.conversation_title
-                )
-                logger.info("Auto-confirm completed successfully")
-                logger.debug(
-                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
-                )
-
-                # Check if location confirmation is needed
-                if result.needs_location_confirmation:
-                    logger.info("Another location confirmation needed")
-                    st.session_state.pending_location_confirmation = {
-                        "needs_location_confirmation": True,
-                        "candidates": result.location_options,
-                        "pause": result.pause_state,
-                    }
-
-                detected_lang = st.session_state.last_lang or "en"
-                assistant_message_en = result.message or ""
-                if not isinstance(assistant_message_en, str):
-                    assistant_message_en = str(assistant_message_en)
-
-                ui_message = assistant_message_en
-                if isinstance(ui_message, str):
-                    ui_message = translate_from_english(ui_message, detected_lang)
-                layout.set_message(ui_message)
-
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": assistant_message_en}
-                )
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=ui_message,
-                        artifacts=result.artifacts,
-                        error=result.error,
-                        tool_calls=tool_calls,
-                        thinking_lines=_turn_thinking_lines(thinking_snapshot),
-                    )
-                )
-                if not result.needs_location_confirmation:
-                    _reset_turn_thinking()
-            except Exception as e:
-                logger.error(
-                    f"Error during auto-confirm: {type(e).__name__}: {str(e)}",
-                    exc_info=True,
-                )
-                error_msg = f"❌ Error: {str(e)}"
-                layout.message_placeholder.error(error_msg)
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=error_msg,
-                        artifacts=ToolArtifacts(),
-                        error=True,
-                        tool_calls=tool_snapshot(),
-                    )
-                )
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": error_msg}
-                )
-            finally:
-                layout.trace_placeholder.empty()
-
-        st.rerun()
-
-    candidates: list[LocationOption] = [
-        LocationOption(
-            name=c.name,
-            coordinates=c.coordinates,
-            place_id=c.place_id,
-            osm_id=c.osm_id,
-            osm_type=c.osm_type,
-            osm_type_prefix=c.osm_type_prefix,
+    # Auto-confirm previously chosen location for the same ambiguous query.
+    if isinstance(location_payload, dict):
+        cached = st.session_state.confirmed_locations.get(norm_key) if norm_key else None
+        attempts = (
+            st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
         )
-        for c in pending.get("candidates") or []
-    ]
+        if (
+            isinstance(cached, dict)
+            and isinstance(cached.get("token"), str)
+            and norm_key
+            and attempts < 1
+            and "bounding_box" not in needs_input
+        ):
+            patched_value = cached.get("token")
+            st.session_state.auto_confirm_attempts[norm_key] = attempts + 1
+            st.session_state.pending_user_input = None
 
-    def _candidate_label(candidate: LocationOption) -> str:
-        display = str(candidate.name)
-        lat = candidate.coordinates[0]
-        lon = candidate.coordinates[1]
-        place_id = candidate.place_id
-        return f"{display} ({float(lat):.4f}, {float(lon):.4f}) place_id={place_id}"
+            with st.chat_message("assistant"):
+                layout = _make_streaming_turn_placeholders()
+                (
+                    tools_callback,
+                    trace_callback,
+                    thinking_callback,
+                    thinking_snapshot,
+                    tool_snapshot,
+                    tool_tick,
+                    artifacts_snapshot,
+                ) = _make_streaming_event_handler(layout=layout)
+                try:
+                    auto_loc = _confirmed_location_from_cache(
+                        cached.get("display", ""), patched_value
+                    )
+                    result = _invoke_agent_with_streaming_display(
+                        agent_executor,
+                        layout=layout,
+                        tools_callback=tools_callback,
+                        tools_tick=tool_tick,
+                        artifacts_snapshot=artifacts_snapshot,
+                        trace_callback=trace_callback,
+                        thinking_callback=thinking_callback,
+                        english_query="",
+                        resume=True,
+                        confirmed_location=auto_loc,
+                        conversation_id=st.session_state.conversation_id,
+                    )
+                    tool_calls = tool_snapshot()
+                    _store_conversation_id(result.conversation_id)
+                    _store_conversation_title(
+                        result.conversation_id, result.conversation_title
+                    )
+                    pending_next = _pending_from_agent_result(result)
+                    if pending_next:
+                        st.session_state.pending_user_input = pending_next
 
-    with st.form("location_confirmation_form"):
-        choice = st.selectbox(
-            "Select a location",
-            options=candidates,
-            format_func=_candidate_label,
-        )
-        submitted = st.form_submit_button("Confirm location")
+                    detected_lang = st.session_state.last_lang or "en"
+                    assistant_message_en = result.message or ""
+                    if not isinstance(assistant_message_en, str):
+                        assistant_message_en = str(assistant_message_en)
+                    ui_message = translate_from_english(assistant_message_en, detected_lang)
+                    layout.set_message(ui_message)
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": assistant_message_en}
+                    )
+                    st.session_state.messages.append(
+                        AssistantMessage(
+                            role="assistant",
+                            content=ui_message,
+                            artifacts=result.artifacts,
+                            error=result.error,
+                            tool_calls=tool_calls,
+                            thinking_lines=_turn_thinking_lines(thinking_snapshot),
+                        )
+                    )
+                    if not pending_next:
+                        _reset_turn_thinking()
+                except Exception as e:
+                    logger.error(
+                        f"Error during auto-confirm: {type(e).__name__}: {str(e)}",
+                        exc_info=True,
+                    )
+                    error_msg = f"❌ Error: {str(e)}"
+                    layout.message_placeholder.error(error_msg)
+                    st.session_state.messages.append(
+                        AssistantMessage(
+                            role="assistant",
+                            content=error_msg,
+                            artifacts=ToolArtifacts(),
+                            error=True,
+                            tool_calls=tool_snapshot(),
+                        )
+                    )
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": error_msg}
+                    )
+                finally:
+                    layout.trace_placeholder.empty()
+            st.rerun()
 
-    if submitted:
-        logger.info(f"User confirmed location choice: {choice.name}")
-
-        patched_value = None
-        chosen_display = choice.name
-        if choice.osm_id is not None and choice.osm_type is not None:
-            prefix = get_osm_type_prefix(choice.osm_type)
-            patched_value = f"@osm_id:{prefix}{choice.osm_id}"
-        elif choice.place_id is not None:
-            patched_value = f"@place_id:{choice.place_id}"
-        else:
-            logger.warning("No OSM ID or place ID found for chosen location")
-            patched_value = chosen_display or ""
-
-        # The paused agent state lives server-side; the client only references the
-        # conversation id when resuming. Local cache below is a UX optimization.
-
-        # Cache confirmation for this query so other tools can reuse it.
-        if norm_key:
-            # Store under both the full query and its base token (before comma)
-            # to handle cases like "Paris" vs "Paris, France".
-            base_key = (
-                norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+    # --- location collector ---
+    choice = None
+    if isinstance(location_payload, dict):
+        prompt = location_payload.get("prompt") or "Select a location"
+        st.write(prompt)
+        raw_candidates = location_payload.get("candidates") or []
+        candidates: list[LocationOption] = []
+        for c in raw_candidates:
+            if not isinstance(c, dict):
+                continue
+            candidates.append(
+                LocationOption(
+                    name=str(c.get("display_name") or c.get("name") or "Unknown"),
+                    coordinates=[float(c.get("lat") or 0), float(c.get("lon") or 0)],
+                    place_id=c.get("place_id"),
+                    osm_id=c.get("osm_id"),
+                    osm_type=c.get("osm_type"),
+                    osm_type_prefix=get_osm_type_prefix(c.get("osm_type") or "")
+                    or None,
+                )
             )
-            for k in {norm_key, base_key}:
-                if k:
-                    st.session_state.confirmed_locations[k] = {
-                        "token": patched_value,
-                        "display": chosen_display or "",
-                    }
-            # Reset auto-confirm attempts after an explicit choice.
-            st.session_state.auto_confirm_attempts[norm_key] = 0
-            if base_key != norm_key:
-                st.session_state.auto_confirm_attempts[base_key] = 0
 
-        # Append a short confirmation message to chat history for user visibility.
-        detected_lang = st.session_state.last_lang or "en"
-        confirm_en = f"Confirmed location: {chosen_display or patched_value}"
-        confirm_ui = (
-            translate_from_english(confirm_en, detected_lang)
-            if detected_lang != "en"
-            else confirm_en
+        def _candidate_label(candidate: LocationOption) -> str:
+            display = str(candidate.name)
+            lat = candidate.coordinates[0]
+            lon = candidate.coordinates[1]
+            place_id = candidate.place_id
+            return f"{display} ({float(lat):.4f}, {float(lon):.4f}) place_id={place_id}"
+
+        if candidates:
+            choice = st.selectbox(
+                "Select a location",
+                options=candidates,
+                format_func=_candidate_label,
+                key="user_input_location_choice",
+            )
+
+    # --- bounding box collector ---
+    drawn_bbox = None
+    if isinstance(bbox_payload, dict):
+        prompt = bbox_payload.get("prompt") or "Draw a bounding box on the map"
+        st.write(prompt)
+        drawn_bbox = st.session_state.pending_drawn_bbox
+        if drawn_bbox:
+            st.success(
+                f"Selected area: [{drawn_bbox[0]:.4f}, {drawn_bbox[1]:.4f}, "
+                f"{drawn_bbox[2]:.4f}, {drawn_bbox[3]:.4f}]"
+            )
+        else:
+            st.caption("Use the rectangle tool on the map, then click Continue.")
+
+        # Keep Continue above the map so it stays visible without scrolling past it.
+        submitted_bbox = st.button(
+            "Continue",
+            type="primary",
+            key="user_input_bbox_continue",
+            use_container_width=True,
         )
-        st.session_state.messages.append(UserMessage(role="user", content=confirm_ui))
-        st.session_state.messages_en.append({"role": "user", "content": confirm_en})
 
-        # Clear pending state before resuming.
-        st.session_state.pending_location_confirmation = None
+        center = bbox_payload.get("map_center") or [46.5, 2.5]
+        zoom = float(bbox_payload.get("map_zoom") or 6)
+        try:
+            center_lat, center_lon = float(center[0]), float(center[1])
+        except (TypeError, ValueError, IndexError):
+            center_lat, center_lon = 46.5, 2.5
+        fmap = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
+        Draw(
+            export=False,
+            draw_options={
+                "polyline": False,
+                "polygon": False,
+                "circle": False,
+                "circlemarker": False,
+                "marker": False,
+                "rectangle": True,
+            },
+            edit_options={"edit": True},
+        ).add_to(fmap)
+        map_out = st_folium(
+            fmap,
+            key="user_input_bbox_picker",
+            height=450,
+            returned_objects=["last_active_drawing", "all_drawings"],
+            use_container_width=True,
+        )
+        latest_bbox = bbox_from_folium_draw_output(map_out)
+        if latest_bbox is not None:
+            previous = st.session_state.pending_drawn_bbox
+            st.session_state.pending_drawn_bbox = latest_bbox
+            drawn_bbox = latest_bbox
+            # Refresh so the Continue button area shows the selected bbox.
+            if previous != latest_bbox:
+                st.rerun()
+    else:
+        submitted_bbox = False
 
-        with st.chat_message("assistant"):
-            layout = _make_streaming_turn_placeholders()
-            (
-                tools_callback,
-                trace_callback,
-                thinking_callback,
-                thinking_snapshot,
-                tool_snapshot,
-                tool_tick,
-                artifacts_snapshot,
-            ) = _make_streaming_event_handler(layout=layout)
-            try:
-                logger.debug(
-                    f"Resuming after location confirmation: conversation_id={st.session_state.conversation_id}"
-                )
-                logger.debug(f"Patched value: {patched_value}")
+    # Shared confirm for location-only (or location + bbox) flows.
+    submitted_location = False
+    if isinstance(location_payload, dict) and not isinstance(bbox_payload, dict):
+        submitted_location = st.button(
+            "Continue",
+            type="primary",
+            key="user_input_location_continue",
+            use_container_width=True,
+        )
+    elif isinstance(location_payload, dict) and isinstance(bbox_payload, dict):
+        # Bbox block already rendered Continue; reuse that click via session flag.
+        submitted_location = False
+
+    submitted = bool(submitted_bbox or submitted_location)
+    if isinstance(bbox_payload, dict):
+        drawn_bbox = st.session_state.pending_drawn_bbox
+    if submitted:
+        missing = []
+        if "location" in needs_input and choice is None:
+            missing.append("location")
+        if "bounding_box" in needs_input and drawn_bbox is None:
+            missing.append("bounding_box")
+        if missing:
+            st.warning(f"Please provide: {', '.join(missing)}")
+        else:
+            user_inputs_payload: dict = {}
+            confirmed_loc = None
+            if choice is not None:
+                patched_value = None
+                chosen_display = choice.name
+                if choice.osm_id is not None and choice.osm_type is not None:
+                    prefix = get_osm_type_prefix(choice.osm_type)
+                    patched_value = f"@osm_id:{prefix}{choice.osm_id}"
+                elif choice.place_id is not None:
+                    patched_value = f"@place_id:{choice.place_id}"
+                else:
+                    patched_value = chosen_display or ""
+
+                if norm_key:
+                    base_key = (
+                        norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+                    )
+                    for k in {norm_key, base_key}:
+                        if k:
+                            st.session_state.confirmed_locations[k] = {
+                                "token": patched_value,
+                                "display": chosen_display or "",
+                            }
+                    st.session_state.auto_confirm_attempts[norm_key] = 0
+                    if base_key != norm_key:
+                        st.session_state.auto_confirm_attempts[base_key] = 0
+
                 confirmed_loc = {
                     "name": choice.name,
                     "coordinates": choice.coordinates,
@@ -1988,92 +2114,115 @@ if isinstance(pending, dict) and pending.get("candidates"):
                     "osm_type": choice.osm_type,
                     "osm_type_prefix": choice.osm_type_prefix,
                 }
-                result = _invoke_agent_with_streaming_display(
-                    agent_executor,
-                    layout=layout,
-                    tools_callback=tools_callback,
-                    tools_tick=tool_tick,
-                    artifacts_snapshot=artifacts_snapshot,
-                    trace_callback=trace_callback,
-                    thinking_callback=thinking_callback,
-                    english_query="",
-                    resume=True,
-                    confirmed_location=confirmed_loc,
-                    conversation_id=st.session_state.conversation_id,
-                )
-                tool_calls = tool_snapshot()
-                _store_conversation_id(result.conversation_id)
-                _store_conversation_title(
-                    result.conversation_id, result.conversation_title
-                )
-                logger.info(
-                    "Resume after location confirmation completed successfully"
-                )
-                logger.debug(
-                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                user_inputs_payload["location"] = confirmed_loc
+
+            if drawn_bbox is not None:
+                user_inputs_payload["bounding_box"] = bounding_box_result_payload(
+                    drawn_bbox
                 )
 
-                # Check if location confirmation is needed
-                if result.needs_location_confirmation:
-                    logger.info("Another location confirmation needed")
-                    st.session_state.pending_location_confirmation = {
-                        "needs_location_confirmation": True,
-                        "candidates": result.location_options,
-                        "pause": result.pause_state,
-                    }
-
-                assistant_message_en = result.message or ""
-                if not isinstance(assistant_message_en, str):
-                    assistant_message_en = str(assistant_message_en)
-
-                ui_message = assistant_message_en
-                if isinstance(ui_message, str):
-                    ui_message = translate_from_english(ui_message, detected_lang)
-                layout.set_message(ui_message)
-
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": assistant_message_en}
+            detected_lang = st.session_state.last_lang or "en"
+            if confirmed_loc:
+                confirm_en = f"Confirmed location: {confirmed_loc['name']}"
+            elif drawn_bbox:
+                confirm_en = (
+                    f"Confirmed bounding box: [{drawn_bbox[0]:.4f}, {drawn_bbox[1]:.4f}, "
+                    f"{drawn_bbox[2]:.4f}, {drawn_bbox[3]:.4f}]"
                 )
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=ui_message,
-                        artifacts=result.artifacts,
-                        error=result.error,
-                        tool_calls=tool_calls,
-                        thinking_lines=_turn_thinking_lines(thinking_snapshot),
+            else:
+                confirm_en = "Confirmed input"
+            confirm_ui = (
+                translate_from_english(confirm_en, detected_lang)
+                if detected_lang != "en"
+                else confirm_en
+            )
+            st.session_state.messages.append(UserMessage(role="user", content=confirm_ui))
+            st.session_state.messages_en.append({"role": "user", "content": confirm_en})
+            st.session_state.pending_user_input = None
+            st.session_state.pending_drawn_bbox = None
+
+            with st.chat_message("assistant"):
+                layout = _make_streaming_turn_placeholders()
+                (
+                    tools_callback,
+                    trace_callback,
+                    thinking_callback,
+                    thinking_snapshot,
+                    tool_snapshot,
+                    tool_tick,
+                    artifacts_snapshot,
+                ) = _make_streaming_event_handler(layout=layout)
+                try:
+                    result = _invoke_agent_with_streaming_display(
+                        agent_executor,
+                        layout=layout,
+                        tools_callback=tools_callback,
+                        tools_tick=tool_tick,
+                        artifacts_snapshot=artifacts_snapshot,
+                        trace_callback=trace_callback,
+                        thinking_callback=thinking_callback,
+                        english_query="",
+                        resume=True,
+                        confirmed_location=confirmed_loc,
+                        user_inputs=user_inputs_payload,
+                        conversation_id=st.session_state.conversation_id,
                     )
-                )
-                if not result.needs_location_confirmation:
-                    _reset_turn_thinking()
-            except Exception as e:
-                logger.error(
-                    f"Error during resume: {type(e).__name__}: {str(e)}",
-                    exc_info=True,
-                )
-                error_msg = f"❌ Error: {str(e)}"
-                layout.message_placeholder.error(error_msg)
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=error_msg,
-                        artifacts=ToolArtifacts(),
-                        error=True,
-                        tool_calls=tool_snapshot(),
+                    tool_calls = tool_snapshot()
+                    _store_conversation_id(result.conversation_id)
+                    _store_conversation_title(
+                        result.conversation_id, result.conversation_title
                     )
-                )
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": error_msg}
-                )
-            finally:
-                layout.trace_placeholder.empty()
+                    pending_next = _pending_from_agent_result(result)
+                    if pending_next:
+                        st.session_state.pending_user_input = pending_next
 
-        st.rerun()
+                    assistant_message_en = result.message or ""
+                    if not isinstance(assistant_message_en, str):
+                        assistant_message_en = str(assistant_message_en)
+                    ui_message = translate_from_english(assistant_message_en, detected_lang)
+                    layout.set_message(ui_message)
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": assistant_message_en}
+                    )
+                    st.session_state.messages.append(
+                        AssistantMessage(
+                            role="assistant",
+                            content=ui_message,
+                            artifacts=result.artifacts,
+                            error=result.error,
+                            tool_calls=tool_calls,
+                            thinking_lines=_turn_thinking_lines(thinking_snapshot),
+                        )
+                    )
+                    if not pending_next:
+                        _reset_turn_thinking()
+                except Exception as e:
+                    logger.error(
+                        f"Error during resume: {type(e).__name__}: {str(e)}",
+                        exc_info=True,
+                    )
+                    error_msg = f"❌ Error: {str(e)}"
+                    layout.message_placeholder.error(error_msg)
+                    st.session_state.messages.append(
+                        AssistantMessage(
+                            role="assistant",
+                            content=error_msg,
+                            artifacts=ToolArtifacts(),
+                            error=True,
+                            tool_calls=tool_snapshot(),
+                        )
+                    )
+                    st.session_state.messages_en.append(
+                        {"role": "assistant", "content": error_msg}
+                    )
+                finally:
+                    layout.trace_placeholder.empty()
+            st.rerun()
 
 # Normal chat input path (disabled while waiting for confirmation)
 user_input = st.chat_input(
     "Ask me anything about Earth observation or STAC...",
-    disabled=bool(st.session_state.pending_location_confirmation),
+    disabled=bool(st.session_state.pending_user_input),
 )
 
 if user_input:
@@ -2132,14 +2281,12 @@ if user_input:
             )
 
             # Check if location confirmation is needed
-            if result.needs_location_confirmation:
-                logger.info("Location confirmation required")
+            if result.needs_input:
+                logger.info("User input required")
 
-                st.session_state.pending_location_confirmation = {
-                    "needs_location_confirmation": True,
-                    "candidates": result.location_options,
-                    "pause": result.pause_state,
-                }
+                pending_next = _pending_from_agent_result(result)
+                if pending_next:
+                    st.session_state.pending_user_input = pending_next
 
             assistant_message_en = result.message or ""
             if not isinstance(assistant_message_en, str):
@@ -2163,7 +2310,7 @@ if user_input:
                     thinking_lines=_turn_thinking_lines(thinking_snapshot),
                 )
             )
-            if not result.needs_location_confirmation:
+            if not result.needs_input:
                 _reset_turn_thinking()
 
         except Exception as e:
@@ -2189,5 +2336,5 @@ if user_input:
             layout.trace_placeholder.empty()
 
     # Avoid remounting live maps: only rerun when the location picker must appear.
-    if st.session_state.pending_location_confirmation:
+    if st.session_state.pending_user_input:
         st.rerun()

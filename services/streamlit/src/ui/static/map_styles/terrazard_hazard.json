@@ -1,0 +1,103 @@
+{
+  "version": 8,
+  "name": "TerraZard Hazard",
+  "metadata": {
+    "metaplanet:product": "terrazard",
+    "metaplanet:notes": "Tile URLs are injected by the client from the map artifact vector_layers."
+  },
+  "sources": {
+    "water_depth": {
+      "type": "vector",
+      "tiles": [],
+      "minzoom": 0,
+      "maxzoom": 22
+    },
+    "cloud": {
+      "type": "vector",
+      "tiles": [],
+      "minzoom": 0,
+      "maxzoom": 22
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#f4f1e8"
+      }
+    },
+    {
+      "id": "water_depth_fill_default",
+      "type": "fill",
+      "source": "water_depth",
+      "source-layer": "default",
+      "paint": {
+        "fill-color": [
+          "interpolate",
+          ["linear"],
+          ["coalesce", ["to-number", ["get", "depth_min"]], 0],
+          0.0, "#e0f3ff",
+          0.25, "#b3d9ff",
+          0.5, "#80bfff",
+          1.0, "#4da6ff",
+          1.5, "#1a8cff",
+          2.0, "#0073e6",
+          2.5, "#0059b3",
+          3.0, "#004080",
+          4.0, "#00264d",
+          5.0, "#000d1a"
+        ],
+        "fill-opacity": 0.85,
+        "fill-outline-color": "rgba(0,0,0,0)"
+      }
+    },
+    {
+      "id": "water_depth_fill_fn",
+      "type": "fill",
+      "source": "water_depth",
+      "source-layer": "get_hazard_layer",
+      "paint": {
+        "fill-color": [
+          "interpolate",
+          ["linear"],
+          ["coalesce", ["to-number", ["get", "depth_min"]], 0],
+          0.0, "#e0f3ff",
+          0.25, "#b3d9ff",
+          0.5, "#80bfff",
+          1.0, "#4da6ff",
+          1.5, "#1a8cff",
+          2.0, "#0073e6",
+          2.5, "#0059b3",
+          3.0, "#004080",
+          4.0, "#00264d",
+          5.0, "#000d1a"
+        ],
+        "fill-opacity": 0.85,
+        "fill-outline-color": "rgba(0,0,0,0)"
+      }
+    },
+    {
+      "id": "cloud_fill_default",
+      "type": "fill",
+      "source": "cloud",
+      "source-layer": "default",
+      "paint": {
+        "fill-color": "#ffffff",
+        "fill-opacity": 0.35,
+        "fill-outline-color": "rgba(0,0,0,0)"
+      }
+    },
+    {
+      "id": "cloud_fill_fn",
+      "type": "fill",
+      "source": "cloud",
+      "source-layer": "get_hazard_layer",
+      "paint": {
+        "fill-color": "#ffffff",
+        "fill-opacity": 0.35,
+        "fill-outline-color": "rgba(0,0,0,0)"
+      }
+    }
+  ]
+}

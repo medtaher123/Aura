@@ -46,15 +46,64 @@ def resolve_from_location(location: str) -> tuple[ToolCoordinates, list[float], 
     return coords, bbox_norm, resolved_name
 
 
+def resolve_from_bbox(
+    bbox: list[float],
+    *,
+    location: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> tuple[ToolCoordinates, list[float], str]:
+    """Use an explicit bbox ``[min_lat, max_lat, min_lon, max_lon]`` as the AOI."""
+    if len(bbox) != 4:
+        raise TerrazardDataError("bbox must be [min_lat, max_lat, min_lon, max_lon].")
+    min_lat, max_lat, min_lon, max_lon = (float(x) for x in bbox)
+    if min_lat > max_lat:
+        raise TerrazardDataError("bbox min_lat must be <= max_lat.")
+    if min_lon > max_lon:
+        raise TerrazardDataError("bbox min_lon must be <= max_lon.")
+    if not -90.0 <= min_lat <= 90.0 or not -90.0 <= max_lat <= 90.0:
+        raise TerrazardDataError("bbox latitudes must be in [-90, 90].")
+    if not -180.0 <= min_lon <= 180.0 or not -180.0 <= max_lon <= 180.0:
+        raise TerrazardDataError("bbox longitudes must be in [-180, 180].")
+
+    bbox_norm = [min_lat, max_lat, min_lon, max_lon]
+    center_lat = (min_lat + max_lat) / 2.0
+    center_lon = (min_lon + max_lon) / 2.0
+    if lat is not None and lon is not None:
+        center_lat, center_lon = float(lat), float(lon)
+    coords = ToolCoordinates(lat=center_lat, lon=center_lon)
+
+    if location:
+        resolved_name = location
+    else:
+        try:
+            rev = reverse_geocode(center_lat, center_lon)
+            resolved_name = (
+                rev.get("city") or rev.get("country") or f"{center_lat:.4f}, {center_lon:.4f}"
+            )
+        except Exception as exc:
+            logger.error("Error reverse geocoding bbox center: %s", exc)
+            resolved_name = f"{center_lat:.4f}, {center_lon:.4f}"
+
+    return coords, bbox_norm, resolved_name
+
+
 def resolve_spatial_context(
-    location: str | None, lat: float | None, lon: float | None
+    location: str | None,
+    lat: float | None,
+    lon: float | None,
+    bbox: list[float] | None = None,
 ) -> tuple[ToolCoordinates, list[float], str]:
     """Route to the appropriate spatial resolver based on provided inputs."""
-    if lat is not None and lon is not None:
-        return resolve_from_lat_lon(lat, lon)
+    if bbox is not None:
+        return resolve_from_bbox(bbox, location=location, lat=lat, lon=lon)
     if location:
         return resolve_from_location(location)
-    raise TerrazardDataError("Please specify a location or lat/lon coordinates.")
+    if lat is not None and lon is not None:
+        return resolve_from_lat_lon(lat, lon)
+    raise TerrazardDataError(
+        "Please specify a bbox, location, or lat/lon coordinates."
+    )
 
 
 def normalize_terrazard_date(value: str | None, *, field_name: str = "date") -> str:
