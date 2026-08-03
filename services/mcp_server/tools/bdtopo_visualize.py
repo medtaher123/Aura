@@ -71,6 +71,8 @@ class ThemeLayerSpec:
     """pg_tileserv layer id (schema.table)."""
     tile_layer: str
     style: str
+    """Minimum map zoom before the client fetches this layer's tiles."""
+    minzoom: int
 
 
 THEME_SPECS: dict[str, ThemeLayerSpec] = {
@@ -79,66 +81,77 @@ THEME_SPECS: dict[str, ThemeLayerSpec] = {
         "Administrative boundaries",
         "bdtopo_raw.commune",
         "bdtopo_administratif",
+        9,
     ),
     "transport": ThemeLayerSpec(
         "transport",
         "Road network",
         "bdtopo_raw.troncon_de_route",
         "bdtopo_transport",
+        13,
     ),
     "regulated_areas": ThemeLayerSpec(
         "regulated_areas",
         "Protected / regulated areas",
         "bdtopo_raw.parc_ou_reserve",
         "bdtopo_regulated",
+        10,
     ),
     "activity_zones": ThemeLayerSpec(
         "activity_zones",
         "Activity / interest zones",
         "bdtopo_raw.zone_d_activite_ou_d_interet",
         "bdtopo_activity",
+        11,
     ),
     "named_places": ThemeLayerSpec(
         "named_places",
         "Named places",
         "bdtopo_raw.lieu_dit_non_habite",
         "bdtopo_named_places",
+        13,
     ),
     "toponymy": ThemeLayerSpec(
         "toponymy",
         "Toponymy",
         "bdtopo_raw.toponymie",
         "bdtopo_toponymy",
+        13,
     ),
     "buildings": ThemeLayerSpec(
         "buildings",
         "Buildings",
         "bdtopo_raw.batiment",
         "bdtopo_buildings",
+        14,
     ),
     "land_use_vegetation": ThemeLayerSpec(
         "land_use_vegetation",
         "Vegetation / land cover",
         "bdtopo_raw.zone_de_vegetation",
         "bdtopo_vegetation",
+        13,
     ),
     "land_use_habitation": ThemeLayerSpec(
         "land_use_habitation",
         "Habitation zones",
         "bdtopo_raw.zone_d_habitation",
         "bdtopo_habitation",
+        12,
     ),
     "hydro_line": ThemeLayerSpec(
         "hydro_line",
         "Hydrography (lines)",
         "bdtopo_raw.troncon_hydrographique",
         "bdtopo_hydro_line",
+        13,
     ),
     "hydro_surface": ThemeLayerSpec(
         "hydro_surface",
         "Hydrography (surfaces)",
         "bdtopo_raw.surface_hydrographique",
         "bdtopo_hydro_surface",
+        11,
     ),
 }
 
@@ -196,12 +209,16 @@ def _build_vector_tile_map(
     coords: ToolCoordinates = context["coords"]
     radius_m = context.get("radius_m") if context.get("mode") == "point" else None
     view_state = _view_state_for_context(context)
+    theme_minzooms = [THEME_SPECS[key].minzoom for key in themes]
+    if theme_minzooms:
+        view_state["zoom"] = max(float(view_state["zoom"]), float(max(theme_minzooms)))
 
     vector_layers = [
         {
             "name": THEME_SPECS[key].label,
             "tile_url": _tile_url(tile_server_url, THEME_SPECS[key].tile_layer),
             "style": THEME_SPECS[key].style,
+            "minzoom": THEME_SPECS[key].minzoom,
             "visible": True,
             "theme": key,
         }
@@ -322,6 +339,7 @@ def bdtopo_visualize_tool(
             "tile_layer": THEME_SPECS[key].tile_layer,
             "tile_url": _tile_url(tile_server_url, THEME_SPECS[key].tile_layer),
             "style": THEME_SPECS[key].style,
+            "minzoom": THEME_SPECS[key].minzoom,
         }
         for key in selected_themes
     ]
@@ -347,6 +365,7 @@ def bdtopo_visualize_tool(
             "prompt_hints": [
                 "Toggle themes with the themes parameter (e.g. buildings, transport, hydro_surface).",
                 "Tiles are loaded client-side from pg_tileserv; no GeoJSON is embedded.",
+                "Dense themes (especially buildings) only load above their minzoom to keep maps responsive.",
             ],
         },
         error=False,

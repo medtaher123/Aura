@@ -557,6 +557,67 @@ def _add_treated_area_box(folium_map: folium.Map, item: dict) -> None:
     ).add_to(folium_map)
 
 
+def _add_geojson_overlays(folium_map: folium.Map, item: dict) -> None:
+    """Draw optional GeoJSON overlays (e.g. flood-touched buildings) on vector-tile maps."""
+    overlays = item.get("geojson_overlays")
+    if not isinstance(overlays, list):
+        return
+
+    for overlay in overlays:
+        if not isinstance(overlay, dict):
+            continue
+        data = overlay.get("data")
+        if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
+            continue
+        features = data.get("features")
+        if not isinstance(features, list) or not features:
+            continue
+
+        style = overlay.get("style") if isinstance(overlay.get("style"), dict) else {}
+        fill_color = str(style.get("fillColor") or "#FF6D00")
+        color = str(style.get("color") or "#E65100")
+        try:
+            fill_opacity = float(style.get("fillOpacity", 0.65))
+        except (TypeError, ValueError):
+            fill_opacity = 0.65
+        try:
+            weight = float(style.get("weight", 1.5))
+        except (TypeError, ValueError):
+            weight = 1.5
+        layer_name = str(overlay.get("name") or "Overlay")
+
+        def _style_fn(_feature, *, fc=fill_color, c=color, fo=fill_opacity, w=weight):
+            return {
+                "fillColor": fc,
+                "color": c,
+                "fillOpacity": fo,
+                "weight": w,
+            }
+
+        folium.GeoJson(
+            data,
+            name=layer_name,
+            style_function=_style_fn,
+            tooltip=folium.GeoJsonTooltip(
+                fields=[
+                    "land_type",
+                    "asset_class",
+                    "representative_depth_m",
+                    "intersection_area_m2",
+                    "damage_eur",
+                ],
+                aliases=[
+                    "Land type",
+                    "Asset class",
+                    "Depth (m)",
+                    "Intersected area (m²)",
+                    "Damage (€)",
+                ],
+                sticky=False,
+            ),
+        ).add_to(folium_map)
+
+
 def _render_vector_tile_map_spec(item: dict) -> None:
     """Render a TerraZard / BDTOPO vector-tile map artifact via Folium."""
     view_state_raw = item.get("view_state") or {}
@@ -596,21 +657,32 @@ def _render_vector_tile_map_spec(item: dict) -> None:
 
             layer_name = layer_spec.get("name") or "Hazard layer"
             style_key = layer_spec.get("style")
-            style_options = dict(
-                get_style_options(style_key if isinstance(style_key, str) else "")
-            )
+            minzoom_int: int | None = None
             minzoom = layer_spec.get("minzoom")
             if minzoom is not None:
                 try:
-                    style_options["minZoom"] = int(minzoom)
+                    minzoom_int = int(minzoom)
                 except (TypeError, ValueError):
-                    pass
+                    minzoom_int = None
+
+            style_options = get_style_options(
+                style_key if isinstance(style_key, str) else "",
+                latitude=latitude,
+                stroke_width_m=0.5,
+                min_zoom=minzoom_int,
+            )
+            # Dict presets (TerraZard) may still need minZoom injected.
+            if isinstance(style_options, dict) and minzoom_int is not None:
+                style_options = dict(style_options)
+                style_options["minZoom"] = minzoom_int
+
             VectorGridProtobuf(
                 tile_url,
                 name=str(layer_name),
                 options=style_options,
             ).add_to(folium_map)
 
+    _add_geojson_overlays(folium_map, item)
     _add_treated_area_box(folium_map, item)
 
     folium.LayerControl(collapsed=True).add_to(folium_map)
