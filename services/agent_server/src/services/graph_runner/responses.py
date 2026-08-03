@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from eo_llm.graph.state import DomainResultModel, GraphStateModel, validate_state
+from src.schemas.user_inputs import LocationRequest, UserInputRouter
 
 from ...tools.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from .artifacts import ArtifactAggregator
@@ -23,20 +24,36 @@ class ToolResponseFactory:
 
     def from_state(self, state: GraphStateModel | dict[str, Any]) -> ToolResponse:
         model = state if isinstance(state, GraphStateModel) else validate_state(state)
-        if model.stopped_for_location_confirmation:
+        if model.stopped_for_user_input and model.needs_input:
             return self.from_paused_state(model)
         return self.from_completed_state(model)
 
     @staticmethod
     def from_paused_state(state: GraphStateModel) -> ToolResponse:
         graph_state = _json_safe(state.model_dump(mode="python"))
+        requests = UserInputRouter.requests_from_dict(state.needs_input)
+        if not requests and state.location_candidates:
+            requests = {
+                "location": LocationRequest.from_candidates(
+                    state.location_candidates,
+                    prompt="Several places match your query. Please choose a location.",
+                    location_query=state.location_query or None,
+                )
+            }
+        needs_input = UserInputRouter.requests_to_dict(requests)
+        prompt = "Please provide the requested input to continue."
+        location_req = requests.get("location")
+        if isinstance(location_req, LocationRequest) and location_req.prompt:
+            prompt = location_req.prompt
+        bbox_req = requests.get("bounding_box")
+        if bbox_req is not None and getattr(bbox_req, "prompt", None):
+            prompt = str(bbox_req.prompt)
         return ToolResponse(
             tool_name="graph",
-            message="Several places match your query. Please choose a location.",
+            message=prompt,
             error=False,
             data={
-                "needs_location_confirmation": True,
-                "candidates": state.location_candidates,
+                "needs_input": needs_input,
                 "pause": {"graph_state": graph_state},
             },
         )
@@ -101,6 +118,9 @@ class ToolResponseFactory:
     ) -> tuple[ToolCoordinates | None, str | None]:
         resolved = state.resolved_location
         if resolved.lat is None or resolved.lon is None:
+            if state.resolved_area is not None:
+                lat, lon = state.resolved_area.centroid()
+                return {"lat": lat, "lon": lon}, state.resolved_area.label()
             return None, resolved.display_name or None
         coords: ToolCoordinates = {"lat": float(resolved.lat), "lon": float(resolved.lon)}
         display = resolved.display_name or None

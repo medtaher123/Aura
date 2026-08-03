@@ -19,15 +19,19 @@ class MessageRepository(BaseRepository[Message]):
 
     async def create_for_conversation(
         self,
-        converation_id: uuid.UUID,
-        data: Mapping[str, Any],
+        conversation_id: uuid.UUID,
+        data: Mapping[str, Any] | Message,
         *,
         commit: bool = True,
     ) -> Message:
-        """Create a message, mapping API ``metadata`` to ORM ``message_metadata``."""
+        """Persist a message row, accepting an ORM instance or API mapping."""
+        if isinstance(data, Message):
+            data.conversation_id = conversation_id
+            return await self.add(data, commit=commit)
+
         payload = dict(data)
         metadata = payload.pop("metadata", None)
-        payload["conversation_id"] = converation_id
+        payload["conversation_id"] = conversation_id
         payload["message_metadata"] = metadata or {}
         return await self.create(payload, commit=commit)
 

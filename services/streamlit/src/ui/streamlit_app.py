@@ -1651,6 +1651,10 @@ if "pending_user_input" not in st.session_state:
 if "pending_drawn_bbox" not in st.session_state:
     st.session_state.pending_drawn_bbox = None
 
+if "bbox_picker_key" not in st.session_state:
+    # Bump to remount st_folium after clear/submit so prior drawings do not stick.
+    st.session_state.bbox_picker_key = 0
+
 if "confirmed_locations" not in st.session_state:
     # Map normalized location_query -> {"token": str, "display": str}
     st.session_state.confirmed_locations = {}
@@ -1716,6 +1720,10 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.messages_en = []
         st.session_state.pending_user_input = None
+        st.session_state.pending_drawn_bbox = None
+        st.session_state.bbox_picker_key = (
+            int(st.session_state.get("bbox_picker_key") or 0) + 1
+        )
         _clear_conversation_id_query_param()
         st.rerun()
 
@@ -2073,55 +2081,66 @@ if isinstance(pending, dict) and pending.get("needs_input"):
         prompt = bbox_payload.get("prompt") or "Draw a bounding box on the map"
         st.write(prompt)
         drawn_bbox = st.session_state.pending_drawn_bbox
+
         if drawn_bbox:
+            # Hide the map picker once an area is selected.
             st.success(
                 f"Selected area: [{drawn_bbox[0]:.4f}, {drawn_bbox[1]:.4f}, "
                 f"{drawn_bbox[2]:.4f}, {drawn_bbox[3]:.4f}]"
             )
+            col_continue, col_redraw = st.columns(2)
+            with col_continue:
+                submitted_bbox = st.button(
+                    "Continue",
+                    type="primary",
+                    key="user_input_bbox_continue",
+                    use_container_width=True,
+                )
+            with col_redraw:
+                if st.button(
+                    "Redraw",
+                    key="user_input_bbox_redraw",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_drawn_bbox = None
+                    st.session_state.bbox_picker_key = (
+                        int(st.session_state.get("bbox_picker_key") or 0) + 1
+                    )
+                    st.rerun()
         else:
-            st.caption("Use the rectangle tool on the map, then click Continue.")
+            st.caption("Use the rectangle tool on the map to select an area.")
+            submitted_bbox = False
 
-        # Keep Continue above the map so it stays visible without scrolling past it.
-        submitted_bbox = st.button(
-            "Continue",
-            type="primary",
-            key="user_input_bbox_continue",
-            use_container_width=True,
-        )
-
-        center = bbox_payload.get("map_center") or [46.5, 2.5]
-        zoom = float(bbox_payload.get("map_zoom") or 6)
-        try:
-            center_lat, center_lon = float(center[0]), float(center[1])
-        except (TypeError, ValueError, IndexError):
-            center_lat, center_lon = 46.5, 2.5
-        fmap = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
-        Draw(
-            export=False,
-            draw_options={
-                "polyline": False,
-                "polygon": False,
-                "circle": False,
-                "circlemarker": False,
-                "marker": False,
-                "rectangle": True,
-            },
-            edit_options={"edit": True},
-        ).add_to(fmap)
-        map_out = st_folium(
-            fmap,
-            key="user_input_bbox_picker",
-            height=450,
-            returned_objects=["last_active_drawing", "all_drawings"],
-            use_container_width=True,
-        )
-        latest_bbox = bbox_from_folium_draw_output(map_out)
-        if latest_bbox is not None:
-            previous = st.session_state.pending_drawn_bbox
-            st.session_state.pending_drawn_bbox = latest_bbox
-            drawn_bbox = latest_bbox
-            # Refresh so the Continue button area shows the selected bbox.
-            if previous != latest_bbox:
+            center = bbox_payload.get("map_center") or [46.5, 2.5]
+            zoom = float(bbox_payload.get("map_zoom") or 6)
+            try:
+                center_lat, center_lon = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                center_lat, center_lon = 46.5, 2.5
+            fmap = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
+            Draw(
+                export=False,
+                draw_options={
+                    "polyline": False,
+                    "polygon": False,
+                    "circle": False,
+                    "circlemarker": False,
+                    "marker": False,
+                    "rectangle": True,
+                },
+                edit_options={"edit": True},
+            ).add_to(fmap)
+            map_out = st_folium(
+                fmap,
+                key=f"user_input_bbox_picker_{st.session_state.bbox_picker_key}",
+                height=450,
+                returned_objects=["last_active_drawing", "all_drawings"],
+                use_container_width=True,
+            )
+            latest_bbox = bbox_from_folium_draw_output(map_out)
+            if latest_bbox is not None:
+                st.session_state.pending_drawn_bbox = latest_bbox
+                # Hide the map and show the selected summary + Continue.
                 st.rerun()
     else:
         submitted_bbox = False
@@ -2212,6 +2231,9 @@ if isinstance(pending, dict) and pending.get("needs_input"):
             st.session_state.messages_en.append({"role": "user", "content": confirm_en})
             st.session_state.pending_user_input = None
             st.session_state.pending_drawn_bbox = None
+            st.session_state.bbox_picker_key = (
+                int(st.session_state.get("bbox_picker_key") or 0) + 1
+            )
 
             with st.chat_message("assistant"):
                 layout = _make_streaming_turn_placeholders()

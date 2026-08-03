@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.graph.state import GraphState
 from src.core.event_emitter import EventEmitter
+from src.schemas.user_inputs import UserInputRouter
 
 
 class ChatMessage(BaseModel):
@@ -67,17 +68,20 @@ class GraphTurnRequest(BaseModel):
 
 
 class GraphResumeRequest(BaseModel):
-    """Input for resuming a graph paused for location confirmation."""
+    """Input for resuming a graph paused for user input."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     graph_state: dict[str, Any]
-    confirmed_index: int
+    user_inputs: dict[str, Any] = Field(default_factory=dict)
+    confirmed_index: int | None = None
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     def to_state_dict(self) -> GraphState:
-        merged = {
-            **self.graph_state,
-            "confirmed_location_index": int(self.confirmed_index),
-        }
+        merged: dict[str, Any] = {**self.graph_state}
+        UserInputRouter.apply_results(
+            self.user_inputs,
+            merged,
+            confirmed_index=self.confirmed_index,
+        )
         return merged  # type: ignore[return-value]

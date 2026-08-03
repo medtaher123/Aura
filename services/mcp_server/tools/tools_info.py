@@ -439,6 +439,34 @@ TOOLS_CATALOG = {
             "bbox": "Bounding box [min_lon,min_lat,max_lon,max_lat] (bbox mode)"
         }
     },
+    "bdtopo_visualize_tool": {
+        "name": "BDTOPO Map Visualization Tool",
+        "purpose": "Render BDTOPO context as an interactive MapLibre map using the hosted IGN PLAN.IGN style",
+        "data_sources": [
+            "Hosted MapLibre style JSON (/styles/plan_ign_standard.json)",
+            "IGN PLAN.IGN vector tiles (via style sources)",
+            "Nominatim geocoding for place-name extents",
+        ],
+        "capabilities": [
+            "Lightweight map specs with style_url (no embedded GeoJSON)",
+            "Client fetches MapLibre style from the MCP styles endpoint",
+            "Point, place-name, or bbox spatial input",
+            "Theme hints retained as metadata for the agent/UI",
+        ],
+        "example_questions": [
+            "Show me BDTOPO buildings and vegetation around Lyon.",
+            "Visualize BDTOPO transport and hydro layers for Paris.",
+        ],
+        "parameters": {
+            "input_mode": "point | place_name | bbox",
+            "lat": "Latitude (point mode)",
+            "lon": "Longitude (point mode)",
+            "radius_m": "Search radius in meters (point mode)",
+            "place_name": "Location name to geocode (place_name mode)",
+            "bbox": "Bounding box [min_lon,min_lat,max_lon,max_lat] (bbox mode)",
+            "themes": "Optional list of theme hints (buildings, transport, hydro_surface, ...)",
+        },
+    },
     "geo_info_tool": {
         "name": "Geographic Information Tool",
         "purpose": "Retrieve information about countries and cities",
@@ -487,6 +515,29 @@ TOOLS_CATALOG = {
             "expression": "Arithmetic expression to evaluate"
         }
     },
+    "web_search_tool": {
+        "name": "Web Search Tool",
+        "purpose": "Search the public web for recent news, context, or facts not covered by earth-observation tools",
+        "data_sources": [
+            "Tavily Search API (when TAVILY_API_KEY is set)",
+            "Brave Search API (when BRAVE_API_KEY is set)",
+            "DuckDuckGo (keyless fallback via ddgs)",
+        ],
+        "capabilities": [
+            "Search open-web sources for news and background context",
+            "Return titled snippets with source URLs",
+            "Complement domain EO tools when local data is insufficient",
+        ],
+        "example_questions": [
+            "What news is there about flooding in Lyon this week?",
+            "Find recent reporting on wildfires near Marseille",
+            "Search the web for background on the 2024 Valencia floods",
+        ],
+        "parameters": {
+            "query": "Search query string",
+            "max_results": "Optional maximum number of result rows (default 6)",
+        },
+    },
     "flood_depth_damage_tool": {
         "name": "Flood Depth-Damage Tool",
         "purpose": "Estimate flood damage using global depth-damage curves and max damage tables",
@@ -529,10 +580,11 @@ TOOL_CATEGORIES = {
         "bdtopo_coverage_quality_tool",
         "bdtopo_change_snapshot_tool",
         "bdtopo_thematic_explain_tool",
+        "bdtopo_visualize_tool",
         "geo_info_tool",
         "get_route_info",
     ],
-    "Utilities": ["get_time", "get_date", "calculator"]
+    "Utilities": ["get_time", "get_date", "calculator", "web_search_tool"],
 }
 
 

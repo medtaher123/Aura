@@ -8,11 +8,13 @@ from eo_llm.graph.state import GraphState, dump_state, validate_state
 def location_response_node(state: GraphState) -> GraphState:
     s = validate_state(state)
     q = s.location_query or s.query
-    cands = list(s.location_candidates)
+    payload = (s.needs_input or {}).get("location") or {}
+    cands = list(payload.get("candidates") or s.location_candidates)
 
     lines = [
-        f"Several places match “{q}”. Reply by resuming the graph with "
-        "`confirmed_location_index` set to the option number (0-based).",
+        f"Several places match “{q}”. Reply by resuming with "
+        "`user_inputs.location` set to the chosen option "
+        "(or `confirmed_location_index` 0-based).",
         "",
     ]
     for i, c in enumerate(cands[:8]):

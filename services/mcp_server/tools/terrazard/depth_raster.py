@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from rasterio import features as rio_features
 from rasterio.crs import CRS
-from rasterio.transform import Affine, from_origin
+from rasterio.transform import Affine, from_origin, xy
 from rasterio.warp import transform_bounds, transform_geom
 from shapely.geometry import mapping, shape
 
@@ -42,6 +42,44 @@ class DepthRaster:
     @property
     def out_shape(self) -> tuple[int, int]:
         return self.band_index.shape
+
+    def flooded_pixel_window(self) -> tuple[int, int, int, int] | None:
+        """Return ``(row_min, row_max, col_min, col_max)`` inclusive, or None if dry."""
+        rows, cols = np.nonzero(self.band_index)
+        if rows.size == 0:
+            return None
+        return (
+            int(rows.min()),
+            int(rows.max()),
+            int(cols.min()),
+            int(cols.max()),
+        )
+
+    def flood_bbox_wgs84(self) -> list[float] | None:
+        """Tight WGS84 bbox of flooded pixels as ``[min_lat, max_lat, min_lon, max_lon]``."""
+        window = self.flooded_pixel_window()
+        if window is None:
+            return None
+        row_min, row_max, col_min, col_max = window
+        # Inclusive pixel corners → geographic bounds of that window.
+        xs, ys = xy(
+            self.transform,
+            [row_min, row_min, row_max + 1, row_max + 1],
+            [col_min, col_max + 1, col_min, col_max + 1],
+            offset="ul",
+        )
+        minx, maxx = float(min(xs)), float(max(xs))
+        miny, maxy = float(min(ys)), float(max(ys))
+        min_lon, min_lat, max_lon, max_lat = transform_bounds(
+            self.crs,
+            "EPSG:4326",
+            minx,
+            miny,
+            maxx,
+            maxy,
+            densify_pts=21,
+        )
+        return [float(min_lat), float(max_lat), float(min_lon), float(max_lon)]
 
 
 def _choose_resolution(bbox: list[float], resolution_m: float) -> float:

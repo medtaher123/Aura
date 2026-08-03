@@ -128,6 +128,7 @@ def translate_from_english(text: str, target_lang: Optional[str] = None) -> str:
         return text
 
 
+# TODO: make async (mtbh)
 def detect_and_translate_to_english(text: str):
     """Detect language and translate to English if needed.
     

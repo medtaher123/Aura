@@ -45,10 +45,11 @@ class GraphRunnerService:
         return self._response_factory.from_state(final)
 
     def resume_turn(self, request: GraphResumeRequest) -> ToolResponse:
-        """Resume a paused graph after the user confirmed a location."""
+        """Resume a paused graph after the user provided required inputs."""
         state = request.to_state_dict()
         logger.info(
             f"Graph resume starting - confirmed_index: {request.confirmed_index}, "
+            f"user_input_kinds: {list(request.user_inputs.keys())}, "
             f"candidates: {len(request.graph_state.get('location_candidates') or [])}"
         )
         final = self._run_streaming(state, request.stream_emitter)

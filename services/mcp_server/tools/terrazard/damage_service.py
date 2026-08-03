@@ -104,14 +104,20 @@ class FloodDamageService:
                 "Could not derive exclusive depth bands from TerraZard polygons."
             )
 
-        bdtopo_features = fetch_bdtopo_features(bbox)
+        flood_bbox = depth_raster.flood_bbox_wgs84()
+        bdtopo_features = fetch_bdtopo_features(bbox, flood_bbox=flood_bbox)
         zonal = collect_bdtopo_exposure(depth_raster, bdtopo_features)
         exposure_slices = zonal.exposure_slices
-        touched_buildings = zonal.touched_buildings
 
         resolved_year = _resolve_year(year)
         breakdown_rows = self._damage_breakdown(
             exposure_slices,
+            country=country,
+            year=resolved_year,
+            continent=continent,
+        )
+        touched_buildings = self._annotate_touched_building_damage(
+            zonal.touched_buildings,
             country=country,
             year=resolved_year,
             continent=continent,
@@ -141,7 +147,7 @@ class FloodDamageService:
             "Vegetation exposure is limited to mapped agricultural land-cover classes",
             (
                 "touched_buildings lists simplified footprints of buildings "
-                "intersecting flood bands (capped)"
+                "intersecting flood bands with per-building damage_eur (capped)"
             ),
         ]
         if total_exposed_area < total_flooded_area * 0.05:
@@ -221,6 +227,106 @@ class FloodDamageService:
                 )
             )
         return rows
+
+    @classmethod
+    def _building_damage_eur(
+        cls,
+        *,
+        asset_class: str,
+        band_exposures: list[dict[str, Any]],
+        country: str,
+        year: int | None,
+        continent: str,
+    ) -> float:
+        """Sum JRC damage over each depth-band area on one building footprint."""
+        total = 0.0
+        for exposure in band_exposures:
+            try:
+                area_m2 = float(exposure.get("area_m2") or 0.0)
+                depth_m = float(exposure.get("representative_depth_m") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if area_m2 <= 0:
+                continue
+            unit = compute_unit_damage_eur(
+                country=country,
+                depth_m=depth_m,
+                asset_class=asset_class,
+                continent=continent,
+                year=year,
+            )
+            unit_damage = float(unit["estimated_damage"])
+            if unit["unit"] == "EUR/ha":
+                total += unit_damage * (area_m2 / 10_000.0)
+            else:
+                total += unit_damage * area_m2
+        return round(total, 2)
+
+    @classmethod
+    def _annotate_touched_building_damage(
+        cls,
+        touched_buildings: dict[str, Any],
+        *,
+        country: str,
+        year: int | None,
+        continent: str,
+    ) -> dict[str, Any]:
+        """Attach ``damage_eur`` to each touched-building feature and sort by cost."""
+        if not isinstance(touched_buildings, dict):
+            return {"type": "FeatureCollection", "features": []}
+        features = touched_buildings.get("features")
+        if not isinstance(features, list):
+            return {"type": "FeatureCollection", "features": []}
+
+        annotated: list[dict[str, Any]] = []
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            props = feature.get("properties")
+            if not isinstance(props, dict):
+                props = {}
+            else:
+                props = dict(props)
+
+            band_exposures = props.get("band_exposures")
+            if not isinstance(band_exposures, list) or not band_exposures:
+                # Fallback: single band from summary properties.
+                try:
+                    area_m2 = float(props.get("intersection_area_m2") or 0.0)
+                    depth_m = float(props.get("representative_depth_m") or 0.0)
+                except (TypeError, ValueError):
+                    area_m2, depth_m = 0.0, 0.0
+                band_exposures = (
+                    [
+                        {
+                            "representative_depth_m": depth_m,
+                            "area_m2": area_m2,
+                        }
+                    ]
+                    if area_m2 > 0
+                    else []
+                )
+
+            asset_class = str(props.get("asset_class") or "residential")
+            try:
+                damage_eur = cls._building_damage_eur(
+                    asset_class=asset_class,
+                    band_exposures=band_exposures,
+                    country=country,
+                    year=year,
+                    continent=continent,
+                )
+            except Exception:
+                damage_eur = 0.0
+
+            props["damage_eur"] = damage_eur
+            annotated.append({**feature, "properties": props})
+
+        annotated.sort(
+            key=lambda item: float((item.get("properties") or {}).get("damage_eur") or 0.0),
+            reverse=True,
+        )
+        return {"type": "FeatureCollection", "features": annotated}
 
     @staticmethod
     def _row_payload(row: DamageBreakdownRow) -> dict[str, Any]:

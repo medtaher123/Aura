@@ -46,6 +46,7 @@ _DATA_AGENT_REACT_PROMPT_TEMPLATE = (
     "- BDTOPO COVERAGE/COMPLETENESS checks: use bdtopo_coverage_quality_tool with point/place_name/bbox mode from the user query.\n"
     "- BDTOPO CHANGE comparisons across editions: use bdtopo_change_snapshot_tool. If requested editions are unavailable, surface available editions from tool output.\n"
     "- BDTOPO EXPLANATION/SCREENING/COMPLIANCE: use bdtopo_thematic_explain_tool with objective inferred from intent.\n"
+    "- BDTOPO MAP VISUALIZATION: use bdtopo_visualize_tool when the user asks to show, map, or visualize BDTOPO buildings, land cover, roads, hydro, or boundaries.\n"
     "- Use helper tools when needed to complete missing context before a domain tool call (e.g., get_date for relative dates, tools_info_tool for tool discovery questions, geo_info_tool for country/city context).\n"
     "- Prefer tool defaults when reasonable; do not block the user by asking for optional parameters.\n"
     "- query_disaster_events_tool accepts disaster_type as a list of strings (e.g. [\"storm\", \"drought\"]).\n"
@@ -339,6 +340,7 @@ Example 32
 User: Explain this location for compliance checks (48.8566, 2.3522)
 Step 1 JSON:
 {"action":"bdtopo_thematic_explain_tool","action_input":{"objective":"compliance","input_mode":"point","lat":48.8566,"lon":2.3522,"radius_m":3000},"commentary":"Calling bdtopo_thematic_explain_tool to build an evidence-based compliance explanation from BDTOPO signals."}
+{"action":"bdtopo_visualize_tool","action_input":{"input_mode":"place_name","place_name":"Lyon","themes":["buildings","land_use_vegetation","hydro_surface"]},"commentary":"Calling bdtopo_visualize_tool to render BDTOPO buildings, vegetation, and hydro layers around Lyon."}
 Step 2 JSON:
 {"action":"FINAL","action_input":"I generated a compliance-focused thematic explanation with structured evidence, summary indicators, and map artifacts.","commentary":"Summarizing the thematic explanation."}
 

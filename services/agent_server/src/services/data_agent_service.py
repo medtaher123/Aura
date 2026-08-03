@@ -862,12 +862,21 @@ def create_data_agent_executor(
                 meta["commentary"] = planner_commentary
             coerced.data = meta
 
-            # Pause point: let the UI ask the user to disambiguate the location,
+            # Pause point: let the UI collect required user inputs,
             # then resume from this exact tool call (without re-running prior steps).
-            if bool(meta.get("needs_location_confirmation")) is True:
+            from src.schemas.user_inputs import UserInputRouter
+
+            pending_inputs = UserInputRouter.pending_from_tool_data(
+                meta if isinstance(meta, dict) else {}
+            )
+            if pending_inputs:
                 logger.info(
-                    f"DataAgent tool requires location confirmation: tool={tool_name}, step={step_count + 1}/{max_steps}"
+                    f"DataAgent tool requires user input kinds={list(pending_inputs.keys())}: "
+                    f"tool={tool_name}, step={step_count + 1}/{max_steps}"
                 )
+                # Store typed requests as wire dicts on the tool response.
+                meta["needs_input"] = UserInputRouter.requests_to_dict(pending_inputs)
+                coerced.data = meta
                 paused_state = dict(next_state)
                 paused_state.pop("stream_callback", None)  # not serializable
                 paused_state.pop("output", None)
@@ -893,13 +902,13 @@ def create_data_agent_executor(
 
                 if callable(stream_callback):
                     logger.info(
-                        "Streaming data agent finalizing with message: Waiting for location confirmation…"
+                        "Streaming data agent finalizing with message: Waiting for user input…"
                     )
                     try:
                         stream_callback(
                             {
                                 "type": "data_agent_finalizing",
-                                "message": "Waiting for location confirmation…",
+                                "message": "Waiting for user input…",
                             }
                         )
                     except Exception as e:

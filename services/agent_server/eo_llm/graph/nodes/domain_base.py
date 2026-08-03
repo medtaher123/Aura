@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, Callable, ClassVar
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.nodes.helpers import LocationContext, wrap_domain_result
-from eo_llm.graph.state import GraphState, GraphStateModel
+from eo_llm.graph.state import GraphState, GraphStateModel, dump_state
 from eo_llm.graph.tool_plan import (
     ToolExecutionResult,
     ToolExecutor,
@@ -15,6 +16,27 @@ from eo_llm.graph.tool_plan import (
     ToolPlan,
     ToolPlanner,
 )
+from src.schemas.user_inputs import (
+    BoundingBoxRequest,
+    InputKind,
+    LocationRequest,
+    UserInputRequest,
+    UserInputRouter,
+)
+
+
+@dataclass(frozen=True)
+class DomainTool:
+    """One MCP tool available to a domain, with optional required user inputs."""
+
+    name: ToolName
+    required_user_inputs: tuple[InputKind, ...] = ()
+
+
+def _as_domain_tool(entry: ToolName | DomainTool) -> DomainTool:
+    if isinstance(entry, DomainTool):
+        return entry
+    return DomainTool(name=entry)
 
 
 class DomainNode(GraphNode):
@@ -47,10 +69,12 @@ class ToolPlanDomainNode(DomainNode):
 
     ``shared_tools`` are available to every domain; ``tools`` are domain-specific.
     The planner/executor always see ``shared_tools + tools`` (deduped).
+    Entries in ``tools`` may be plain tool names or ``DomainTool`` specs that
+    declare ``required_user_inputs``.
     """
 
     shared_tools: ClassVar[list[ToolName]] = ["web_search_tool"]
-    tools: ClassVar[list[ToolName]]
+    tools: ClassVar[list[ToolName | DomainTool]]
     requires_location: bool = True
     _tools_registry: ClassVar[dict[str, list[str]]] = {}
 
@@ -71,11 +95,21 @@ class ToolPlanDomainNode(DomainNode):
             ToolPlanDomainNode._tools_registry[cls.domain_name] = cls.resolved_tools()
 
     @classmethod
+    def tool_specs(cls) -> dict[str, DomainTool]:
+        """Map tool name → ``DomainTool`` for this domain (domain tools only)."""
+        specs: dict[str, DomainTool] = {}
+        for entry in cls.tools:
+            spec = _as_domain_tool(entry)
+            specs[spec.name] = spec
+        return specs
+
+    @classmethod
     def resolved_tools(cls) -> list[str]:
         """Shared tools first, then domain tools (order preserved, duplicates dropped)."""
         seen: set[str] = set()
         out: list[str] = []
-        for name in [*cls.shared_tools, *cls.tools]:
+        for entry in [*cls.shared_tools, *cls.tools]:
+            name = entry if isinstance(entry, str) else entry.name
             if name in seen:
                 continue
             seen.add(name)
@@ -86,6 +120,60 @@ class ToolPlanDomainNode(DomainNode):
     def tools_for(cls, domain: str) -> list[str]:
         return list(cls._tools_registry.get(domain, []))
 
+    def user_input_satisfied(self, kind: InputKind, s: GraphStateModel) -> bool:
+        if kind == "bounding_box":
+            return s.resolved_area is not None
+        if kind == "location":
+            return bool(s.has_resolved_location)
+        return False
+
+    def build_user_input_request(
+        self,
+        kind: InputKind,
+        s: GraphStateModel,
+        ctx: LocationContext,
+    ) -> UserInputRequest:
+        if kind == "bounding_box":
+            map_center: list[float] | None = None
+            if ctx.lat is not None and ctx.lon is not None:
+                map_center = [float(ctx.lat), float(ctx.lon)]
+            return BoundingBoxRequest(
+                prompt=(
+                    "Please draw a bounding box on the map for the flood damage "
+                    "analysis area."
+                ),
+                map_center=map_center,
+                map_zoom=10.0 if map_center else None,
+            )
+        if kind == "location":
+            return LocationRequest.from_candidates(
+                list(s.location_candidates or []),
+                prompt="Please confirm the location to continue.",
+                location_query=s.location_query or None,
+            )
+        raise ValueError(f"Unsupported input kind: {kind!r}")
+
+    def missing_user_inputs(
+        self,
+        plan: ToolPlan,
+        s: GraphStateModel,
+        ctx: LocationContext,
+    ) -> dict[InputKind, UserInputRequest]:
+        """Required user inputs for tools in ``plan`` that are not yet on state."""
+        specs = self.tool_specs()
+        missing: dict[InputKind, UserInputRequest] = {}
+        for step in plan.tool_steps:
+            spec = specs.get(step.tool_name)
+            if spec is None:
+                continue
+            for kind in spec.required_user_inputs:
+                if kind in missing:
+                    continue
+                if self.user_input_satisfied(kind, s):
+                    continue
+                missing[kind] = self.build_user_input_request(kind, s, ctx)
+        return missing
+
     @abstractmethod
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]: ...
 
@@ -94,13 +182,12 @@ class ToolPlanDomainNode(DomainNode):
         s: GraphStateModel,
         _ctx: LocationContext,
     ) -> dict[str, dict[str, Any]]:
-        query = ((s.user_query or s.query) or "").strip() or None
-        return {
-
-        }
+        return {}
 
     async def select_tool_plan(self, query: str) -> ToolPlan:
-        return await ToolPlanner(domain=self.domain_name, allowed_tools=self.resolved_tools()).select_tool_plan(query)
+        return await ToolPlanner(
+            domain=self.domain_name, allowed_tools=self.resolved_tools()
+        ).select_tool_plan(query)
 
     async def execute_tool_plan(
         self,
@@ -119,6 +206,34 @@ class ToolPlanDomainNode(DomainNode):
     def missing_location_message(self) -> str:
         return f"Missing resolved lat/lon; {self.domain_name} tools not called."
 
+    def _pause_for_user_inputs(
+        self,
+        s: GraphStateModel,
+        ctx: LocationContext,
+        plan: ToolPlan,
+        missing: dict[InputKind, UserInputRequest],
+    ) -> GraphState:
+        needs_input = UserInputRouter.requests_to_dict(missing)
+        prompt_parts = [req.llm_text() for req in missing.values()]
+        prompt = " ".join(prompt_parts) if prompt_parts else (
+            "Please provide the requested input to continue."
+        )
+        s.needs_input = needs_input
+        s.stopped_for_user_input = True
+        s.final_answer = prompt
+        s.answer_source = "domain_tools"
+        out = dump_state(s)
+        out["domain_results"] = {
+            self.domain_name: {
+                "status": "paused",
+                "resolved_location": ctx.resolved,
+                "plan": plan.model_dump(mode="python"),
+                "message": prompt,
+                "error": False,
+            }
+        }
+        return out
+
     async def execute(self, s: GraphStateModel) -> GraphState:
         ctx = LocationContext.from_state(s)
         if self.requires_location and not ctx.has_coordinates:
@@ -133,6 +248,9 @@ class ToolPlanDomainNode(DomainNode):
         }
         try:
             plan = await self.select_tool_plan(s.query)
+            missing = self.missing_user_inputs(plan, s, ctx)
+            if missing:
+                return self._pause_for_user_inputs(s, ctx, plan, missing)
             execution = await self.execute_tool_plan(
                 plan=plan,
                 runtime_args_by_tool=runtime_args,
@@ -194,5 +312,3 @@ class ToolPlanDomainNode(DomainNode):
             "executions": [step.model_dump(mode="python") for step in execution.steps],
             "summary": execution.summary.model_dump(mode="python"),
         }
-
-

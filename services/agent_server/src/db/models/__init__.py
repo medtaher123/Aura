@@ -4,8 +4,22 @@ Importing this package registers all mapped classes on ``Base.metadata`` for
 Alembic autogenerate.
 """
 
-from .message import Message
+from .message import (
+    AssistantMessage,
+    InputRequestMessage,
+    InputResponseMessage,
+    Message,
+    UserMessage,
+)
 from .conversation import Conversation
 from .user import User
 
-__all__ = ["User", "Conversation", "Message"]
+__all__ = [
+    "User",
+    "Conversation",
+    "Message",
+    "UserMessage",
+    "AssistantMessage",
+    "InputRequestMessage",
+    "InputResponseMessage",
+]

@@ -14,6 +14,8 @@ from pydantic import (
     model_validator,
 )
 
+from src.schemas.spatial import BoundingBox
+
 
 AnswerSource = Literal["domain_tools", "web_search", "hybrid"]
 NextStep = Literal[
@@ -24,7 +26,7 @@ NextStep = Literal[
     "web_search",
     "finalize",
 ]
-DomainStatus = Literal["done", "error", "skipped"]
+DomainStatus = Literal["done", "error", "skipped", "paused"]
 
 
 class ResolvedLocation(TypedDict, total=False):
@@ -48,14 +50,15 @@ class GraphState(TypedDict, total=False):
     document_ref: dict[str, Any]
     document_context: dict[str, Any]
 
-    # Location gate (after orchestrator, before router)
+    # Location / user-input gate (after orchestrator, before router)
     location_query: str
     location_candidates: list[dict[str, Any]]
-    needs_location_confirmation: bool
+    needs_input: dict[str, Any]
     confirmed_location_index: int
     resolved_location: ResolvedLocation
-    # Set when graph stops for user to pick a candidate (client resumes with index)
-    stopped_for_location_confirmation: bool
+    resolved_area: dict[str, Any]
+    # Set when graph stops for required user inputs
+    stopped_for_user_input: bool
 
     # Planning / routing
     intent: str
@@ -152,13 +155,14 @@ class GraphStateModel(BaseModel):
     document_ref: dict[str, Any] = Field(default_factory=dict)
     document_context: dict[str, Any] = Field(default_factory=dict)
 
-    # Location gate (after orchestrator, before router)
+    # Location / user-input gate
     location_query: str = ""
     location_candidates: list[dict[str, Any]] = Field(default_factory=list)
-    needs_location_confirmation: bool = False
+    needs_input: dict[str, Any] = Field(default_factory=dict)
     confirmed_location_index: int | None = None
     resolved_location: ResolvedLocationModel = Field(default_factory=ResolvedLocationModel)
-    stopped_for_location_confirmation: bool = False
+    resolved_area: BoundingBox | None = None
+    stopped_for_user_input: bool = False
 
     # Planning / routing
     intent: str = ""
@@ -193,29 +197,34 @@ class GraphStateModel(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_location_confirmation_state(self) -> "GraphStateModel":
-        if self.needs_location_confirmation and not self.location_candidates:
+    def validate_needs_input_state(self) -> "GraphStateModel":
+        if self.stopped_for_user_input and not self.needs_input:
             raise ValueError(
-                "location_candidates must be non-empty when needs_location_confirmation=True"
+                "needs_input must be non-empty when stopped_for_user_input=True"
             )
+        location_payload = self.needs_input.get("location")
+        if isinstance(location_payload, dict):
+            candidates = location_payload.get("candidates")
+            if candidates is not None and not candidates:
+                raise ValueError(
+                    "needs_input['location'].candidates must be non-empty when present"
+                )
         return self
 
     @computed_field
     @property
     def has_resolved_location(self) -> bool:
-        return (
+        if (
             self.resolved_location.lat is not None
             and self.resolved_location.lon is not None
-        )
+        ):
+            return True
+        return self.resolved_area is not None
 
     @computed_field
     @property
-    def should_pause_for_location(self) -> bool:
-        return (
-            self.needs_location_confirmation
-            and bool(self.location_candidates)
-            and not self.has_resolved_location
-        )
+    def should_pause_for_user_input(self) -> bool:
+        return bool(self.needs_input) and not self.has_resolved_location
 
 
 def validate_state(state: GraphState | dict[str, Any]) -> GraphStateModel:
@@ -228,5 +237,5 @@ def dump_state(state: GraphStateModel | GraphState | dict[str, Any]) -> GraphSta
     model = state if isinstance(state, GraphStateModel) else validate_state(state)
     data = model.model_dump(mode="python")
     data.pop("has_resolved_location", None)
-    data.pop("should_pause_for_location", None)
+    data.pop("should_pause_for_user_input", None)
     return cast(GraphState, data)

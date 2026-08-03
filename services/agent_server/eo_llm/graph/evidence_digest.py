@@ -134,8 +134,12 @@ def _format_execution(tool_name: str, result: dict[str, Any]) -> list[str]:
     if not isinstance(data, dict) or not data:
         return lines
 
+    needs_input = data.get("needs_input")
+    if isinstance(needs_input, dict) and needs_input:
+        lines.append(f"  status: user_input_required kinds={list(needs_input.keys())}")
+        return lines
     if data.get("needs_location_confirmation"):
-        lines.append("  status: location_confirmation_required")
+        lines.append("  status: user_input_required kinds=['location']")
         return lines
 
     data_lines = _summarize_dict(data, indent="  ", depth=0)

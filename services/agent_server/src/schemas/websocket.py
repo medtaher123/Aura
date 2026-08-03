@@ -6,10 +6,57 @@ Defines the message protocol for client-server communication.
 
 from enum import Enum
 import uuid
+from typing import Any as TypingAny
 from typing_extensions import Any, Callable, Literal, Optional, TypedDict
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from src.tools.contracts import ToolArtifacts
+from src.schemas.user_inputs import (
+    BoundingBoxResult,
+    InputKind,
+    LocationOption,
+    LocationResult,
+    get_osm_type_prefix,
+)
+from src.schemas.spatial import BoundingBox
+
+# Re-export for call sites that imported these from websocket.
+OSMType = Literal["relation", "way", "node"]
+OSMPrefixType = Literal["R", "W", "N"]
+
+__all__ = [
+    "AgentStage",
+    "BoundingBox",
+    "BoundingBoxResult",
+    "CancelMessage",
+    "ChatMessage",
+    "ChatRequestMessage",
+    "ChatResumeMessage",
+    "ClientMessage",
+    "ClientMessageType",
+    "CompleteMessage",
+    "ConnectionAckMessage",
+    "ConversationTitleMessage",
+    "Coordinates",
+    "ErrorMessage",
+    "InputKind",
+    "LocationOption",
+    "LocationResult",
+    "OSMPrefixType",
+    "OSMType",
+    "OrchestratorInputs",
+    "OrchestratorTrace",
+    "ResumeState",
+    "ServerMessage",
+    "ServerMessageType",
+    "StatusMessage",
+    "ThinkingMessage",
+    "TokenMessage",
+    "ToolResultMessage",
+    "ToolStartMessage",
+    "UserInputRequestMessage",
+    "get_osm_type_prefix",
+]
 
 
 # =============================================================================
@@ -34,7 +81,7 @@ class ServerMessageType(str, Enum):
     THINKING = "thinking"
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
-    LOCATION_CONFIRMATION = "location_confirmation"
+    USER_INPUT_REQUEST = "user_input_request"
     CONVERSATION_TITLE = "conversation_title"
     COMPLETE = "complete"
     ERROR = "error"
@@ -100,36 +147,6 @@ class Coordinates(BaseModel):
     lon: float = Field(..., description="Longitude")
 
 
-OSMType = Literal["relation", "way", "node"]
-# mapper from OSMType to its first letter capitalized
-OSMPrefixType = Literal["R", "W", "N"]
-
-
-def get_osm_type_prefix(osm_type: OSMType) -> Optional[OSMPrefixType]:
-    match osm_type:
-        case "relation":
-            return "R"
-        case "way":
-            return "W"
-        case "node":
-            return "N"
-        case _:
-            return None
-
-
-class LocationOption(BaseModel):
-    """A location option for disambiguation."""
-
-    name: str = Field(..., description="Location display name")
-    coordinates: list[float] = Field(..., description="[lat, lon] coordinates")
-    place_id: Optional[int] = Field(default=None, description="Place ID")
-    osm_id: Optional[int] = Field(default=None, description="OSM ID")
-    osm_type: Optional[OSMType] = Field(default=None, description="OSM type")
-    osm_type_prefix: Optional[OSMPrefixType] = Field(
-        default=None, description="OSM type prefix"
-    )
-
-
 # =============================================================================
 # Client -> Server Messages
 # =============================================================================
@@ -163,7 +180,7 @@ class ChatRequestMessage(BaseModel):
 
 
 class ChatResumeMessage(BaseModel):
-    """Client request to resume after location confirmation.
+    """Client request to resume after collecting required user inputs.
 
     The client only references the conversation; the paused agent state is
     retrieved server-side from the conversation rather than round-tripped
@@ -171,12 +188,29 @@ class ChatResumeMessage(BaseModel):
     """
 
     type: str = Field(default=ClientMessageType.CHAT_RESUME.value)
-    confirmed_location: LocationOption = Field(
-        ..., description="The location the user confirmed"
-    )
     conversation_id: uuid.UUID = Field(
         ..., description="Conversation whose paused state should be resumed"
     )
+    user_inputs: dict[str, TypingAny] = Field(
+        default_factory=dict,
+        description="kind → TResult map answering needs_input keys",
+    )
+    # Accepted for older clients; copied into user_inputs["location"].
+    confirmed_location: Optional[LocationResult] = Field(
+        default=None,
+        description="Deprecated: use user_inputs['location'] instead",
+    )
+
+    @model_validator(mode="after")
+    def merge_confirmed_location_into_user_inputs(self) -> "ChatResumeMessage":
+        if self.confirmed_location is not None and "location" not in self.user_inputs:
+            self.user_inputs = {
+                **self.user_inputs,
+                "location": self.confirmed_location.to_dict(),
+            }
+        if not self.user_inputs:
+            raise ValueError("user_inputs must be non-empty (or provide confirmed_location)")
+        return self
 
 
 class CancelMessage(BaseModel):
@@ -249,15 +283,16 @@ class ToolResultMessage(BaseModel):
     )
 
 
-class LocationConfirmationMessage(BaseModel):
-    """Request for user to confirm ambiguous location."""
+class UserInputRequestMessage(BaseModel):
+    """Request for the client to collect one or more user inputs."""
 
-    type: str = Field(default=ServerMessageType.LOCATION_CONFIRMATION.value)
-    options: list[LocationOption] = Field(
-        ..., description="Location options for user to choose from"
+    type: str = Field(default=ServerMessageType.USER_INPUT_REQUEST.value)
+    needs_input: dict[str, TypingAny] = Field(
+        ...,
+        description="kind → TRequest map; non-empty means the agent is paused",
     )
     pause_state: dict[str, Any] = Field(
-        ..., description="Serialized agent state to resume after confirmation"
+        ..., description="Opaque pause reference (conversation_id)"
     )
 
 
@@ -300,7 +335,6 @@ class ErrorMessage(BaseModel):
 # Union Types for Parsing
 # =============================================================================
 
-# Type alias for any server message
 ServerMessage = (
     ConnectionAckMessage
     | TokenMessage
@@ -308,11 +342,10 @@ ServerMessage = (
     | ThinkingMessage
     | ToolStartMessage
     | ToolResultMessage
-    | LocationConfirmationMessage
+    | UserInputRequestMessage
     | ConversationTitleMessage
     | CompleteMessage
     | ErrorMessage
 )
 
-# Type alias for any client message
 ClientMessage = ChatRequestMessage | ChatResumeMessage | CancelMessage

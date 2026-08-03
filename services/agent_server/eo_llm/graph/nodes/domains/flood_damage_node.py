@@ -4,17 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import DomainTool, ToolPlanDomainNode
 from eo_llm.graph.nodes.helpers import LocationContext
 
 
 class FloodDamageNode(ToolPlanDomainNode):
     domain_name = "flood_damage"
-    status_message = "Analyzing flood damage..."
+    status_message = "Analyzing floods..."
     tools = [
         #"get_terrazard_available_dates_tool",
         "get_terrazard_flood_briefing_tool",
-        "get_terrazard_flood_damage_tool",
+        DomainTool(
+            "get_terrazard_flood_damage_tool",
+            required_user_inputs=("bounding_box",),
+        ),
         "get_terrazard_hazard_map_tool",
         "geoserver_risk_mask_tool",
         "flood_damage_city_tool",
@@ -39,9 +42,7 @@ class FloodDamageNode(ToolPlanDomainNode):
                 "lon": lon,
             },
             "get_terrazard_flood_damage_tool": {
-                "location": ctx.display_name or None,
-                "lat": lat,
-                "lon": lon,
+                "bbox": ctx.bbox_list,
             },
             "geoserver_risk_mask_tool": {
                 "risk_type": "flood",

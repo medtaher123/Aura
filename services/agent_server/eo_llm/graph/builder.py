@@ -26,6 +26,7 @@ from eo_llm.graph.transitions.orchestrator_transitions import (
 from eo_llm.graph.transitions.router_transitions import choose_after_router
 from eo_llm.graph.transitions.location_transitions import choose_after_location_gate
 from eo_llm.graph.transitions.aggregator_transitions import choose_after_aggregator
+from eo_llm.graph.transitions.domain_transitions import choose_after_domain
 
 
 def build_graph():
@@ -79,14 +80,22 @@ def build_graph():
         },
     )
 
-    # Each domain node connects directly to aggregator, except tools_info which
-    # returns a formatted catalog verbatim and skips aggregation/LLM compose.
-    graph.add_edge("flood_damage", "aggregator")
-    graph.add_edge("fire_detection", "aggregator")
-    graph.add_edge("disaster_detection", "aggregator")
-    graph.add_edge("document_qa", "aggregator")
-    graph.add_edge("infrastructure", "aggregator")
-    graph.add_edge("stac", "aggregator")
+    # Tool-plan domains may pause for user input; otherwise continue to aggregator.
+    # tools_info returns a formatted catalog and skips aggregation/LLM compose.
+    _domain_pause_targets = {"aggregator": "aggregator", "end": END}
+    for _domain in (
+        "flood_damage",
+        "fire_detection",
+        "disaster_detection",
+        "document_qa",
+        "infrastructure",
+        "stac",
+    ):
+        graph.add_conditional_edges(
+            _domain,
+            choose_after_domain,
+            _domain_pause_targets,
+        )
     graph.add_edge("tools_info", "finalizer")
 
     graph.add_edge("web_search", "aggregator")

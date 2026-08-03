@@ -84,7 +84,7 @@ class ConversationService:
         self,
         user: User,
         conversation_id: uuid.UUID,
-        messages: Sequence[dict],
+        messages: Sequence[Message | dict],
         *,
         commit: bool = True,
     ) -> bool:

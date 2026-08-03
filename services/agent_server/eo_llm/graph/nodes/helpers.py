@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from eo_llm.graph.state import GraphState, GraphStateModel
+from src.schemas.spatial import BoundingBox
 
 
 @dataclass(frozen=True)
@@ -17,23 +18,36 @@ class LocationContext:
     lon: float | None
     display_name: str
     country_name: str
+    resolved_area: BoundingBox | None = None
 
     @classmethod
     def from_state(cls, s: GraphStateModel) -> LocationContext:
         resolved = s.resolved_location.model_dump(mode="python", exclude_none=True)
         display_name = s.resolved_location.display_name or ""
         country_name = display_name.split(",")[-1].strip() if display_name else ""
+        area = s.resolved_area
+        lat = s.resolved_location.lat
+        lon = s.resolved_location.lon
+        if (lat is None or lon is None) and area is not None:
+            lat, lon = area.centroid()
         return cls(
             resolved=resolved,
-            lat=s.resolved_location.lat,
-            lon=s.resolved_location.lon,
+            lat=lat,
+            lon=lon,
             display_name=display_name,
             country_name=country_name,
+            resolved_area=area,
         )
 
     @property
     def has_coordinates(self) -> bool:
         return self.lat is not None and self.lon is not None
+
+    @property
+    def bbox_list(self) -> list[float] | None:
+        if self.resolved_area is None:
+            return None
+        return self.resolved_area.as_list()
 
 
 def domain_result_as_dict(result: Any) -> dict[str, Any]:

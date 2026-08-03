@@ -296,11 +296,97 @@ def _resolve_country_name(country: str, iso_map: Dict[str, str]) -> Optional[str
     return iso_map.get(normalized) or country.strip()
 
 
+def compute_unit_damage_eur(
+    *,
+    country: str,
+    depth_m: float,
+    asset_class: str,
+    continent: str | None = "europe",
+    year: int | None = None,
+    basis: str | None = None,
+) -> dict[str, Any]:
+    """Return depth-damage EUR per m² (or EUR/ha for agriculture) for one asset class.
+
+    Used by the TerraZard flood-damage pipeline after BDTOPO footprints are
+    clipped onto exclusive depth-band polygons:
+    ``total_eur = estimated_damage * area_m2`` (or hectares for agriculture).
+    """
+    asset_key = _normalize_asset_class(asset_class)
+    if not asset_key:
+        raise ValueError(f"Unsupported asset class '{asset_class}'.")
+
+    resolved_year = _resolve_year(year)
+    multiplier = GLOBAL_MULTIPLIER.get(resolved_year)
+    if multiplier is None:
+        raise ValueError(
+            f"Unsupported year {resolved_year}. "
+            f"Use a year between {min(GLOBAL_MULTIPLIER)} and {max(GLOBAL_MULTIPLIER)}."
+        )
+
+    dataset = _load_dataset()
+    curves = dataset["curves"]
+    iso_map = dataset["iso_map"]
+    max_damage = dataset["max_damage"]
+
+    curve_set = curves.get(asset_key, {})
+    if not curve_set:
+        raise ValueError(f"No damage curves found for asset class '{asset_class}'.")
+
+    cont_key = _normalize_continent(continent) if continent else None
+    curve = curve_set.get(cont_key or "global") or curve_set.get("global")
+    if not curve:
+        raise ValueError(
+            f"No damage curve available for {asset_class} in {continent or 'global'}."
+        )
+
+    fractional_damage = _interpolate_damage(float(depth_m), curve)
+    resolved_country = _resolve_country_name(country, iso_map) or country.strip()
+    max_table = max_damage.get(asset_key, {})
+    max_values = max_table.get(_normalize_country(resolved_country))
+    if not max_values:
+        raise ValueError(
+            f"No max damage values found for {resolved_country} ({asset_class})."
+        )
+
+    basis_key = BASIS_ALIASES.get(_normalize_text(basis)) if basis else None
+    if asset_key in {"residential", "commercial", "industrial"}:
+        basis_used = basis_key or "building_total"
+        max_value = max_values.get(basis_used)
+        unit = "EUR/m2"
+    elif asset_key == "agriculture":
+        basis_used = "per_hectare"
+        max_value = max_values.get("value_per_hectare")
+        unit = "EUR/ha"
+    else:
+        basis_used = "per_m2"
+        max_value = max_values.get("max_damage")
+        unit = "EUR/m2"
+
+    if max_value is None:
+        raise ValueError("Max damage value is missing for the selected basis.")
+
+    adjusted_max_value = max_value * multiplier
+    estimated_damage = fractional_damage * adjusted_max_value
+    return {
+        "asset_class": asset_key,
+        "continent": cont_key or "global",
+        "depth_m": float(depth_m),
+        "fractional_damage": fractional_damage,
+        "basis": basis_used,
+        "adjusted_max_damage_value": adjusted_max_value,
+        "estimated_damage": estimated_damage,
+        "unit": unit,
+        "country": resolved_country,
+        "year": resolved_year,
+        "multiplier": multiplier,
+    }
+
+
 @mcp.tool()
 def flood_depth_damage_tool(
     country: str,
     depth_m: float,
-    asset_class: Optional[str] = None,
+    asset_class: str,
     building_type: Optional[str] = None,
     continent: Optional[str] = None,
     basis: Optional[str] = None,

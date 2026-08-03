@@ -26,13 +26,20 @@ from src.schemas.websocket import (
     CompleteMessage,
     ConnectionAckMessage,
     ErrorMessage,
-    LocationConfirmationMessage,
-    LocationOption,
+    LocationResult,
     StatusMessage,
     TokenMessage,
     ToolResultMessage,
     ToolStartMessage,
-    get_osm_type_prefix,
+)
+from src.schemas.user_inputs import (
+    BoundingBoxResult,
+    UserInputRouter,
+)
+from src.db.models.message import (
+    AssistantMessage,
+    Message,
+    UserMessage,
 )
 from ..auth import AuthConfigurationError, AuthError
 from ..config import get_config
@@ -282,7 +289,7 @@ def _patch_resume_state_with_confirmed_location(
     *,
     pause_state: dict[str, Any],
     resume_state: dict[str, Any],
-    confirmed_location: LocationOption,
+    confirmed_location: LocationResult,
 ) -> tuple[dict[str, str], str | None]:
     """
     Add confirmed location mapping and patch resume_state["next_input"] safely.
@@ -339,6 +346,55 @@ def _patch_resume_state_with_confirmed_location(
     return confirmed_locations, patch_field
 
 
+async def _send_user_input_pause(
+    *,
+    conn: WebSocketConnection,
+    conversations: ConversationService,
+    user: User,
+    conversation_id: uuid.UUID,
+    data: dict[str, Any],
+    detected_lang: str,
+    title_user_message: str,
+    conversation_title_pending: bool = False,
+    user_message_persisted: bool = False,
+) -> None:
+    """Persist pause state and notify the client of required user inputs."""
+    pending = UserInputRouter.pending_from_tool_data(data)
+    needs_input = UserInputRouter.requests_to_dict(pending)
+    pause_state = data.get("pause", {})
+    if not isinstance(pause_state, dict):
+        pause_state = {}
+    # Carry resume_patch / location_query from tool data when present.
+    for key in ("resume_patch", "location_query", "tool_input"):
+        if key in data and key not in pause_state:
+            pause_state[key] = data[key]
+    pause_state["detected_lang"] = detected_lang
+    pause_state["conversation_id"] = str(conversation_id)
+    pause_state["conversation_title_pending"] = conversation_title_pending
+    pause_state["title_user_message"] = title_user_message
+    pause_state["needs_input"] = needs_input
+
+    history_messages: list[Message] = []
+    if not user_message_persisted and title_user_message:
+        history_messages.append(UserMessage.create(title_user_message))
+        user_message_persisted = True
+    if pending:
+        history_messages.append(UserInputRouter.to_request_message(pending))
+    if history_messages:
+        await conversations.append_messages(
+            user, conversation_id, history_messages, commit=False
+        )
+    pause_state["user_message_persisted"] = user_message_persisted
+
+    logger.info(
+        f"User input required - kinds={list(needs_input.keys())}"
+    )
+    await conversations.set_pause_state(user, conversation_id, pause_state)
+    await conn.send_user_input_request(
+        needs_input,
+        {"conversation_id": str(conversation_id)},
+    )
+
 async def handle_chat_request(
     conn: WebSocketConnection,
     message: ChatRequestMessage,
@@ -384,10 +440,7 @@ async def handle_chat_request(
                 logger.debug(f"Translated from {detected_lang} to English")
 
         chat_history = normalize_chat_messages(
-            [
-                {"role": m.role, "content": m.content}
-                for m in conversation_context.messages
-            ]
+            [m.to_llm_dict() for m in conversation_context.messages]
         )
 
         # Create stream callback for real-time updates
@@ -447,43 +500,19 @@ async def handle_chat_request(
         # Process result
         tool_response = coerce_tool_response(result)
 
-        # Check if location confirmation is needed
+        # Check if user input is needed
         data = tool_response.data or {}
-        if data.get("needs_location_confirmation"):
-            # Tools return 'candidates', not 'location_options'
-            options_raw = data.get("candidates", data.get("location_options", []))
-
-            options = [
-                LocationOption(
-                    name=opt.get("display_name", opt.get("name", "Unknown")),
-                    coordinates=[opt.get("lat", 0), opt.get("lon", 0)],
-                    place_id=opt.get("place_id") or None,
-                    osm_id=opt.get("osm_id") or None,
-                    osm_type=opt.get("osm_type") or None,
-                    osm_type_prefix=get_osm_type_prefix(opt.get("osm_type", "")),
-                )
-                for opt in options_raw
-                if isinstance(opt, dict)
-            ]
-            pause_state = data.get("pause", {})
-            pause_state["detected_lang"] = detected_lang
-            pause_state["conversation_id"] = str(conversation_context.conversation.id)
-            pause_state["conversation_title_pending"] = conversation_context.created
-            pause_state["title_user_message"] = english_message
-            logger.info(
-                f"Location confirmation required - {len(options)} options provided"
-            )
-            logger.debug(
-                f"Pause state keys: {list(pause_state.keys())}, has_resume_state: {'resume_state' in pause_state}, has_orchestrator_trace: {'orchestrator_trace' in pause_state}"
-            )
-            # Persist the paused state server-side so the client only needs to
-            # reference the conversation id when resuming.
-            await conversations.set_pause_state(
-                user, conversation_context.conversation.id, pause_state
-            )
-            await conn.send_location_confirmation(
-                options,
-                {"conversation_id": str(conversation_context.conversation.id)},
+        if UserInputRouter.pending_from_tool_data(data):
+            await _send_user_input_pause(
+                conn=conn,
+                conversations=conversations,
+                user=user,
+                conversation_id=conversation_context.conversation.id,
+                data=data,
+                detected_lang=detected_lang,
+                title_user_message=english_message,
+                conversation_title_pending=conversation_context.created,
+                user_message_persisted=False,
             )
             return
 
@@ -497,12 +526,11 @@ async def handle_chat_request(
             user,
             conversation_context.conversation.id,
             [
-                {"role": "user", "content": english_message},
-                {
-                    "role": "assistant",
-                    "content": tool_response.message,
-                    "metadata": _assistant_message_metadata(tool_response),
-                },
+                UserMessage.create(english_message),
+                AssistantMessage.create(
+                    tool_response.message,
+                    metadata=_assistant_message_metadata(tool_response),
+                ),
             ],
         )
 
@@ -539,11 +567,13 @@ async def handle_chat_resume(
     conversations: ConversationService,
 ) -> None:
     """
-    Handle a chat resume request after location confirmation.
+    Handle a chat resume request after collecting required user inputs.
     """
     try:
+        parsed_inputs = UserInputRouter.results_from_dict(message.user_inputs)
         logger.info(
-            f"Chat resume received - location: {message.confirmed_location.name}, conversation_id: {message.conversation_id}"
+            f"Chat resume received - kinds={list(parsed_inputs.keys())}, "
+            f"conversation_id: {message.conversation_id}"
         )
 
         # Retrieve the paused agent state server-side; the client only references
@@ -565,17 +595,23 @@ async def handle_chat_resume(
             )
             return
 
+        if parsed_inputs:
+            await conversations.append_messages(
+                user,
+                conversation_id,
+                [UserInputRouter.to_response_message(parsed_inputs)],
+            )
+
         await conn.send_status(
-            AgentStage.PLANNING, "Resuming with confirmed location..."
+            AgentStage.PLANNING, "Resuming with provided user input..."
         )
         conn.begin_streaming_response()
 
-        # Extract resume information from the persisted pause state.
-        confirmed_location = message.confirmed_location
         title_pending = bool(pause_state.get("conversation_title_pending"))
         title_user_message = pause_state.get("title_user_message") or pause_state.get(
             "user_text", ""
         )
+        user_message_persisted = bool(pause_state.get("user_message_persisted"))
 
         # The graph pipeline stores its full state under "graph_state"; the legacy
         # orchestrator stores a "resume_state". Pick the engine accordingly.
@@ -584,18 +620,28 @@ async def handle_chat_resume(
         graph_state: dict[str, Any] = pause_state.get("graph_state") or {}
         graph_confirmed_index = 0
         resume_payload: dict[str, Any] = {}
+        confirmed_location: LocationResult | None = None
+        if "location" in parsed_inputs:
+            loc = parsed_inputs["location"]
+            assert isinstance(loc, LocationResult)
+            confirmed_location = loc
 
         if use_graph:
-            graph_confirmed_index = graph_runner.match_location_index(
-                graph_state.get("location_candidates") or [],
-                confirmed_location,
-            )
+            candidates = graph_state.get("location_candidates") or []
+            loc_payload = (graph_state.get("needs_input") or {}).get("location")
+            if isinstance(loc_payload, dict) and loc_payload.get("candidates"):
+                candidates = loc_payload["candidates"]
+            if confirmed_location is not None:
+                graph_confirmed_index = graph_runner.match_location_index(
+                    candidates,
+                    confirmed_location,
+                )
             resume_user_text = str(
                 graph_state.get("user_query") or pause_state.get("user_text", "")
             )
             logger.debug(
                 f"Graph resume - confirmed_index: {graph_confirmed_index}, "
-                f"candidates: {len(graph_state.get('location_candidates') or [])}"
+                f"candidates: {len(candidates)}, kinds={list(parsed_inputs.keys())}"
             )
         else:
             # Build resume payload for orchestrator
@@ -612,8 +658,7 @@ async def handle_chat_resume(
                 f"Resume payload constructed - has_resume_state: {bool(resume_payload.get('resume_state'))}, has_orchestrator_trace: {bool(resume_payload.get('orchestrator_trace'))}, user_text: {resume_user_text[:100]}"
             )
 
-            # Add confirmed location to the resume state
-            if resume_payload.get("resume_state"):
+            if confirmed_location is not None and resume_payload.get("resume_state"):
                 logger.debug(f"Resume payload: {json.dumps(resume_payload, indent=2)}")
                 confirmed_locations, patch_field = (
                     _patch_resume_state_with_confirmed_location(
@@ -626,9 +671,30 @@ async def handle_chat_resume(
                 logger.debug(
                     f"Added confirmed location to resume state: {confirmed_locations}, patch_field={patch_field}"
                 )
+            elif confirmed_location is None and "bounding_box" in parsed_inputs:
+                bbox_result = parsed_inputs["bounding_box"]
+                assert isinstance(bbox_result, BoundingBoxResult)
+                # Orchestrator path: inject bbox into next_input when patch field known.
+                resume_state = resume_payload.get("resume_state") or {}
+                resume_patch = pause_state.get("resume_patch", {})
+                patch_field = (
+                    resume_patch.get("field") if isinstance(resume_patch, dict) else None
+                )
+                if patch_field and isinstance(resume_state, dict):
+                    next_input = resume_state.get("next_input")
+                    tool_input = pause_state.get("tool_input")
+                    if isinstance(next_input, dict):
+                        patched = dict(next_input)
+                    elif isinstance(tool_input, dict):
+                        patched = dict(tool_input)
+                    else:
+                        patched = {}
+                    patched[patch_field] = bbox_result.area.as_list()
+                    resume_state["next_input"] = patched
+                    resume_payload["resume_state"] = resume_state
             else:
                 logger.warning(
-                    "Resume state is empty or missing, location confirmation may not work properly"
+                    "Resume state is empty or missing, user input may not apply properly"
                 )
 
         # Create stream wiring for real-time updates
@@ -644,11 +710,18 @@ async def handle_chat_resume(
         else:
             stream_callback = _legacy_stream_callback(conn, event_loop)
 
+        user_inputs_payload = {
+            kind: model.model_dump(mode="python") for kind, model in parsed_inputs.items()
+        }
+
         def run_orchestrator_resume():
             if use_graph:
                 return graph_runner.resume_graph_turn(
                     graph_state=graph_state,
-                    confirmed_index=graph_confirmed_index,
+                    user_inputs=user_inputs_payload,
+                    confirmed_index=graph_confirmed_index
+                    if confirmed_location is not None
+                    else None,
                     stream_emitter=stream_emitter,
                 )
             executor = create_orchestrator_executor()
@@ -683,43 +756,19 @@ async def handle_chat_resume(
         # Retrieve language from pause state before branching
         detected_lang = pause_state.get("detected_lang", "en")
 
-        # Check if another location confirmation is needed
+        # Check if another user input is needed
         data = tool_response.data or {}
-        if data.get("needs_location_confirmation"):
-            # Tools return 'candidates', not 'location_options'
-            options_raw = data.get("candidates", data.get("location_options", []))
-            options = [
-                LocationOption(
-                    name=opt.get("display_name", opt.get("name", "Unknown")),
-                    coordinates=[opt.get("lat", 0), opt.get("lon", 0)],
-                    place_id=opt.get("place_id") or None,
-                    osm_id=opt.get("osm_id") or None,
-                    osm_type=opt.get("osm_type") or None,
-                    osm_type_prefix=get_osm_type_prefix(opt.get("osm_type", "")),
-                )
-                for opt in options_raw
-                if isinstance(opt, dict)
-            ]
-            new_pause_state = data.get("pause", {})
-            new_pause_state["detected_lang"] = detected_lang
-            if conversation_id:
-                new_pause_state["conversation_id"] = str(conversation_id)
-            if title_pending:
-                new_pause_state["conversation_title_pending"] = True
-                new_pause_state["title_user_message"] = title_user_message
-            logger.info(
-                f"Another location confirmation required during resume - {len(options)} options provided"
-            )
-            logger.debug(f"New pause state keys: {list(new_pause_state.keys())}")
-            # Replace the persisted pause state with the new one so the next
-            # resume can reference it by conversation id.
-            if conversation_id:
-                await conversations.set_pause_state(
-                    user, conversation_id, new_pause_state
-                )
-            await conn.send_location_confirmation(
-                options,
-                {"conversation_id": str(conversation_id)} if conversation_id else {},
+        if UserInputRouter.pending_from_tool_data(data):
+            await _send_user_input_pause(
+                conn=conn,
+                conversations=conversations,
+                user=user,
+                conversation_id=conversation_id,
+                data=data,
+                detected_lang=detected_lang,
+                title_user_message=str(title_user_message),
+                conversation_title_pending=title_pending,
+                user_message_persisted=user_message_persisted,
             )
             return
 
@@ -732,17 +781,19 @@ async def handle_chat_resume(
         if conversation_id:
             # The paused turn has been resumed to completion; drop the stored state.
             await conversations.clear_pause_state(user, conversation_id)
+            history_messages: list[Message] = []
+            if not user_message_persisted and resume_user_text:
+                history_messages.append(UserMessage.create(resume_user_text))
+            history_messages.append(
+                AssistantMessage.create(
+                    tool_response.message,
+                    metadata=_assistant_message_metadata(tool_response),
+                )
+            )
             await conversations.append_messages(
                 user,
                 conversation_id,
-                [
-                    {"role": "user", "content": resume_user_text},
-                    {
-                        "role": "assistant",
-                        "content": tool_response.message,
-                        "metadata": _assistant_message_metadata(tool_response),
-                    },
-                ],
+                history_messages,
             )
             if title_pending:
                 await _generate_update_and_send_conversation_title(
@@ -886,7 +937,7 @@ async def websocket_chat(
                     )
                     message = ChatResumeMessage(**data)
                     logger.debug(
-                        f"Processing chat_resume: location={message.confirmed_location.name}"
+                        f"Processing chat_resume: kinds={list((message.user_inputs or {}).keys())}"
                     )
                     conn.reset_cancellation()
                     active_task, keepalive_task = _spawn_request_task(

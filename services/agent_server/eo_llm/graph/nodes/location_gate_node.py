@@ -15,6 +15,7 @@ from eo_llm.graph.state import (
     GraphStateModel,
 )
 from eo_llm.prompts import get_query_location_prompt
+from src.schemas.user_inputs import LocationRequest, UserInputRouter
 
 
 def _candidate_to_resolved(c: dict[str, Any]) -> ResolvedLocationModel:
@@ -47,6 +48,21 @@ def _is_country_candidate(c: dict[str, Any]) -> bool:
     return False
 
 
+def _location_candidates_from_needs_input(s: GraphStateModel) -> list[dict[str, Any]]:
+    payload = s.needs_input.get("location")
+    if isinstance(payload, dict):
+        candidates = payload.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            return [c for c in candidates if isinstance(c, dict)]
+    return list(s.location_candidates)
+
+
+def _clear_user_input_pause(s: GraphStateModel) -> None:
+    s.needs_input = {}
+    s.stopped_for_user_input = False
+    s.confirmed_location_index = None
+
+
 class LocationGateNode(GraphNode):
     node_name = "location_gate"
     status_stage = "planning"
@@ -55,8 +71,8 @@ class LocationGateNode(GraphNode):
     async def run(self, s: GraphStateModel) -> GraphState:
         # Resume: user picked a candidate index (same session state returned by the client).
         idx = s.confirmed_location_index
-        candidates = list(s.location_candidates)
-        resuming = s.needs_location_confirmation
+        candidates = _location_candidates_from_needs_input(s)
+        resuming = bool(s.needs_input.get("location"))
         if (
             resuming
             and isinstance(idx, int)
@@ -65,16 +81,15 @@ class LocationGateNode(GraphNode):
             and idx < len(candidates)
         ):
             s.resolved_location = _candidate_to_resolved(candidates[idx])
-            s.needs_location_confirmation = False
-            s.stopped_for_location_confirmation = False
-            s.confirmed_location_index = None
+            s.location_candidates = candidates
+            _clear_user_input_pause(s)
             s.location_phase = "router"
             return dump_state(s)
 
         # Already resolved earlier in the same run (should not re-geocode).
-        if s.has_resolved_location and not s.needs_location_confirmation:
+        if s.has_resolved_location and not s.needs_input:
             s.location_phase = "router"
-            s.stopped_for_location_confirmation = False
+            s.stopped_for_user_input = False
             return dump_state(s)
 
         # Location source priority:
@@ -87,9 +102,8 @@ class LocationGateNode(GraphNode):
         if not place:
             s.resolved_location = ResolvedLocationModel()
             s.location_candidates = []
-            s.needs_location_confirmation = False
+            _clear_user_input_pause(s)
             s.location_phase = "router"
-            s.stopped_for_location_confirmation = False
             return dump_state(s)
 
         found = await search_location_candidates(place, limit=8)
@@ -97,36 +111,37 @@ class LocationGateNode(GraphNode):
         if not found:
             s.resolved_location = ResolvedLocationModel()
             s.location_candidates = []
-            s.needs_location_confirmation = False
+            _clear_user_input_pause(s)
             s.location_phase = "router"
-            s.stopped_for_location_confirmation = False
             return dump_state(s)
 
         # Skip confirmation when geocoding is unambiguous (single hit).
         if len(found) == 1:
             s.location_candidates = found
             s.resolved_location = _candidate_to_resolved(found[0])
-            s.needs_location_confirmation = False
+            _clear_user_input_pause(s)
             s.location_phase = "router"
-            s.stopped_for_location_confirmation = False
             return dump_state(s)
 
         # Country-level matches should not block user flow with confirmation.
         if all(_is_country_candidate(c) for c in found):
             s.location_candidates = found
             s.resolved_location = _candidate_to_resolved(found[0])
-            s.needs_location_confirmation = False
+            _clear_user_input_pause(s)
             s.location_phase = "router"
-            s.stopped_for_location_confirmation = False
             return dump_state(s)
 
         s.location_candidates = found
         s.resolved_location = ResolvedLocationModel()
-        s.needs_location_confirmation = True
+        location_request = LocationRequest.from_candidates(
+            found,
+            prompt="Several places match your query. Please choose a location.",
+            location_query=place,
+        )
+        s.needs_input = UserInputRouter.requests_to_dict({"location": location_request})
         s.location_phase = "pause"
-        s.stopped_for_location_confirmation = True
+        s.stopped_for_user_input = True
         return dump_state(s)
-
 
     async def _extract_location_hint(self, *, query: str) -> str:
         """Extract a geocodable place from a user query."""
@@ -140,5 +155,6 @@ class LocationGateNode(GraphNode):
             max_tokens=120,
         )
         return response.place_query.strip() if response else ""
+
 
 location_gate_node = LocationGateNode()

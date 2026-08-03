@@ -26,6 +26,8 @@ _BASE_TOOL_PLANNER_RULES: tuple[str, ...] = (
     "Use supported enums exactly (no synonyms).",
     "Prefer practical required_inputs that match runtime data availability.",
     "Prefer tool defaults when reasonable; do not block on optional parameters.",
+    "Prefer domain-specific EO tools first; use web_search_tool as a complement for recent news, public context, or gaps EO tools cannot cover.",
+    "Do not use web_search_tool alone when a domain EO tool can answer the query.",
     "reasoning must be one short first-person sentence from AURA's point of view.",
     "Describe the next action you will take, starting with 'I' (e.g. 'I have to retrieve observed satellite flood data for November 2023.').",
     "Never use bare imperative verbs like 'Retrieve...' or 'Query...' in reasoning.",

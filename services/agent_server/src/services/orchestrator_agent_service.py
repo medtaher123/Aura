@@ -135,9 +135,15 @@ class OrchestratorExecutor:
             )
             data_response: ToolResponse = raw.get("output")
 
-            # If we paused again (multiple ambiguous locations), return immediately.
+            # If we paused again for user input, return immediately.
             if data_response.data:
-                if data_response.data.get("needs_location_confirmation", False):
+                from src.schemas.user_inputs import UserInputRouter
+
+                pending = UserInputRouter.pending_from_tool_data(data_response.data)
+                if pending:
+                    data_response.data["needs_input"] = UserInputRouter.requests_to_dict(
+                        pending
+                    )
                     # check if we have confirmed locations in the resume state
                     confirmed_locations = resume_state.get("confirmed_locations")
                     if confirmed_locations:
@@ -147,7 +153,7 @@ class OrchestratorExecutor:
                     else:
                         logger.debug("No confirmed locations in resume state")
                     logger.info(
-                        "DataAgent paused again during resume - another location confirmation needed"
+                        f"DataAgent paused again during resume - user input required kinds={list(pending.keys())}"
                     )
                     pause_raw = data_response.data.get("pause", {})
                     logger.debug(f"Pause payload keys: {list(pause_raw.keys())}")
@@ -379,11 +385,19 @@ class OrchestratorExecutor:
                 error=False,
             )
 
-        # If DataAgent paused (e.g. location confirmation), return immediately and
+        # If DataAgent paused for user input, return immediately and
         # attach orchestrator metadata so the UI can resume without replanning.
         if data_response.data:
-            if data_response.data.get("needs_location_confirmation", False):
-                logger.info("DataAgent paused - location confirmation needed")
+            from src.schemas.user_inputs import UserInputRouter
+
+            pending = UserInputRouter.pending_from_tool_data(data_response.data)
+            if pending:
+                data_response.data["needs_input"] = UserInputRouter.requests_to_dict(
+                    pending
+                )
+                logger.info(
+                    f"DataAgent paused - user input required kinds={list(pending.keys())}"
+                )
                 pause_raw = data_response.data.get("pause")
                 pause: Dict[str, Any] = pause_raw if isinstance(pause_raw, dict) else {}
                 logger.debug(

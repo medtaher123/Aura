@@ -15,7 +15,10 @@ class InfrastructureNode(ToolPlanDomainNode):
         "infrastructure_query_tool",
         "get_route_info",
         "bdtopo_visualize_tool",
-    ]
+        "bdtopo_query_tool",
+        "bdtopo_intersection_tool",
+        "bdtopo_thematic_explain_tool"
+    ] # type: ignore[assignment]
 
     @property
     def missing_location_message(self) -> str:
@@ -34,6 +37,35 @@ class InfrastructureNode(ToolPlanDomainNode):
             "get_route_info": {},
             "bdtopo_visualize_tool": {
                 "input_mode": "place_name" if ctx.display_name else "point",
+                "lat": lat,
+                "lon": lon,
+                "place_name": ctx.display_name or None,
+                "radius_m": 3000,
+                "themes": ["buildings", "transport", "activity_zones"],
+            },
+            "bdtopo_query_tool": {
+                "lat": lat,
+                "lon": lon,
+                "place_name": ctx.display_name or None,
+                "radius_m": 3000,
+                "themes": ["buildings", "transport", "activity_zones"],
+            },
+            "bdtopo_intersection_tool": {
+                "lat": lat,
+                "lon": lon,
+                "place_name": ctx.display_name or None,
+                "radius_m": 3000,
+                "themes": ["buildings", "transport", "activity_zones"],
+            },
+            "bdtopo_visualize_tool": {
+                "input_mode": "place_name" if ctx.display_name else "point",
+                "lat": lat,
+                "lon": lon,
+                "place_name": ctx.display_name or None,
+                "radius_m": 3000,
+                "themes": ["buildings", "transport", "activity_zones"],
+            },
+            "bdtopo_thematic_explain_tool": {
                 "lat": lat,
                 "lon": lon,
                 "place_name": ctx.display_name or None,

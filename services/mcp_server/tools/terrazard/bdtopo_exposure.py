@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -11,10 +12,11 @@ from typing import Any
 import numpy as np
 import psycopg.sql
 from rasterio import features as rio_features
+from rasterio import windows as rio_windows
 from rasterio.warp import transform_bounds, transform_geom
+from shapely.geometry import mapping, shape
 
 from tools.bdtopo_common import normalize_rows, run_query
-from tools.terrazard.depth_bands import DepthBand
 from tools.terrazard.depth_raster import DepthRaster
 
 # Cap GeoJSON of flood-touched buildings returned in the tool payload.
@@ -22,6 +24,8 @@ _MAX_TOUCHED_BUILDINGS = 500
 # ~2 m simplify in projected CRS; ~2e-5 deg ≈ 2 m at mid-latitudes for EPSG:4326.
 _SIMPLIFY_TOLERANCE_M = 2.0
 _SIMPLIFY_TOLERANCE_DEG = 0.00002
+# Pad feature windows by this many pixels so edges aren't clipped.
+_WINDOW_PAD_PX = 1
 
 
 BDTOPO_USAGE_TO_ASSET: dict[str, str] = {
@@ -237,13 +241,30 @@ def _land_type_sql_filter(
     )
 
 
+def _intersect_bboxes(
+    bbox_a: list[float], bbox_b: list[float]
+) -> list[float] | None:
+    """Intersect two ``[min_lat, max_lat, min_lon, max_lon]`` boxes."""
+    min_lat = max(float(bbox_a[0]), float(bbox_b[0]))
+    max_lat = min(float(bbox_a[1]), float(bbox_b[1]))
+    min_lon = max(float(bbox_a[2]), float(bbox_b[2]))
+    max_lon = min(float(bbox_a[3]), float(bbox_b[3]))
+    if min_lat >= max_lat or min_lon >= max_lon:
+        return None
+    return [min_lat, max_lat, min_lon, max_lon]
+
+
 def _fetch_layer_features(
     resolved: _ResolvedLayer,
     bbox: list[float],
     *,
     feature_id_offset: int,
 ) -> list[BdtopoFeature]:
-    """Fetch AOI-clipped BDTOPO footprints as EPSG:4326 GeoJSON."""
+    """Fetch BDTOPO footprints intersecting the bbox as EPSG:4326 GeoJSON.
+
+    Avoids per-row ``ST_Intersection`` clipping — the depth raster already
+    windows footprints during zonal stats.
+    """
     layer = resolved.layer
     land_type_expr = (
         psycopg.sql.SQL("{alias}.{col}").format(
@@ -267,31 +288,24 @@ def _fetch_layer_features(
                 """
                 WITH aoi AS (
                     SELECT ST_MakeEnvelope(%s, %s, %s, %s, %s) AS geom
-                ),
-                clipped AS (
-                    SELECT
-                        {land_type}::text AS land_type,
-                        ST_SimplifyPreserveTopology(
-                            ST_CollectionExtract(
-                                ST_MakeValid(
-                                    ST_Intersection({alias}.{geom}, aoi.geom)
-                                ),
-                                3
-                            ),
-                            %s
-                        ) AS geom
-                    FROM {schema}.{table} {alias}
-                    CROSS JOIN aoi
-                    WHERE {alias}.{geom} && aoi.geom
-                      AND ST_Intersects({alias}.{geom}, aoi.geom)
-                      {nature_filter}
                 )
                 SELECT
-                    land_type,
-                    ST_AsGeoJSON(ST_Transform(geom, 4326), 6) AS geojson
-                FROM clipped
-                WHERE geom IS NOT NULL
-                  AND NOT ST_IsEmpty(geom)
+                    {land_type}::text AS land_type,
+                    ST_AsGeoJSON(
+                        ST_Transform(
+                            ST_SimplifyPreserveTopology(
+                                ST_MakeValid({alias}.{geom}),
+                                %s
+                            ),
+                            4326
+                        ),
+                        6
+                    ) AS geojson
+                FROM {schema}.{table} {alias}
+                CROSS JOIN aoi
+                WHERE {alias}.{geom} && aoi.geom
+                  AND ST_Intersects({alias}.{geom}, aoi.geom)
+                  {nature_filter}
                 """
             ).format(
                 land_type=land_type_expr,
@@ -329,8 +343,21 @@ def _fetch_layer_features(
 def fetch_bdtopo_features(
     bbox: list[float],
     layers: tuple[ExposureLayer, ...] = EXPOSURE_LAYERS,
+    *,
+    flood_bbox: list[float] | None = None,
 ) -> list[BdtopoFeature]:
-    """Load BDTOPO footprints inside the AOI for depth-raster zonal stats."""
+    """Load BDTOPO footprints for depth-raster zonal stats.
+
+    When ``flood_bbox`` is provided, only footprints intersecting
+    ``bbox ∩ flood_bbox`` are fetched.
+    """
+    query_bbox = bbox
+    if flood_bbox is not None:
+        clipped = _intersect_bboxes(bbox, flood_bbox)
+        if clipped is None:
+            return []
+        query_bbox = clipped
+
     resolved_layers = [
         resolved
         for layer in layers
@@ -341,7 +368,7 @@ def fetch_bdtopo_features(
     for resolved in resolved_layers:
         layer_features = _fetch_layer_features(
             resolved,
-            bbox,
+            query_bbox,
             feature_id_offset=feature_id_offset,
         )
         features.extend(layer_features)
@@ -356,32 +383,128 @@ class ZonalExposureResult:
     touched_buildings: dict[str, Any]
 
 
+def _feature_wgs84_bounds(
+    geojson: dict[str, Any],
+) -> tuple[float, float, float, float] | None:
+    """Return ``(min_lon, min_lat, max_lon, max_lat)`` for a GeoJSON geometry."""
+    try:
+        bounds = shape(geojson).bounds
+    except Exception:
+        return None
+    if len(bounds) != 4:
+        return None
+    return (float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3]))
+
+
+def _intersects_flood_bbox(
+    feature_bounds: tuple[float, float, float, float],
+    flood_bbox: list[float],
+) -> bool:
+    min_lon, min_lat, max_lon, max_lat = feature_bounds
+    f_min_lat, f_max_lat, f_min_lon, f_max_lon = (float(v) for v in flood_bbox)
+    return not (
+        max_lon < f_min_lon
+        or min_lon > f_max_lon
+        or max_lat < f_min_lat
+        or min_lat > f_max_lat
+    )
+
+
+def _safe_window_intersection(
+    left: rio_windows.Window,
+    right: rio_windows.Window,
+) -> rio_windows.Window | None:
+    """Intersect two windows; return None when they do not overlap.
+
+    rasterio raises ``WindowError`` on empty intersections.
+    """
+    try:
+        inter = left.intersection(right)
+    except rio_windows.WindowError:
+        return None
+    if inter.width <= 0 or inter.height <= 0:
+        return None
+    return inter
+
+
 def _feature_band_areas(
     feature: BdtopoFeature,
     depth_raster: DepthRaster,
+    *,
+    flooded_window: tuple[int, int, int, int] | None,
 ) -> dict[int, float]:
-    """Return band_index → exposed area_m2 for one footprint."""
+    """Return band_index → exposed area_m2 for one footprint.
+
+    Masks only the feature's pixel window (intersected with the flooded pixel
+    window) instead of the full AOI grid.
+    """
     try:
         geom_2154 = transform_geom(
             "EPSG:4326",
             depth_raster.crs.to_string(),
             feature.geojson,
         )
+        geom = shape(geom_2154)
+        if geom.is_empty:
+            return {}
+        minx, miny, maxx, maxy = geom.bounds
     except Exception:
         return {}
 
+    try:
+        feat_window = rio_windows.from_bounds(
+            minx, miny, maxx, maxy, transform=depth_raster.transform
+        )
+    except Exception:
+        return {}
+
+    height, width = depth_raster.out_shape
+    full = rio_windows.Window(0, 0, width, height)
+    feat_window = rio_windows.Window(
+        int(feat_window.col_off) - _WINDOW_PAD_PX,
+        int(feat_window.row_off) - _WINDOW_PAD_PX,
+        int(math.ceil(feat_window.width)) + 2 * _WINDOW_PAD_PX,
+        int(math.ceil(feat_window.height)) + 2 * _WINDOW_PAD_PX,
+    )
+    window = _safe_window_intersection(feat_window, full)
+    if window is None:
+        return {}
+
+    if flooded_window is not None:
+        fr0, fr1, fc0, fc1 = flooded_window
+        flood_win = rio_windows.Window(fc0, fr0, fc1 - fc0 + 1, fr1 - fr0 + 1)
+        window = _safe_window_intersection(window, flood_win)
+        if window is None:
+            return {}
+
+    window = window.round_offsets().round_lengths()
+    row_off = max(int(window.row_off), 0)
+    col_off = max(int(window.col_off), 0)
+    win_h = min(max(int(window.height), 0), height - row_off)
+    win_w = min(max(int(window.width), 0), width - col_off)
+    if win_h <= 0 or win_w <= 0:
+        return {}
+
+    window = rio_windows.Window(col_off, row_off, win_w, win_h)
+    band_sub = depth_raster.band_index[
+        row_off : row_off + win_h, col_off : col_off + win_w
+    ]
+    if not np.any(band_sub):
+        return {}
+
+    mask_geom = geom_2154 if isinstance(geom_2154, dict) else mapping(geom)
     mask = rio_features.geometry_mask(
-        [geom_2154],
-        out_shape=depth_raster.out_shape,
-        transform=depth_raster.transform,
+        [mask_geom],
+        out_shape=(win_h, win_w),
+        transform=rio_windows.transform(window, depth_raster.transform),
         invert=True,
         all_touched=False,
     )
     if not np.any(mask):
         return {}
 
-    pixels = depth_raster.band_index[mask]
-    flooded = pixels[pixels > 0]
+    flooded = band_sub[mask]
+    flooded = flooded[flooded > 0]
     if flooded.size == 0:
         return {}
 
@@ -404,8 +527,8 @@ def collect_bdtopo_exposure(
 ) -> ZonalExposureResult:
     """Measure BDTOPO exposure by zonal stats on the TerraZard depth raster.
 
-    Returns aggregated ``ExposureSlice`` rows plus a capped FeatureCollection of
-    flood-touched building footprints.
+    Prefilters footprints against the flooded pixel bbox, then runs windowed
+    zonal stats (feature envelope ∩ flood window) instead of full-grid masks.
     """
     bands = depth_raster.depth_bands
     if not bands or not features:
@@ -414,13 +537,32 @@ def collect_bdtopo_exposure(
             touched_buildings=empty_touched_buildings(),
         )
 
-    # key: (source, land_type, asset_class, band_index) → area_m2, feature_ids
+    flooded_window = depth_raster.flooded_pixel_window()
+    if flooded_window is None:
+        return ZonalExposureResult(
+            exposure_slices=[],
+            touched_buildings=empty_touched_buildings(),
+        )
+
+    flood_bbox = depth_raster.flood_bbox_wgs84()
+    candidates = features
+    if flood_bbox is not None:
+        candidates = []
+        for feature in features:
+            bounds = _feature_wgs84_bounds(feature.geojson)
+            if bounds is None or _intersects_flood_bbox(bounds, flood_bbox):
+                candidates.append(feature)
+
     area_buckets: dict[tuple[str, str, str, int], float] = {}
     feature_buckets: dict[tuple[str, str, str, int], set[int]] = {}
     touched: list[tuple[float, BdtopoFeature, dict[int, float]]] = []
 
-    for feature in features:
-        band_areas = _feature_band_areas(feature, depth_raster)
+    for feature in candidates:
+        band_areas = _feature_band_areas(
+            feature,
+            depth_raster,
+            flooded_window=flooded_window,
+        )
         if not band_areas:
             continue
         total_area = sum(band_areas.values())
@@ -454,9 +596,21 @@ def collect_bdtopo_exposure(
     touched.sort(key=lambda item: item[0], reverse=True)
     touched_features: list[dict[str, Any]] = []
     for total_area, feature, band_areas in touched[:max_touched_buildings]:
-        # Deepest intersecting band for tooltip / properties.
         deepest_i = max(band_areas)
         band = bands[deepest_i - 1]
+        band_exposures = []
+        for band_i, area_m2 in sorted(band_areas.items()):
+            if band_i < 1 or band_i > len(bands) or area_m2 <= 0:
+                continue
+            exposure_band = bands[band_i - 1]
+            band_exposures.append(
+                {
+                    "depth_min_m": exposure_band.depth_min_m,
+                    "depth_max_m": exposure_band.depth_max_m,
+                    "representative_depth_m": exposure_band.representative_depth_m,
+                    "area_m2": round(float(area_m2), 1),
+                }
+            )
         touched_features.append(
             {
                 "type": "Feature",
@@ -469,6 +623,7 @@ def collect_bdtopo_exposure(
                     "depth_max_m": band.depth_max_m,
                     "representative_depth_m": band.representative_depth_m,
                     "intersection_area_m2": round(total_area, 1),
+                    "band_exposures": band_exposures,
                 },
             }
         )

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import ChatMessage, GraphResumeRequest, GraphTurnRequest, StreamCallback
+from src.core.event_emitter import EventEmitter
+
+from .models import ChatMessage, GraphResumeRequest, GraphTurnRequest
 from .service import GraphRunnerService
 
 _default_service: GraphRunnerService | None = None
@@ -34,7 +36,7 @@ def run_graph_turn(
     document_ref: dict[str, Any] | None = None,
     place_hint: str | None = None,
     chat_history: list[dict[str, str]] | None = None,
-    stream_callback: StreamCallback | None = None,
+    stream_emitter: EventEmitter | None = None,
 ) -> Any:
     """Run one graph turn and return a ToolResponse for the websocket layer."""
     history = [
@@ -49,7 +51,7 @@ def run_graph_turn(
         document_ref=document_ref or {},
         place_hint=place_hint,
         chat_history=history,
-        stream_callback=stream_callback,
+        stream_emitter=stream_emitter,
     )
     return get_graph_runner_service().run_turn(request)
 
@@ -57,14 +59,16 @@ def run_graph_turn(
 def resume_graph_turn(
     *,
     graph_state: dict[str, Any],
-    confirmed_index: int,
-    stream_callback: StreamCallback | None = None,
+    confirmed_index: int | None = None,
+    user_inputs: dict[str, Any] | None = None,
+    stream_emitter: EventEmitter | None = None,
 ) -> Any:
-    """Resume a paused graph after the user confirmed a location."""
+    """Resume a paused graph after the user provided required inputs."""
     request = GraphResumeRequest(
         graph_state=graph_state,
         confirmed_index=confirmed_index,
-        stream_callback=stream_callback,
+        user_inputs=user_inputs or {},
+        stream_emitter=stream_emitter,
     )
     return get_graph_runner_service().resume_turn(request)
 
@@ -119,7 +123,6 @@ __all__ = [
     "GraphResumeRequest",
     "GraphRunnerService",
     "GraphTurnRequest",
-    "StreamCallback",
     "get_graph_runner_service",
     "match_location_index",
     "resume_graph_turn",

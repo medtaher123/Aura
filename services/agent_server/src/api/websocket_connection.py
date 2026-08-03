@@ -11,12 +11,11 @@ from src.schemas.websocket import (
     ConversationTitleMessage,
     CompleteMessage,
     ErrorMessage,
-    LocationConfirmationMessage,
-    LocationOption,
     StatusMessage,
     ThinkingMessage,
     ToolResultMessage,
     ToolStartMessage,
+    UserInputRequestMessage,
 )
 
 from ..config import get_config
@@ -165,12 +164,12 @@ class WebSocketConnection:
             )
         )
 
-    async def send_location_confirmation(
-        self, options: list[LocationOption], pause_state: dict
+    async def send_user_input_request(
+        self, needs_input: dict[str, Any], pause_state: dict
     ) -> None:
-        """Send location confirmation request."""
+        """Send a request for one or more user inputs (kind → TRequest map)."""
         await self.send(
-            LocationConfirmationMessage(options=options, pause_state=pause_state)
+            UserInputRequestMessage(needs_input=needs_input, pause_state=pause_state)
         )
 
     async def send_conversation_title(
