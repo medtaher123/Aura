@@ -22,13 +22,16 @@ class HazardDepthPolygon:
 
 @dataclass(frozen=True)
 class DepthBand:
-    """Exclusive depth interval metadata used in damage aggregation."""
+    """Exclusive depth interval used in damage aggregation.
+
+    Geometries are no longer materialised as difference rings; flooded area is
+    filled from the TerraZard depth raster.
+    """
 
     depth_min_m: float
     depth_max_m: float
     representative_depth_m: float
-    flooded_area_m2: float
-    geojson: dict[str, Any]
+    flooded_area_m2: float = 0.0
 
 
 _HAZARD_POLYGONS_QUERY = """
@@ -85,7 +88,7 @@ def build_depth_band_defs(depth_mins: list[float]) -> list[DepthBand]:
 
     TerraZard polygons nest by ``depth_min`` (deeper thresholds sit inside
     shallower ones). Exclusive bands are consecutive intervals between sorted
-    unique thresholds; flooded areas are filled later by the raster engine.
+    unique thresholds; flooded areas are filled later by the depth raster.
     """
     unique = sorted({round(float(value), 6) for value in depth_mins})
     if not unique:
@@ -103,7 +106,6 @@ def build_depth_band_defs(depth_mins: list[float]) -> list[DepthBand]:
                 depth_max_m=depth_max,
                 representative_depth_m=representative,
                 flooded_area_m2=0.0,
-                geojson={},
             )
         )
     return bands
@@ -117,9 +119,9 @@ def fetch_hazard_depth_polygons(
 ) -> list[HazardDepthPolygon]:
     """Fetch nested hazard polygons as GeoJSON (EPSG:4326) inside the AOI.
 
-    Lightweight spatial filter only — no ``ST_Difference`` / ``ST_Intersection``
-    band construction. Exclusive depth bands are derived later via raster
-    map algebra (pixel-wise maximum nested ``depth_min``).
+    Lightweight spatial filter only — no ``ST_Difference``. Exclusive depth
+    bands are derived later via raster map algebra (pixel-wise maximum nested
+    ``depth_min``).
     """
     params = {
         "observation_date": observation_date,
@@ -138,22 +140,3 @@ def fetch_hazard_depth_polygons(
             continue
         polygons.append(HazardDepthPolygon(depth_min_m=depth_min, geojson=geometry))
     return polygons
-
-
-def fetch_exclusive_depth_bands(
-    *,
-    observation_date: str,
-    model_id: str,
-    bbox: list[float],
-) -> list[DepthBand]:
-    """Return exclusive depth-band definitions for the AOI (no ring geometries).
-
-    Kept for debug tooling and callers that only need band thresholds. Flooded
-    areas remain zero here; use the raster damage pipeline for area stats.
-    """
-    polygons = fetch_hazard_depth_polygons(
-        observation_date=observation_date,
-        model_id=model_id,
-        bbox=bbox,
-    )
-    return build_depth_band_defs([poly.depth_min_m for poly in polygons])

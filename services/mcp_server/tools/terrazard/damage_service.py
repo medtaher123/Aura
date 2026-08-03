@@ -1,4 +1,4 @@
-"""Estimate flood damage from TerraZard masks clipped with BDTOPO land use."""
+"""Estimate flood damage from TerraZard depth rasters and BDTOPO footprints."""
 
 from __future__ import annotations
 
@@ -7,10 +7,14 @@ from typing import Any
 
 from tools.bdtopo_common import resolve_database_url
 from tools.flood_depth_damage import _resolve_year, compute_unit_damage_eur
-from tools.terrazard.bdtopo_exposure import ExposureSlice, fetch_bdtopo_features
+from tools.terrazard.bdtopo_exposure import (
+    ExposureSlice,
+    collect_bdtopo_exposure,
+    fetch_bdtopo_features,
+)
 from tools.terrazard.depth_bands import DepthBand, fetch_hazard_depth_polygons
+from tools.terrazard.depth_raster import build_depth_raster
 from tools.terrazard.errors import TerrazardDataError
-from tools.terrazard.raster_engine import estimate_damage_raster
 from tools.terrazard.repository import HazardMaskRepository
 from tools.terrazard.tile_url_builder import HazardLayerTileBuilder
 
@@ -47,10 +51,11 @@ class FloodDamageEstimate:
     building_count: int
     caveats: list[str]
     message: str
+    touched_buildings: dict[str, Any]
 
 
 class FloodDamageService:
-    """Combine TerraZard depth rasters, BDTOPO exposure, and depth-damage curves."""
+    """Combine TerraZard depth raster, BDTOPO zonal exposure, and damage curves."""
 
     def __init__(self, repository: HazardMaskRepository | None = None) -> None:
         self._repository = repository or HazardMaskRepository()
@@ -92,21 +97,21 @@ class FloodDamageService:
                 "Could not load TerraZard hazard polygons for depth rasterization."
             )
 
-        bdtopo_features = fetch_bdtopo_features(bbox)
-        raster_result = estimate_damage_raster(
-            hazard_polygons=hazard_polygons,
-            features=bdtopo_features,
-            bbox=bbox,
-        )
-        depth_bands = raster_result.depth_bands
+        depth_raster = build_depth_raster(hazard_polygons, bbox)
+        depth_bands = depth_raster.depth_bands
         if not depth_bands:
             raise TerrazardDataError(
                 "Could not derive exclusive depth bands from TerraZard polygons."
             )
 
+        bdtopo_features = fetch_bdtopo_features(bbox)
+        zonal = collect_bdtopo_exposure(depth_raster, bdtopo_features)
+        exposure_slices = zonal.exposure_slices
+        touched_buildings = zonal.touched_buildings
+
         resolved_year = _resolve_year(year)
         breakdown_rows = self._damage_breakdown(
-            raster_result.exposure_rows,
+            exposure_slices,
             country=country,
             year=resolved_year,
             continent=continent,
@@ -114,8 +119,12 @@ class FloodDamageService:
 
         total_damage = sum(row.total_damage_eur for row in breakdown_rows)
         total_exposed_area = sum(row.area_m2 for row in breakdown_rows)
-        total_flooded_area = raster_result.total_flooded_area_m2
-        building_count = raster_result.building_count
+        total_flooded_area = depth_raster.total_flooded_area_m2
+        building_count = sum(
+            row.feature_count
+            for row in breakdown_rows
+            if row.source == "bdtopo_raw.batiment"
+        )
 
         by_asset = self._aggregate_by_asset(breakdown_rows)
         by_depth = self._aggregate_by_depth(breakdown_rows, depth_bands)
@@ -123,12 +132,17 @@ class FloodDamageService:
         caveats = [
             "Permanent water excluded from TerraZard flood polygons",
             (
-                "Damage uses on-the-fly raster map algebra "
-                f"(~{raster_result.resolution_m:.1f} m EPSG:2154 grid) "
-                "over nested TerraZard depth thresholds"
+                f"Flood extent is rasterized at ~{depth_raster.resolution_m:.1f} m "
+                f"with a {depth_raster.flood_buffer_m:.0f} m buffer "
+                "(TerraZard boundaries are approximate)"
             ),
+            "Exposed areas are approximate (pixel-weighted footprint overlap)",
             "Damage uses JRC global depth-damage curves with BDTOPO building usage and vegetation",
             "Vegetation exposure is limited to mapped agricultural land-cover classes",
+            (
+                "touched_buildings lists simplified footprints of buildings "
+                "intersecting flood bands (capped)"
+            ),
         ]
         if total_exposed_area < total_flooded_area * 0.05:
             caveats.append(
@@ -165,6 +179,7 @@ class FloodDamageService:
             building_count=building_count,
             caveats=caveats,
             message=message,
+            touched_buildings=touched_buildings,
         )
 
     def _damage_breakdown(

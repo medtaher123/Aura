@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from tools.terrazard.utils import execute_read_query
@@ -64,6 +65,61 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+_MAP_STATS_QUERY = """
+    SELECT
+        COUNT(*) AS total_polygons,
+        SUM(CASE WHEN class = 1 THEN 1 ELSE 0 END) AS water_count,
+        SUM(CASE WHEN class = -1 THEN 1 ELSE 0 END) AS cloud_count,
+        AVG(ST_Y(ST_Centroid(geometry))) AS avg_lat,
+        AVG(ST_X(ST_Centroid(geometry))) AS avg_lon
+    FROM hazard_masks
+    WHERE observation_date = :observation_date
+      AND model_id = :model_id
+      AND COALESCE(is_permanent, false) = false
+      AND ST_Intersects(
+          geometry,
+          ST_Transform(
+              ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326),
+              ST_SRID(geometry)
+          )
+      );
+"""
+
+
+@lru_cache(maxsize=64)
+def _fetch_map_stats_cached(
+    observation_date: str,
+    model_id: str,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+) -> MapStats:
+    """Cached hazard map stats for identical date / model / bbox arguments."""
+    rows = execute_read_query(
+        _MAP_STATS_QUERY,
+        {
+            "observation_date": observation_date,
+            "model_id": model_id,
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+        },
+    )
+    if not rows:
+        return MapStats(0, 0, 0, None, None)
+
+    row = rows[0]
+    return MapStats(
+        total_polygons=_safe_int(row.get("total_polygons")),
+        water_count=_safe_int(row.get("water_count")),
+        cloud_count=_safe_int(row.get("cloud_count")),
+        avg_lat=_safe_float(row.get("avg_lat")),
+        avg_lon=_safe_float(row.get("avg_lon")),
+    )
+
+
 class HazardMaskRepository:
     """Read-only access to hazard_masks metadata."""
 
@@ -83,25 +139,7 @@ class HazardMaskRepository:
         ORDER BY observation_date ASC;
     """
 
-    _MAP_STATS_QUERY = """
-        SELECT
-            COUNT(*) AS total_polygons,
-            SUM(CASE WHEN class = 1 THEN 1 ELSE 0 END) AS water_count,
-            SUM(CASE WHEN class = -1 THEN 1 ELSE 0 END) AS cloud_count,
-            AVG(ST_Y(ST_Centroid(geometry))) AS avg_lat,
-            AVG(ST_X(ST_Centroid(geometry))) AS avg_lon
-        FROM hazard_masks
-        WHERE observation_date = :observation_date
-          AND model_id = :model_id
-          AND COALESCE(is_permanent, false) = false
-          AND ST_Intersects(
-              geometry,
-              ST_Transform(
-                  ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326),
-                  ST_SRID(geometry)
-              )
-          );
-    """
+    _MAP_STATS_QUERY = _MAP_STATS_QUERY
 
     _WATER_DATE_COUNTS_QUERY = """
         SELECT
@@ -306,20 +344,11 @@ class HazardMaskRepository:
     def get_map_stats(
         self, observation_date: str, model_id: str, bbox: list[float]
     ) -> MapStats:
-        params = {
-            "observation_date": observation_date,
-            "model_id": model_id,
-            **_bbox_params(bbox),
-        }
-        rows = execute_read_query(self._MAP_STATS_QUERY, params)
-        if not rows:
-            return MapStats(0, 0, 0, None, None)
-
-        row = rows[0]
-        return MapStats(
-            total_polygons=_safe_int(row.get("total_polygons")),
-            water_count=_safe_int(row.get("water_count")),
-            cloud_count=_safe_int(row.get("cloud_count")),
-            avg_lat=_safe_float(row.get("avg_lat")),
-            avg_lon=_safe_float(row.get("avg_lon")),
+        return _fetch_map_stats_cached(
+            observation_date,
+            model_id,
+            float(bbox[0]),
+            float(bbox[1]),
+            float(bbox[2]),
+            float(bbox[3]),
         )

@@ -1,4 +1,4 @@
-"""Fetch BDTOPO building and agricultural footprints for flood-damage rasterization."""
+"""Fetch BDTOPO footprints and measure exposure via TerraZard depth-raster zonal stats."""
 
 from __future__ import annotations
 
@@ -8,9 +8,21 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+import numpy as np
 import psycopg.sql
+from rasterio import features as rio_features
+from rasterio.warp import transform_bounds, transform_geom
 
 from tools.bdtopo_common import normalize_rows, run_query
+from tools.terrazard.depth_bands import DepthBand
+from tools.terrazard.depth_raster import DepthRaster
+
+# Cap GeoJSON of flood-touched buildings returned in the tool payload.
+_MAX_TOUCHED_BUILDINGS = 500
+# ~2 m simplify in projected CRS; ~2e-5 deg ≈ 2 m at mid-latitudes for EPSG:4326.
+_SIMPLIFY_TOLERANCE_M = 2.0
+_SIMPLIFY_TOLERANCE_DEG = 0.00002
+
 
 BDTOPO_USAGE_TO_ASSET: dict[str, str] = {
     "résidentiel": "residential",
@@ -45,14 +57,8 @@ class ExposureSlice:
     """
 
     source: str
-    """Qualified BDTOPO table, e.g. ``bdtopo_raw.batiment``."""
-
     land_type: str
-    """Raw BDTOPO usage/nature label (before asset-class mapping)."""
-
     asset_class: str
-    """Damage curve key: residential, commercial, industrial, or agriculture."""
-
     depth_min_m: float
     depth_max_m: float
     representative_depth_m: float
@@ -60,12 +66,12 @@ class ExposureSlice:
     """Sum of exposed raster cell areas in square metres."""
 
     feature_count: int
-    """Approximate count of distinct BDTOPO features contributing pixels."""
+    """Count of distinct BDTOPO features contributing pixels."""
 
 
 @dataclass(frozen=True)
 class BdtopoFeature:
-    """Single BDTOPO footprint used as rasterization input."""
+    """Single BDTOPO footprint used for zonal stats against the depth raster."""
 
     source: str
     land_type: str
@@ -76,56 +82,29 @@ class BdtopoFeature:
 
 @dataclass(frozen=True)
 class ExposureLayer:
-    """Config for one BDTOPO asset table to load inside the AOI.
-
-    Add a new layer here (and append it to ``EXPOSURE_LAYERS``) when supporting
-    another asset type—roads, infrastructure, etc.—without changing query logic.
-    """
+    """Config for one BDTOPO asset table to load inside the AOI."""
 
     table: str
-    """Unqualified table name in ``schema`` (e.g. ``batiment``)."""
-
     alias: str
-    """SQL table alias used in the fetch query."""
-
     land_type_columns: tuple[str, ...]
-    """Candidate columns for grouping (first existing column wins)."""
-
     map_asset: Callable[[str | None], str | None]
-    """Map a land-type label to a damage ``asset_class``.
-
-    Return ``None`` to skip unmapped labels (e.g. non-agricultural vegetation).
-    """
-
     schema: str = "bdtopo_raw"
 
     @property
     def source(self) -> str:
-        """Qualified table name stored on each feature / exposure slice."""
         return f"{self.schema}.{self.table}"
 
 
 def _normalize_land_label(value: str | None) -> str:
-    """Lowercase and collapse whitespace so accented labels match lookup keys."""
     return " ".join((value or "").strip().lower().split())
 
 
 def map_usage_to_asset(usage: str | None) -> str:
-    """Map a BDTOPO building usage label to a JRC damage asset class.
-
-    Unknown usages default to ``residential`` so buildings are never dropped
-    from the damage estimate.
-    """
     normalized = _normalize_land_label(usage)
     return BDTOPO_USAGE_TO_ASSET.get(normalized, "residential")
 
 
 def map_vegetation_to_asset(nature: str | None) -> str | None:
-    """Map a BDTOPO vegetation nature to ``agriculture``, or ``None`` to skip.
-
-    Only agricultural land-cover classes contribute to vegetation damage;
-    forests and other natures are ignored.
-    """
     normalized = _normalize_land_label(nature)
     return BDTOPO_VEGETATION_TO_ASSET.get(normalized)
 
@@ -144,12 +123,10 @@ EXPOSURE_LAYERS: tuple[ExposureLayer, ...] = (
         map_asset=map_vegetation_to_asset,
     ),
 )
-"""Default BDTOPO layers used by flood-damage exposure collection."""
 
 
 @lru_cache(maxsize=32)
 def _detect_column(table_name: str, candidates: tuple[str, ...]) -> str | None:
-    """Return the first candidate column that exists on ``bdtopo_raw.<table>``."""
     rows = run_query(
         """
         SELECT column_name
@@ -168,7 +145,6 @@ def _detect_column(table_name: str, candidates: tuple[str, ...]) -> str | None:
 
 @lru_cache(maxsize=32)
 def _geometry_metadata(table_name: str) -> tuple[str, int] | None:
-    """Return ``(geometry_column, srid)`` for ``bdtopo_raw.<table>``."""
     rows = run_query(
         """
         SELECT f_geometry_column, srid
@@ -189,8 +165,6 @@ def _geometry_metadata(table_name: str) -> tuple[str, int] | None:
 
 @dataclass(frozen=True)
 class _ResolvedLayer:
-    """Exposure layer with geometry / land-type columns resolved once."""
-
     layer: ExposureLayer
     geom_col: str
     srid: int
@@ -198,7 +172,6 @@ class _ResolvedLayer:
 
 
 def _resolve_layer(layer: ExposureLayer) -> _ResolvedLayer | None:
-    """Resolve and cache schema details needed to query ``layer``."""
     meta = _geometry_metadata(layer.table)
     if not meta:
         return None
@@ -214,15 +187,9 @@ def _resolve_layer(layer: ExposureLayer) -> _ResolvedLayer | None:
 def _aoi_envelope_params(
     bbox: list[float], srid: int
 ) -> tuple[float, float, float, float, int]:
-    """Project TerraZard bbox into the table CRS for an index-friendly envelope.
-
-    Returns ``(minx, miny, maxx, maxy, srid)`` suitable for ``ST_MakeEnvelope``.
-    """
     min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
     if srid == 4326:
         return min_lon, min_lat, max_lon, max_lat, srid
-
-    from rasterio.warp import transform_bounds
 
     minx, miny, maxx, maxy = transform_bounds(
         "EPSG:4326",
@@ -251,7 +218,6 @@ def _parse_geojson(raw: Any) -> dict[str, Any] | None:
 def _land_type_sql_filter(
     resolved: _ResolvedLayer,
 ) -> tuple[psycopg.sql.Composable, tuple[Any, ...]]:
-    """Push vegetation nature filtering into SQL to avoid scanning forests/etc."""
     if (
         resolved.layer.table != "zone_de_vegetation"
         or not resolved.land_type_col
@@ -277,10 +243,7 @@ def _fetch_layer_features(
     *,
     feature_id_offset: int,
 ) -> list[BdtopoFeature]:
-    """Fetch AOI-clipped BDTOPO footprints using a GiST-friendly envelope filter.
-
-    # TODO: Pre-compute and store static BDTOPO asset raster grids upfront (e.g. COG/GeoTIFF) to avoid converting vector data to raster on-the-fly.
-    """
+    """Fetch AOI-clipped BDTOPO footprints as EPSG:4326 GeoJSON."""
     layer = resolved.layer
     land_type_expr = (
         psycopg.sql.SQL("{alias}.{col}").format(
@@ -294,8 +257,9 @@ def _fetch_layer_features(
     alias = psycopg.sql.Identifier(layer.alias)
     minx, miny, maxx, maxy, srid = _aoi_envelope_params(bbox, resolved.srid)
     nature_filter, nature_params = _land_type_sql_filter(resolved)
-    # ~2 m in projected CRS; ~2e-5 deg ≈ 2 m at mid-latitudes for EPSG:4326.
-    simplify_tol = 2.0 if srid != 4326 else 0.00002
+    simplify_tol = (
+        _SIMPLIFY_TOLERANCE_M if srid != 4326 else _SIMPLIFY_TOLERANCE_DEG
+    )
 
     rows = normalize_rows(
         run_query(
@@ -366,13 +330,7 @@ def fetch_bdtopo_features(
     bbox: list[float],
     layers: tuple[ExposureLayer, ...] = EXPOSURE_LAYERS,
 ) -> list[BdtopoFeature]:
-    """Load BDTOPO footprints inside the AOI for on-the-fly rasterization.
-
-    ``bbox`` is TerraZard order ``[min_lat, max_lat, min_lon, max_lon]``.
-    Geometries are returned in EPSG:4326; the raster engine reprojects them
-    onto the shared damage grid.
-    """
-    # TODO: Pre-compute and store static BDTOPO asset raster grids upfront (e.g. COG/GeoTIFF) to avoid converting vector data to raster on-the-fly.
+    """Load BDTOPO footprints inside the AOI for depth-raster zonal stats."""
     resolved_layers = [
         resolved
         for layer in layers
@@ -390,3 +348,135 @@ def fetch_bdtopo_features(
         if layer_features:
             feature_id_offset = max(item.feature_id for item in layer_features)
     return features
+
+
+@dataclass(frozen=True)
+class ZonalExposureResult:
+    exposure_slices: list[ExposureSlice]
+    touched_buildings: dict[str, Any]
+
+
+def _feature_band_areas(
+    feature: BdtopoFeature,
+    depth_raster: DepthRaster,
+) -> dict[int, float]:
+    """Return band_index → exposed area_m2 for one footprint."""
+    try:
+        geom_2154 = transform_geom(
+            "EPSG:4326",
+            depth_raster.crs.to_string(),
+            feature.geojson,
+        )
+    except Exception:
+        return {}
+
+    mask = rio_features.geometry_mask(
+        [geom_2154],
+        out_shape=depth_raster.out_shape,
+        transform=depth_raster.transform,
+        invert=True,
+        all_touched=False,
+    )
+    if not np.any(mask):
+        return {}
+
+    pixels = depth_raster.band_index[mask]
+    flooded = pixels[pixels > 0]
+    if flooded.size == 0:
+        return {}
+
+    areas: dict[int, float] = {}
+    for band_i, count in zip(*np.unique(flooded, return_counts=True), strict=True):
+        areas[int(band_i)] = float(count) * depth_raster.cell_area_m2
+    return areas
+
+
+def empty_touched_buildings() -> dict[str, Any]:
+    """Empty FeatureCollection used when there is nothing to expose."""
+    return {"type": "FeatureCollection", "features": []}
+
+
+def collect_bdtopo_exposure(
+    depth_raster: DepthRaster,
+    features: list[BdtopoFeature],
+    *,
+    max_touched_buildings: int = _MAX_TOUCHED_BUILDINGS,
+) -> ZonalExposureResult:
+    """Measure BDTOPO exposure by zonal stats on the TerraZard depth raster.
+
+    Returns aggregated ``ExposureSlice`` rows plus a capped FeatureCollection of
+    flood-touched building footprints.
+    """
+    bands = depth_raster.depth_bands
+    if not bands or not features:
+        return ZonalExposureResult(
+            exposure_slices=[],
+            touched_buildings=empty_touched_buildings(),
+        )
+
+    # key: (source, land_type, asset_class, band_index) → area_m2, feature_ids
+    area_buckets: dict[tuple[str, str, str, int], float] = {}
+    feature_buckets: dict[tuple[str, str, str, int], set[int]] = {}
+    touched: list[tuple[float, BdtopoFeature, dict[int, float]]] = []
+
+    for feature in features:
+        band_areas = _feature_band_areas(feature, depth_raster)
+        if not band_areas:
+            continue
+        total_area = sum(band_areas.values())
+        if feature.source.endswith(".batiment"):
+            touched.append((total_area, feature, band_areas))
+
+        for band_i, area_m2 in band_areas.items():
+            key = (feature.source, feature.land_type, feature.asset_class, band_i)
+            area_buckets[key] = area_buckets.get(key, 0.0) + area_m2
+            feature_buckets.setdefault(key, set()).add(feature.feature_id)
+
+    slices: list[ExposureSlice] = []
+    for (source, land_type, asset_class, band_i), area_m2 in area_buckets.items():
+        if band_i < 1 or band_i > len(bands) or area_m2 <= 0:
+            continue
+        band = bands[band_i - 1]
+        key = (source, land_type, asset_class, band_i)
+        slices.append(
+            ExposureSlice(
+                source=source,
+                land_type=land_type,
+                asset_class=asset_class,
+                depth_min_m=band.depth_min_m,
+                depth_max_m=band.depth_max_m,
+                representative_depth_m=band.representative_depth_m,
+                area_m2=float(area_m2),
+                feature_count=len(feature_buckets.get(key, set())),
+            )
+        )
+
+    touched.sort(key=lambda item: item[0], reverse=True)
+    touched_features: list[dict[str, Any]] = []
+    for total_area, feature, band_areas in touched[:max_touched_buildings]:
+        # Deepest intersecting band for tooltip / properties.
+        deepest_i = max(band_areas)
+        band = bands[deepest_i - 1]
+        touched_features.append(
+            {
+                "type": "Feature",
+                "geometry": feature.geojson,
+                "properties": {
+                    "source": feature.source,
+                    "land_type": feature.land_type,
+                    "asset_class": feature.asset_class,
+                    "depth_min_m": band.depth_min_m,
+                    "depth_max_m": band.depth_max_m,
+                    "representative_depth_m": band.representative_depth_m,
+                    "intersection_area_m2": round(total_area, 1),
+                },
+            }
+        )
+
+    return ZonalExposureResult(
+        exposure_slices=slices,
+        touched_buildings={
+            "type": "FeatureCollection",
+            "features": touched_features,
+        },
+    )

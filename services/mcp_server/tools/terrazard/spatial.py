@@ -97,10 +97,11 @@ def resolve_spatial_context(
     """Route to the appropriate spatial resolver based on provided inputs."""
     if bbox is not None:
         return resolve_from_bbox(bbox, location=location, lat=lat, lon=lon)
-    if location:
-        return resolve_from_location(location)
     if lat is not None and lon is not None:
         return resolve_from_lat_lon(lat, lon)
+    if location:
+        return resolve_from_location(location)
+
     raise TerrazardDataError(
         "Please specify a bbox, location, or lat/lon coordinates."
     )
