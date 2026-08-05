@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.event_emitter import EventEmitter
+from src.db.models.message import UserMessage
 
 from .models import ChatMessage, GraphResumeRequest, GraphTurnRequest
 from .service import GraphRunnerService
@@ -30,7 +31,7 @@ def get_graph_runner_service() -> GraphRunnerService:
 
 def run_graph_turn(
     *,
-    english_query: str,
+    message: UserMessage,
     user_id: str,
     session_id: str,
     document_ref: dict[str, Any] | None = None,
@@ -45,7 +46,7 @@ def run_graph_turn(
         if isinstance(item, dict)
     ]
     request = GraphTurnRequest(
-        english_query=english_query,
+        message=message,
         user_id=user_id,
         session_id=session_id,
         document_ref=document_ref or {},

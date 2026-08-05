@@ -504,6 +504,7 @@ class AgentWebSocketClient:
         confirmed_locations: Optional[dict[str, list[float]]] = None,
         document_context: Optional[str] = None,
         language: Optional[str] = None,
+        user_inputs: Optional[dict] = None,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
@@ -519,6 +520,7 @@ class AgentWebSocketClient:
             "confirmed_locations": confirmed_locations or {},
             "document_context": document_context,
             "language": language,
+            "user_inputs": user_inputs or {},
         }
 
         async def _do_send():

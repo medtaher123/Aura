@@ -415,7 +415,12 @@ async def handle_chat_request(
             return
 
         logger.info(
-            f"Chat request received - message length: {len(message.message)}, conversation_id: {conversation_context.conversation.id}, new_conversation: {conversation_context.created}, history size: {len(conversation_context.messages)}, confirmed_locations: {len(message.confirmed_locations)}"
+            f"Chat request received - message length: {len(message.message)}, "
+            f"conversation_id: {conversation_context.conversation.id}, "
+            f"new_conversation: {conversation_context.created}, "
+            f"history size: {len(conversation_context.messages)}, "
+            f"confirmed_locations: {len(message.confirmed_locations)}, "
+            f"user_inputs kinds: {list((message.user_inputs or {}).keys())}"
         )
 
         # Send initial status
@@ -425,6 +430,7 @@ async def handle_chat_request(
         # Detect language and translate to English if needed
         user_message = message.message
         detected_lang = message.language
+        proactive_user_inputs = dict(message.user_inputs or {})
 
         if not detected_lang:
             english_message, detected_lang = await asyncio.to_thread(
@@ -438,6 +444,12 @@ async def handle_chat_request(
                     detect_and_translate_to_english, user_message
                 )
                 logger.debug(f"Translated from {detected_lang} to English")
+
+        user_turn_message = UserMessage.create(
+            english_message,
+            user_inputs=proactive_user_inputs or None,
+        )
+        english_query = user_turn_message.to_llm_dict()["content"]
 
         chat_history = normalize_chat_messages(
             [m.to_llm_dict() for m in conversation_context.messages]
@@ -463,7 +475,7 @@ async def handle_chat_request(
         def run_orchestrator():
             if use_graph:
                 return graph_runner.run_graph_turn(
-                    english_query=english_message,
+                    message=user_turn_message,
                     user_id=str(user.id),
                     session_id=str(conversation_context.conversation.id),
                     chat_history=chat_history,
@@ -472,7 +484,7 @@ async def handle_chat_request(
             executor = create_orchestrator_executor()
             return invoke_agent(
                 executor,
-                english_message,
+                english_query,
                 chat_history=chat_history,
                 stream_callback=stream_callback,
             )
@@ -503,6 +515,12 @@ async def handle_chat_request(
         # Check if user input is needed
         data = tool_response.data or {}
         if UserInputRouter.pending_from_tool_data(data):
+            await conversations.append_messages(
+                user,
+                conversation_context.conversation.id,
+                [user_turn_message],
+                commit=False,
+            )
             await _send_user_input_pause(
                 conn=conn,
                 conversations=conversations,
@@ -510,9 +528,9 @@ async def handle_chat_request(
                 conversation_id=conversation_context.conversation.id,
                 data=data,
                 detected_lang=detected_lang,
-                title_user_message=english_message,
+                title_user_message=english_query,
                 conversation_title_pending=conversation_context.created,
-                user_message_persisted=False,
+                user_message_persisted=True,
             )
             return
 
@@ -522,16 +540,17 @@ async def handle_chat_request(
         )
         logger.debug(f"Translated response to {detected_lang}")
 
+        history_messages: list[Message] = [
+            user_turn_message,
+            AssistantMessage.create(
+                tool_response.message,
+                metadata=_assistant_message_metadata(tool_response),
+            ),
+        ]
         await conversations.append_messages(
             user,
             conversation_context.conversation.id,
-            [
-                UserMessage.create(english_message),
-                AssistantMessage.create(
-                    tool_response.message,
-                    metadata=_assistant_message_metadata(tool_response),
-                ),
-            ],
+            history_messages,
         )
 
         if conversation_context.created:
@@ -540,7 +559,7 @@ async def handle_chat_request(
                 conversations=conversations,
                 user=user,
                 conversation_id=conversation_context.conversation.id,
-                user_message=english_message,
+                user_message=english_query,
                 assistant_message=tool_response.message,
             )
 

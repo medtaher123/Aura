@@ -38,6 +38,10 @@ from src.ui.bbox_input import (  # noqa: E402
     bounding_box_result_payload,
     bbox_from_folium_draw_output,
 )
+from src.ui.location_input import (  # noqa: E402
+    location_result_payload,
+    search_location_candidates,
+)
 
 # Load local env vars (e.g., MAPTILER_API_KEY) from repo `.env`.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
@@ -1659,6 +1663,21 @@ if "confirmed_locations" not in st.session_state:
     # Map normalized location_query -> {"token": str, "display": str}
     st.session_state.confirmed_locations = {}
 
+if "attached_user_inputs" not in st.session_state:
+    st.session_state.attached_user_inputs = {}
+
+if "composer_attach_mode" not in st.session_state:
+    st.session_state.composer_attach_mode = None
+
+if "composer_location_candidates" not in st.session_state:
+    st.session_state.composer_location_candidates = []
+
+if "composer_attach_bbox" not in st.session_state:
+    st.session_state.composer_attach_bbox = None
+
+if "composer_bbox_picker_key" not in st.session_state:
+    st.session_state.composer_bbox_picker_key = 0
+
 if "turn_thinking_lines" not in st.session_state:
     st.session_state.turn_thinking_lines = []
 
@@ -2314,17 +2333,208 @@ if isinstance(pending, dict) and pending.get("needs_input"):
             st.rerun()
 
 # Normal chat input path (disabled while waiting for confirmation)
+_pending_pause = bool(st.session_state.pending_user_input)
+
+if not _pending_pause:
+    attached = st.session_state.attached_user_inputs
+    chip_cols = st.columns([1, 6])
+    with chip_cols[0]:
+        with st.popover("+", use_container_width=True):
+            st.caption("Attach to message")
+            if st.button("Location", use_container_width=True, key="attach_menu_location"):
+                st.session_state.composer_attach_mode = "location"
+                st.session_state.composer_location_candidates = []
+                st.rerun()
+            if st.button(
+                "Bounding box", use_container_width=True, key="attach_menu_bbox"
+            ):
+                st.session_state.composer_attach_mode = "bounding_box"
+                st.session_state.composer_attach_bbox = None
+                st.session_state.composer_bbox_picker_key = (
+                    int(st.session_state.get("composer_bbox_picker_key") or 0) + 1
+                )
+                st.rerun()
+    with chip_cols[1]:
+        chip_parts: list[str] = []
+        if isinstance(attached.get("location"), dict):
+            chip_parts.append(
+                f"Location: {attached['location'].get('name', 'selected')}"
+            )
+        if isinstance(attached.get("bounding_box"), dict):
+            area = attached["bounding_box"].get("area") or {}
+            try:
+                chip_parts.append(
+                    "BBox: "
+                    f"[{float(area['min_lat']):.2f}, {float(area['max_lat']):.2f}, "
+                    f"{float(area['min_lon']):.2f}, {float(area['max_lon']):.2f}]"
+                )
+            except (KeyError, TypeError, ValueError):
+                chip_parts.append("Bounding box attached")
+        if chip_parts:
+            clear_cols = st.columns([5, 1])
+            with clear_cols[0]:
+                st.caption(" · ".join(chip_parts))
+            with clear_cols[1]:
+                if st.button("Clear", key="clear_attached_inputs"):
+                    st.session_state.attached_user_inputs = {}
+                    st.session_state.composer_attach_mode = None
+                    st.session_state.composer_location_candidates = []
+                    st.session_state.composer_attach_bbox = None
+                    st.rerun()
+
+    mode = st.session_state.composer_attach_mode
+    if mode == "location":
+        with st.container(border=True):
+            st.markdown("**Attach location**")
+            search_cols = st.columns([4, 1])
+            with search_cols[0]:
+                loc_query = st.text_input(
+                    "Search place",
+                    key="composer_location_query",
+                    label_visibility="collapsed",
+                    placeholder="Search a place (Nominatim)…",
+                )
+            with search_cols[1]:
+                do_search = st.button("Search", key="composer_location_search")
+            if do_search:
+                st.session_state.composer_location_candidates = (
+                    search_location_candidates(loc_query or "")
+                )
+            candidates = st.session_state.composer_location_candidates or []
+            if candidates:
+
+                def _loc_label(c: dict) -> str:
+                    return (
+                        f"{c.get('display_name')} "
+                        f"({float(c['lat']):.4f}, {float(c['lon']):.4f})"
+                    )
+
+                choice = st.selectbox(
+                    "Select a location",
+                    options=candidates,
+                    format_func=_loc_label,
+                    key="composer_location_choice",
+                )
+                attach_cols = st.columns(2)
+                with attach_cols[0]:
+                    if st.button(
+                        "Attach",
+                        type="primary",
+                        key="composer_location_attach",
+                        use_container_width=True,
+                    ):
+                        st.session_state.attached_user_inputs = {
+                            **st.session_state.attached_user_inputs,
+                            "location": location_result_payload(choice),
+                        }
+                        st.session_state.composer_attach_mode = None
+                        st.session_state.composer_location_candidates = []
+                        st.rerun()
+                with attach_cols[1]:
+                    if st.button(
+                        "Cancel",
+                        key="composer_location_cancel",
+                        use_container_width=True,
+                    ):
+                        st.session_state.composer_attach_mode = None
+                        st.session_state.composer_location_candidates = []
+                        st.rerun()
+            elif do_search:
+                st.warning("No locations found.")
+            else:
+                if st.button("Cancel", key="composer_location_cancel_empty"):
+                    st.session_state.composer_attach_mode = None
+                    st.rerun()
+
+    elif mode == "bounding_box":
+        with st.container(border=True):
+            st.markdown("**Attach bounding box**")
+            drawn = st.session_state.composer_attach_bbox
+            if drawn:
+                st.success(
+                    f"Selected area: [{drawn[0]:.4f}, {drawn[1]:.4f}, "
+                    f"{drawn[2]:.4f}, {drawn[3]:.4f}]"
+                )
+                attach_cols = st.columns(2)
+                with attach_cols[0]:
+                    if st.button(
+                        "Attach",
+                        type="primary",
+                        key="composer_bbox_attach",
+                        use_container_width=True,
+                    ):
+                        st.session_state.attached_user_inputs = {
+                            **st.session_state.attached_user_inputs,
+                            "bounding_box": bounding_box_result_payload(drawn),
+                        }
+                        st.session_state.composer_attach_mode = None
+                        st.session_state.composer_attach_bbox = None
+                        st.rerun()
+                with attach_cols[1]:
+                    if st.button(
+                        "Redraw",
+                        key="composer_bbox_redraw",
+                        use_container_width=True,
+                    ):
+                        st.session_state.composer_attach_bbox = None
+                        st.session_state.composer_bbox_picker_key = (
+                            int(st.session_state.get("composer_bbox_picker_key") or 0)
+                            + 1
+                        )
+                        st.rerun()
+            else:
+                st.caption("Use the rectangle tool on the map to select an area.")
+                fmap = folium.Map(location=[46.5, 2.5], zoom_start=6)
+                Draw(
+                    export=False,
+                    draw_options={
+                        "polyline": False,
+                        "polygon": False,
+                        "circle": False,
+                        "circlemarker": False,
+                        "marker": False,
+                        "rectangle": True,
+                    },
+                    edit_options={"edit": True},
+                ).add_to(fmap)
+                map_out = st_folium(
+                    fmap,
+                    key=(
+                        f"composer_bbox_picker_"
+                        f"{st.session_state.composer_bbox_picker_key}"
+                    ),
+                    height=350,
+                    returned_objects=["last_active_drawing", "all_drawings"],
+                    use_container_width=True,
+                )
+                latest_bbox = bbox_from_folium_draw_output(map_out)
+                if latest_bbox is not None:
+                    st.session_state.composer_attach_bbox = latest_bbox
+                    st.rerun()
+                if st.button("Cancel", key="composer_bbox_cancel"):
+                    st.session_state.composer_attach_mode = None
+                    st.session_state.composer_attach_bbox = None
+                    st.rerun()
+
 user_input = st.chat_input(
     "Ask me anything about Earth observation or STAC...",
-    disabled=bool(st.session_state.pending_user_input),
+    disabled=_pending_pause,
 )
 
 if user_input:
     logger.info(f"New user input received: {user_input[:100]}...")
     _reset_turn_thinking()
+    attached_for_send = dict(st.session_state.attached_user_inputs or {})
+    st.session_state.attached_user_inputs = {}
+    st.session_state.composer_attach_mode = None
+    st.session_state.composer_location_candidates = []
+    st.session_state.composer_attach_bbox = None
     st.session_state.messages.append(UserMessage(role="user", content=user_input))
     with st.chat_message("user"):
         st.write(user_input)
+        if attached_for_send:
+            kinds = ", ".join(attached_for_send.keys())
+            st.caption(f"Attached: {kinds}")
 
     with st.chat_message("assistant"):
         layout = _make_streaming_turn_placeholders()
@@ -2363,6 +2573,7 @@ if user_input:
                 english_query=english_query_augmented,
                 conversation_id=st.session_state.conversation_id,
                 chat_history=history_for_agent,
+                user_inputs=attached_for_send or None,
             )
             tool_calls = tool_snapshot()
             _store_conversation_id(result.conversation_id)

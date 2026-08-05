@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.graph.state import GraphState
 from src.core.event_emitter import EventEmitter
+from src.db.models.message import UserMessage
 from src.schemas.user_inputs import UserInputRouter
 
 
@@ -31,13 +32,22 @@ class GraphTurnRequest(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    english_query: str
+    message: UserMessage
     user_id: str
     session_id: str
     document_ref: dict[str, Any] = Field(default_factory=dict)
     place_hint: str | None = None
     chat_history: list[ChatMessage] = Field(default_factory=list)
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
+
+    @property
+    def english_query(self) -> str:
+        """LLM-facing user text (includes attached user-input summaries)."""
+        return self.message.to_llm_dict()["content"]
+
+    @property
+    def user_inputs(self) -> dict[str, Any]:
+        return self.message.user_inputs
 
     def contextualize_query(self) -> str:
         q = (self.english_query or "").strip()
@@ -64,6 +74,8 @@ class GraphTurnRequest(BaseModel):
         }
         if self.place_hint and self.place_hint.strip():
             state["place_hint"] = self.place_hint.strip()
+        if self.user_inputs:
+            UserInputRouter.apply_results(self.user_inputs, state)
         return state  # type: ignore[return-value]
 
 

@@ -233,6 +233,7 @@ class RemoteAgentAdapter:
                     chat_history=history,
                     document_context=document_context,
                     language=language,
+                    user_inputs=user_inputs,
                     on_token=on_token,
                     on_status=on_status,
                     on_thinking=on_thinking,

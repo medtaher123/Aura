@@ -289,15 +289,34 @@ class LocationUserInput(UserInput[LocationRequest, LocationResult]):
             raise TypeError(f"expected LocationResult, got {type(result)!r}")
         confirmed_index = kwargs.get("confirmed_index")
         if confirmed_index is not None:
+            # Resume path: location_gate resolves via candidate index.
             state["confirmed_location_index"] = int(confirmed_index)
+            needs = dict(state.get("needs_input") or {})
+            if "location" not in needs and state.get("location_candidates"):
+                request = LocationRequest.from_candidates(
+                    list(state.get("location_candidates") or []),
+                    location_query=state.get("location_query"),
+                )
+                needs["location"] = request.to_dict()
+            state["needs_input"] = needs
+            return state
+
+        # Proactive attach on a fresh turn: seed resolved_location so
+        # location_gate short-circuits via has_resolved_location.
+        from eo_llm.graph.state import ResolvedLocationModel
+
+        lat, lon = result.coordinates
+        state["resolved_location"] = ResolvedLocationModel(
+            display_name=result.name,
+            lat=lat,
+            lon=lon,
+        ).model_dump(mode="python")
         needs = dict(state.get("needs_input") or {})
-        if "location" not in needs and state.get("location_candidates"):
-            request = LocationRequest.from_candidates(
-                list(state.get("location_candidates") or []),
-                location_query=state.get("location_query"),
-            )
-            needs["location"] = request.to_dict()
+        needs.pop("location", None)
         state["needs_input"] = needs
+        if not needs:
+            state["stopped_for_user_input"] = False
+            state["location_phase"] = "router"
         return state
 
 
@@ -480,6 +499,27 @@ class UserInputRouter:
             content=" ".join(parts),
             user_inputs=wire,
         )
+
+    @classmethod
+    def results_llm_text(cls, results: dict[str, Any] | None) -> str:
+        """Human-readable summary of result kinds for LLM / message content."""
+        typed = cls.results_from_dict(results)
+        if not typed:
+            return ""
+        return "\n".join(result.llm_text() for result in typed.values())
+
+    @classmethod
+    def append_user_inputs_text(
+        cls, message: str, results: dict[str, Any] | None
+    ) -> str:
+        """Append attached user-input summaries to a user message body."""
+        base = (message or "").rstrip()
+        suffix = cls.results_llm_text(results)
+        if not suffix:
+            return base
+        if not base:
+            return suffix
+        return f"{base}\n\n{suffix}"
 
     @classmethod
     def pending_from_tool_data(

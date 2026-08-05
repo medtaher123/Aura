@@ -79,12 +79,35 @@ class UserMessage(Message):
     __mapper_args__ = {"polymorphic_identity": "user"}
 
     @classmethod
-    def create(cls, content: str = "") -> UserMessage:
+    def create(
+        cls,
+        content: str = "",
+        *,
+        user_inputs: dict[str, Any] | None = None,
+    ) -> UserMessage:
+        meta: dict[str, Any] = {"message_type": "user"}
+        if user_inputs:
+            meta["user_inputs"] = dict(user_inputs)
         return cls(
             content=content or "",
-            message_metadata={"message_type": "user"},
+            message_metadata=meta,
         )
 
+    @property
+    def user_inputs(self) -> dict[str, Any]:
+        return dict((self.message_metadata or {}).get("user_inputs") or {})
+
+    def to_llm_dict(self) -> dict[str, str]:
+        """Include attached user inputs in the content the LLM sees."""
+        content = self.content or ""
+        inputs = self.user_inputs
+        if inputs:
+            from src.schemas.user_inputs import UserInputRouter
+
+            suffix = UserInputRouter.results_llm_text(inputs)
+            if suffix and suffix not in content:
+                content = UserInputRouter.append_user_inputs_text(content, inputs)
+        return {"role": "user", "content": content}
 
 class AssistantMessage(Message):
     """Message authored by the assistant."""

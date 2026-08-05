@@ -177,6 +177,13 @@ class ChatRequestMessage(BaseModel):
         default=None,
         description="User's language for translation (auto-detected if None)",
     )
+    user_inputs: dict[str, TypingAny] = Field(
+        default_factory=dict,
+        description=(
+            "Optional kind → TResult map attached proactively with the message "
+            "(same shapes as chat_resume.user_inputs)"
+        ),
+    )
 
 
 class ChatResumeMessage(BaseModel):
