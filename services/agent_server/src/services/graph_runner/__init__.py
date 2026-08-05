@@ -4,7 +4,7 @@ Drives the ported EO_LLM LangGraph pipeline (`eo_llm.graph`) from the agent
 server and adapts it to the existing WebSocket contract:
 
 - Streams per-node status events and per-tool start/done events so the UI
-  behaves exactly like the legacy orchestrator pipeline.
+  can follow the graph turn in real time.
 - Maps the final `GraphState` into a `ToolResponse` (including artifact merging
   and the location-confirmation pause payload).
 """

@@ -255,17 +255,12 @@ agent_server/
 │   │   ├── models.py     # Pydantic message models
 │   │   └── websocket.py  # WebSocket handler
 │   ├── core/             # Core utilities
-│   │   ├── config.py     # Configuration management
 │   │   ├── logger.py     # Logging setup
-│   │   ├── memory.py     # Chat history management
-│   │   └── prompts.py    # Agent prompts
+│   │   └── memory.py     # Chat history management
 │   ├── services/         # Business logic
-│   │   ├── agent_runner.py            # Agent execution
-│   │   ├── orchestrator_agent_service.py  # Main orchestrator
-│   │   ├── data_agent_service.py      # Data retrieval agent
-│   │   ├── analysis_agent_service.py  # Analysis agent
+│   │   ├── agent_runner.py            # ToolResponse coercion helpers
+│   │   ├── graph_runner/             # EO_LLM LangGraph chat pipeline
 │   │   ├── llm_service.py            # LLM client
-│   │   ├── document_service.py       # PDF processing
 │   │   └── translate_service.py      # Translation
 │   ├── tools/            # Tool definitions
 │   │   ├── contracts.py          # Tool type definitions
@@ -273,6 +268,7 @@ agent_server/
 │   │   └── tools.py              # Tool registry
 │   ├── config.py         # App configuration
 │   └── main.py           # FastAPI application
+├── eo_llm/               # Ported LangGraph agent pipeline
 ├── tests/                # Unit tests
 ├── Dockerfile            # Container definition
 ├── requirements.txt      # Python dependencies

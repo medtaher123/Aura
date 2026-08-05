@@ -7,7 +7,7 @@ Manages real-time communication with clients for agent orchestration.
 import asyncio
 import json
 import uuid
-from typing import Any, Optional
+from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -23,17 +23,9 @@ from src.schemas.websocket import (
     ChatRequestMessage,
     ChatResumeMessage,
     ClientMessageType,
-    CompleteMessage,
-    ConnectionAckMessage,
-    ErrorMessage,
     LocationResult,
-    StatusMessage,
-    TokenMessage,
-    ToolResultMessage,
-    ToolStartMessage,
 )
 from src.schemas.user_inputs import (
-    BoundingBoxResult,
     UserInputRouter,
 )
 from src.db.models.message import (
@@ -42,147 +34,17 @@ from src.db.models.message import (
     UserMessage,
 )
 from ..auth import AuthConfigurationError, AuthError
-from ..config import get_config
 from ..core.logger import get_logger
 from ..core.websocket_traffic_logger import log_websocket_traffic
 from ..core.memory import normalize_chat_messages
-from ..services.orchestrator_agent_service import create_orchestrator_executor
-from ..services.agent_runner import invoke_agent, coerce_tool_response
+from ..services.agent_runner import coerce_tool_response
 from ..services import graph_runner
 from ..services.translate_service import (
     detect_and_translate_to_english,
     translate_from_english,
 )
-from eo_llm.stream.decision_reasoning import thinking_payload_from_event
 from src.api.websocket_stream_subscriber import WebSocketStreamSubscriber
-from src.core.event_emitter import EventEmitter, GraphStatusStage
-
-
-def _graph_status_stage(stage: GraphStatusStage | str) -> AgentStage:
-    """Map a graph_runner status string to an AgentStage."""
-    return {
-        "planning": AgentStage.PLANNING,
-        "tool_call": AgentStage.TOOL_CALL,
-        "analyzing": AgentStage.ANALYZING,
-    }.get(stage, AgentStage.PLANNING)
-
-
-async def _handle_data_agent_step_event(conn: WebSocketConnection, event: dict[str, Any]) -> None:
-    """Map graph tool-step stream events to websocket tool_start/tool_result."""
-    phase = event.get("phase", "")
-    tool_name = event.get("tool_name", "")
-    tool_input = event.get("tool_input", {})
-    step_id = event.get("step_id")
-    domain = event.get("domain")
-
-    if phase == "running":
-        await conn.send_tool_start(
-            tool_name,
-            tool_input if isinstance(tool_input, dict) else {"input": tool_input},
-            step_id=step_id,
-            domain=domain,
-        )
-        return
-
-    if phase != "done":
-        return
-
-    observation = event.get("observation", "")
-    error = bool(event.get("error"))
-    execution_time_seconds = event.get("execution_time_seconds")
-    result: dict[str, Any] = {
-        "observation": observation,
-        "error": error,
-    }
-    if execution_time_seconds is not None:
-        result["execution_time_seconds"] = execution_time_seconds
-    if event.get("attempts") is not None:
-        result["attempts"] = event.get("attempts")
-    if event.get("status") is not None:
-        result["status"] = event.get("status")
-    if step_id:
-        result["step_id"] = step_id
-    if domain:
-        result["domain"] = domain
-
-    await conn.send_tool_result(
-        tool_name=tool_name,
-        result=result,
-        step_id=step_id,
-        domain=domain,
-        execution_time_seconds=execution_time_seconds,
-    )
-
-
-async def _dispatch_stream_event(conn: WebSocketConnection, event: dict[str, Any]) -> None:
-    """Map legacy orchestrator/data_agent dict stream events to websocket messages."""
-    event_type = event.get("type", "")
-
-    if event_type == "graph_status":
-        await conn.send_status(
-            _graph_status_stage(event.get("stage", "")),
-            event.get("message", ""),
-        )
-        return
-
-    if event_type == "token":
-        content = event.get("content", "")
-        if content:
-            await conn.send_token(str(content))
-        return
-
-    if event_type == "thinking":
-        payload = thinking_payload_from_event(event)
-        if payload is not None:
-            await conn.send_thinking(
-                source=payload["source"],
-                content=payload["content"],
-                reasoning=payload["reasoning"],
-                stage=_graph_status_stage(payload["stage"]),
-            )
-        return
-
-    if event_type == "orchestrator_plan":
-        trace = event.get("trace", {})
-        detail = (
-            f"Planning: data={trace.get('needs_data')}, "
-            f"analysis={trace.get('needs_analysis')}"
-        )
-        await conn.send_status(AgentStage.PLANNING, detail)
-        return
-
-    if event_type == "stage":
-        stage = event.get("stage", "")
-        msg = event.get("message", "")
-        if stage == "data_agent":
-            await conn.send_status(AgentStage.TOOL_CALL, msg)
-        elif stage == "analysis_agent":
-            await conn.send_status(AgentStage.ANALYZING, msg)
-        return
-
-    if event_type == "data_agent_step":
-        await _handle_data_agent_step_event(conn, event)
-
-
-def _legacy_stream_callback(
-    conn: WebSocketConnection,
-    event_loop: asyncio.AbstractEventLoop,
-):
-    """Sync callback for orchestrator/data_agent dict stream events."""
-
-    async def stream_callback_async(event: dict):
-        await _dispatch_stream_event(conn, event)
-
-    def stream_callback(event: dict):
-        try:
-            asyncio.run_coroutine_threadsafe(
-                stream_callback_async(event), event_loop
-            )
-        except Exception as e:
-            logger.warning(f"Stream callback error: {e}")
-
-    return stream_callback
-
+from src.core.event_emitter import EventEmitter
 
 logger = get_logger("websocket")
 router = APIRouter()
@@ -283,67 +145,6 @@ async def _generate_update_and_send_conversation_title(
         logger.warning(
             f"Conversation title generation failed for {conversation_id}: {type(e).__name__}: {e}"
         )
-
-
-def _patch_resume_state_with_confirmed_location(
-    *,
-    pause_state: dict[str, Any],
-    resume_state: dict[str, Any],
-    confirmed_location: LocationResult,
-) -> tuple[dict[str, str], str | None]:
-    """
-    Add confirmed location mapping and patch resume_state["next_input"] safely.
-
-    If next_input is not a dict (legacy paused state), prefer pause_state["tool_input"]
-    as the base payload so required structured fields are preserved.
-    """
-    confirmed_locations = resume_state.get("confirmed_locations", {})
-    if not isinstance(confirmed_locations, dict):
-        confirmed_locations = {}
-
-    prefix = confirmed_location.osm_type_prefix
-    osm_id = confirmed_location.osm_id
-    place_id = confirmed_location.place_id
-    location_key = confirmed_location.name
-
-    confirmed_value = ""
-    if prefix and osm_id:
-        confirmed_value = f"@osm_id:{prefix}{osm_id}"
-    elif place_id:
-        confirmed_value = f"@place_id:{place_id}"
-
-    if confirmed_value:
-        confirmed_locations[location_key] = confirmed_value
-    else:
-        logger.warning(
-            f"Confirmed location is missing osm_type or osm_id or place_id: {confirmed_location}"
-        )
-
-    resume_state["confirmed_locations"] = confirmed_locations
-
-    resume_patch = pause_state.get("resume_patch", {})
-    patch_field = resume_patch.get("field") if isinstance(resume_patch, dict) else None
-    next_input = resume_state.get("next_input")
-    tool_input = pause_state.get("tool_input")
-
-    if patch_field and confirmed_value:
-        if isinstance(next_input, dict):
-            patched_input = dict(next_input)
-        elif isinstance(tool_input, dict):
-            patched_input = dict(tool_input)
-        else:
-            patched_input = {}
-
-        patched_input[patch_field] = confirmed_value
-        resume_state["next_input"] = patched_input
-    elif isinstance(next_input, dict):
-        # No resume_patch available; leave next_input as-is and rely on
-        # confirmed_locations + _apply_confirmed_locations in the DataAgent.
-        pass
-    else:
-        resume_state["next_input"] = next_input
-
-    return confirmed_locations, patch_field
 
 
 async def _send_user_input_pause(
@@ -457,43 +258,26 @@ async def handle_chat_request(
 
         # Create stream callback for real-time updates
         event_loop = asyncio.get_running_loop()
-        use_graph = get_config().use_graph_pipeline
+        stream_emitter = EventEmitter()
+        # Keep subscriber alive for the request lifetime (weakref listeners).
+        stream_subscriber = WebSocketStreamSubscriber(
+            conn, event_loop, emitter=stream_emitter
+        )
 
-        stream_emitter: EventEmitter | None = None
-        stream_subscriber: WebSocketStreamSubscriber | None = None
-        stream_callback = None
-        if use_graph:
-            stream_emitter = EventEmitter()
-            # Keep subscriber alive for the request lifetime (weakref listeners).
-            stream_subscriber = WebSocketStreamSubscriber(
-                conn, event_loop, emitter=stream_emitter
-            )
-        else:
-            stream_callback = _legacy_stream_callback(conn, event_loop)
-
-        # Run the selected engine in a thread pool to avoid blocking the loop.
-        def run_orchestrator():
-            if use_graph:
-                return graph_runner.run_graph_turn(
-                    message=user_turn_message,
-                    user_id=str(user.id),
-                    session_id=str(conversation_context.conversation.id),
-                    chat_history=chat_history,
-                    stream_emitter=stream_emitter,
-                )
-            executor = create_orchestrator_executor()
-            return invoke_agent(
-                executor,
-                english_query,
+        def run_graph():
+            return graph_runner.run_graph_turn(
+                message=user_turn_message,
+                user_id=str(user.id),
+                session_id=str(conversation_context.conversation.id),
                 chat_history=chat_history,
-                stream_callback=stream_callback,
+                stream_emitter=stream_emitter,
             )
 
         # Execute in thread pool
-        logger.debug(f"Invoking agent engine - use_graph_pipeline: {use_graph}")
+        logger.debug("Invoking graph pipeline")
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
-            result = await loop.run_in_executor(pool, run_orchestrator)
+            result = await loop.run_in_executor(pool, run_graph)
 
         if conn.is_closed:
             return
@@ -632,129 +416,67 @@ async def handle_chat_resume(
         )
         user_message_persisted = bool(pause_state.get("user_message_persisted"))
 
-        # The graph pipeline stores its full state under "graph_state"; the legacy
-        # orchestrator stores a "resume_state". Pick the engine accordingly.
-        use_graph = get_config().use_graph_pipeline or ("graph_state" in pause_state)
-
+        # The graph pipeline stores its full state under "graph_state".
         graph_state: dict[str, Any] = pause_state.get("graph_state") or {}
+        if not graph_state:
+            logger.warning(
+                f"Resume requested but no graph_state stored for conversation {conversation_id}"
+            )
+            await conn.send_error(
+                "No paused graph state to resume for this conversation.",
+                recoverable=True,
+            )
+            return
+
         graph_confirmed_index = 0
-        resume_payload: dict[str, Any] = {}
         confirmed_location: LocationResult | None = None
         if "location" in parsed_inputs:
             loc = parsed_inputs["location"]
             assert isinstance(loc, LocationResult)
             confirmed_location = loc
 
-        if use_graph:
-            candidates = graph_state.get("location_candidates") or []
-            loc_payload = (graph_state.get("needs_input") or {}).get("location")
-            if isinstance(loc_payload, dict) and loc_payload.get("candidates"):
-                candidates = loc_payload["candidates"]
-            if confirmed_location is not None:
-                graph_confirmed_index = graph_runner.match_location_index(
-                    candidates,
-                    confirmed_location,
-                )
-            resume_user_text = str(
-                graph_state.get("user_query") or pause_state.get("user_text", "")
+        candidates = graph_state.get("location_candidates") or []
+        loc_payload = (graph_state.get("needs_input") or {}).get("location")
+        if isinstance(loc_payload, dict) and loc_payload.get("candidates"):
+            candidates = loc_payload["candidates"]
+        if confirmed_location is not None:
+            graph_confirmed_index = graph_runner.match_location_index(
+                candidates,
+                confirmed_location,
             )
-            logger.debug(
-                f"Graph resume - confirmed_index: {graph_confirmed_index}, "
-                f"candidates: {len(candidates)}, kinds={list(parsed_inputs.keys())}"
-            )
-        else:
-            # Build resume payload for orchestrator
-            resume_payload = {
-                "resume_state": pause_state.get("resume_state", {}),
-                "orchestrator_trace": pause_state.get("orchestrator_trace", {}),
-                "needs_analysis": pause_state.get("needs_analysis", False),
-                "analysis_goal": pause_state.get("analysis_goal", ""),
-                "user_text": pause_state.get("user_text", ""),
-            }
-            resume_user_text = resume_payload.get("user_text", "")
-
-            logger.debug(
-                f"Resume payload constructed - has_resume_state: {bool(resume_payload.get('resume_state'))}, has_orchestrator_trace: {bool(resume_payload.get('orchestrator_trace'))}, user_text: {resume_user_text[:100]}"
-            )
-
-            if confirmed_location is not None and resume_payload.get("resume_state"):
-                logger.debug(f"Resume payload: {json.dumps(resume_payload, indent=2)}")
-                confirmed_locations, patch_field = (
-                    _patch_resume_state_with_confirmed_location(
-                        pause_state=pause_state,
-                        resume_state=resume_payload["resume_state"],
-                        confirmed_location=confirmed_location,
-                    )
-                )
-
-                logger.debug(
-                    f"Added confirmed location to resume state: {confirmed_locations}, patch_field={patch_field}"
-                )
-            elif confirmed_location is None and "bounding_box" in parsed_inputs:
-                bbox_result = parsed_inputs["bounding_box"]
-                assert isinstance(bbox_result, BoundingBoxResult)
-                # Orchestrator path: inject bbox into next_input when patch field known.
-                resume_state = resume_payload.get("resume_state") or {}
-                resume_patch = pause_state.get("resume_patch", {})
-                patch_field = (
-                    resume_patch.get("field") if isinstance(resume_patch, dict) else None
-                )
-                if patch_field and isinstance(resume_state, dict):
-                    next_input = resume_state.get("next_input")
-                    tool_input = pause_state.get("tool_input")
-                    if isinstance(next_input, dict):
-                        patched = dict(next_input)
-                    elif isinstance(tool_input, dict):
-                        patched = dict(tool_input)
-                    else:
-                        patched = {}
-                    patched[patch_field] = bbox_result.area.as_list()
-                    resume_state["next_input"] = patched
-                    resume_payload["resume_state"] = resume_state
-            else:
-                logger.warning(
-                    "Resume state is empty or missing, user input may not apply properly"
-                )
+        resume_user_text = str(
+            graph_state.get("user_query") or pause_state.get("user_text", "")
+        )
+        logger.debug(
+            f"Graph resume - confirmed_index: {graph_confirmed_index}, "
+            f"candidates: {len(candidates)}, kinds={list(parsed_inputs.keys())}"
+        )
 
         # Create stream wiring for real-time updates
         event_loop = asyncio.get_running_loop()
-        stream_emitter: EventEmitter | None = None
-        stream_subscriber: WebSocketStreamSubscriber | None = None
-        stream_callback = None
-        if use_graph:
-            stream_emitter = EventEmitter()
-            stream_subscriber = WebSocketStreamSubscriber(
-                conn, event_loop, emitter=stream_emitter
-            )
-        else:
-            stream_callback = _legacy_stream_callback(conn, event_loop)
+        stream_emitter = EventEmitter()
+        stream_subscriber = WebSocketStreamSubscriber(
+            conn, event_loop, emitter=stream_emitter
+        )
 
         user_inputs_payload = {
             kind: model.model_dump(mode="python") for kind, model in parsed_inputs.items()
         }
 
-        def run_orchestrator_resume():
-            if use_graph:
-                return graph_runner.resume_graph_turn(
-                    graph_state=graph_state,
-                    user_inputs=user_inputs_payload,
-                    confirmed_index=graph_confirmed_index
-                    if confirmed_location is not None
-                    else None,
-                    stream_emitter=stream_emitter,
-                )
-            executor = create_orchestrator_executor()
-            return invoke_agent(
-                executor,
-                resume_payload.get("user_text", ""),
-                resume=resume_payload,
-                stream_callback=stream_callback,
+        def run_graph_resume():
+            return graph_runner.resume_graph_turn(
+                graph_state=graph_state,
+                user_inputs=user_inputs_payload,
+                confirmed_index=graph_confirmed_index
+                if confirmed_location is not None
+                else None,
+                stream_emitter=stream_emitter,
             )
 
-        logger.debug(f"Invoking agent engine with resume - use_graph_pipeline: {use_graph}")
+        logger.debug("Invoking graph pipeline with resume")
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
-            result = await loop.run_in_executor(pool, run_orchestrator_resume)
+            result = await loop.run_in_executor(pool, run_graph_resume)
         if conn.is_closed:
             return
 

@@ -7,7 +7,7 @@ Defines the message protocol for client-server communication.
 from enum import Enum
 import uuid
 from typing import Any as TypingAny
-from typing_extensions import Any, Callable, Literal, Optional, TypedDict
+from typing_extensions import Any, Literal, Optional
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from src.tools.contracts import ToolArtifacts
@@ -44,9 +44,6 @@ __all__ = [
     "LocationResult",
     "OSMPrefixType",
     "OSMType",
-    "OrchestratorInputs",
-    "OrchestratorTrace",
-    "ResumeState",
     "ServerMessage",
     "ServerMessageType",
     "StatusMessage",
@@ -93,39 +90,6 @@ class AgentStage(str, Enum):
     PLANNING = "planning"
     TOOL_CALL = "tool_call"
     ANALYZING = "analyzing"
-
-
-# =============================================================================
-# Orchestrator Types
-# =============================================================================
-
-
-class OrchestratorTrace(TypedDict, total=False):
-    """Trace information from orchestrator planning phase."""
-
-    needs_data: bool
-    needs_analysis: bool
-    data_query: str
-    analysis_goal: str
-
-
-class ResumeState(TypedDict, total=False):
-    """State for resuming a paused orchestrator execution."""
-
-    resume_state: dict[str, Any]
-    orchestrator_trace: OrchestratorTrace
-    needs_analysis: bool
-    analysis_goal: str
-    user_text: str
-
-
-class OrchestratorInputs(TypedDict, total=False):
-    """Input parameters for orchestrator executor invoke method."""
-
-    input: str
-    chat_history: list["ChatMessage"] | None
-    stream_callback: Callable[[dict[str, Any]], None] | None
-    resume: ResumeState | None
 
 
 # =============================================================================

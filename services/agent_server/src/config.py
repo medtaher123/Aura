@@ -116,15 +116,6 @@ class AgentServerConfig(BaseSettings):
         description="Clock skew leeway in seconds when validating Cognito JWTs",
     )
 
-    # =========================================================================
-    # Graph pipeline (ported EO_LLM LangGraph) TODO: remove this once the legacy orchestrator is removed (mtbh)
-    # =========================================================================
-    use_graph_pipeline: bool = Field(
-        default=True,
-        description="Route chat requests through the EO_LLM LangGraph pipeline instead of the legacy orchestrator",
-    )
-
-
     fast_llm_provider: str = Field(
         default="bedrock",
         description="Provider for fast LLM",
