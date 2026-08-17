@@ -49,6 +49,20 @@ class LocationContext:
             return None
         return self.resolved_area.as_list()
 
+    def known_coords(self) -> dict[str, float]:
+        """Lat/lon only when resolved — omit keys so the arg-resolver LLM can fill gaps."""
+        out: dict[str, float] = {}
+        if self.lat is not None:
+            out["lat"] = float(self.lat)
+        if self.lon is not None:
+            out["lon"] = float(self.lon)
+        return out
+
+
+def omit_none(values: dict[str, Any]) -> dict[str, Any]:
+    """Drop keys whose value is None so callers do not pre-fill missing tool args."""
+    return {key: value for key, value in values.items() if value is not None}
+
 
 def domain_result_as_dict(result: Any) -> dict[str, Any]:
     """Normalize a domain result value to a plain dict."""

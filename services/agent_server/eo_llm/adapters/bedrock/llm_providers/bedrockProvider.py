@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator, Type
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Type
+
 import aioboto3
+
 from eo_llm.adapters.bedrock import LLMProvider
 from eo_llm.adapters.bedrock.llm_provider import T
 from src.config import get_config
 
+if TYPE_CHECKING:
+    from src.db.models.message import Message
+
 logger = logging.getLogger("eo_llm.bedrock")
 
 config = get_config()
+
 
 class BedrockProvider(LLMProvider):
     """AWS Bedrock Runtime async implementation of ``LLMProvider``."""
@@ -28,18 +35,29 @@ class BedrockProvider(LLMProvider):
     def last_failure_reason(self) -> str:
         return self._last_failure_reason
 
+    def _converse_messages(
+        self,
+        *,
+        user_message: "Message | None" = None,
+        chat_history: Sequence["Message"] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.format_messages(
+            chat_history or (),
+            user_message=user_message,
+        )
+
     async def call_structured0(
         self,
         *,
         model_id: str,
         system_prompt: str,
-        user_prompt: str,
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
+        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
-        user_content: list[dict[str, Any]] | None = None,
+        chat_history: Sequence["Message"] | None = None,
     ) -> T | None:
         if not model_id:
             self._last_failure_reason = "model_not_ready"
@@ -49,17 +67,14 @@ class BedrockProvider(LLMProvider):
         native_schema = response_model.model_json_schema()
 
         try:
-            # We instantiate the client asynchronously for the duration of the call
             async with self._session.client("bedrock-runtime") as client:
                 response = await client.converse(
                     modelId=model_id,
                     system=[{"text": system_prompt}],
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": user_content or [{"text": user_prompt}],
-                        }
-                    ],
+                    messages=self._converse_messages(
+                        user_message=user_message,
+                        chat_history=chat_history,
+                    ),
                     inferenceConfig={
                         "temperature": float(temperature),
                         "maxTokens": int(max_tokens),
@@ -102,14 +117,13 @@ class BedrockProvider(LLMProvider):
         *,
         model_id: str,
         system_prompt: str,
-        user_prompt: str,
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
+        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
-        user_content: list[dict[str, Any]] | None = None,
-    
+        chat_history: Sequence["Message"] | None = None,
     ) -> T | None:
         if not model_id:
             self._last_failure_reason = "model_not_ready"
@@ -125,7 +139,7 @@ class BedrockProvider(LLMProvider):
                         "description": schema_description,
                         "inputSchema": {
                             "json": native_schema,
-                        }
+                        },
                     },
                 }
             ],
@@ -133,49 +147,43 @@ class BedrockProvider(LLMProvider):
                 "tool": {
                     "name": schema_name,
                 }
-            }
+            },
         }
-                
 
         try:
-            # We instantiate the client asynchronously for the duration of the call
             async with self._session.client("bedrock-runtime") as client:
                 response = await client.converse(
                     modelId=model_id,
                     system=[{"text": system_prompt}],
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": user_content or [{"text": user_prompt}],
-                        }
-                    ],
+                    messages=self._converse_messages(
+                        user_message=user_message,
+                        chat_history=chat_history,
+                    ),
                     inferenceConfig={
                         "temperature": float(temperature),
                         "maxTokens": int(max_tokens),
                     },
                     toolConfig=tool_config,
                 )
-            
 
             stop_reason = str(response.get("stopReason") or "").lower()
             if stop_reason == "tool_use":
-                result = response['output']['message']['content'][0]['toolUse']['input']
+                result = response["output"]["message"]["content"][0]["toolUse"]["input"]
                 return response_model.model_validate(result)
-        
 
         except Exception as e:
             logger.warning("Bedrock structured call failed for schema %s: %s", schema_name, e)
             return None
-
 
     async def call_stream(
         self,
         *,
         model_id: str,
         system_prompt: str,
-        user_prompt: str,
+        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 900,
+        chat_history: Sequence["Message"] | None = None,
     ) -> AsyncIterator[str]:
         """Send a standard text prompt and yield streamed text responses."""
         if not model_id:
@@ -189,7 +197,10 @@ class BedrockProvider(LLMProvider):
                 response = await client.converse_stream(
                     modelId=model_id,
                     system=[{"text": system_prompt}],
-                    messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+                    messages=self._converse_messages(
+                        user_message=user_message,
+                        chat_history=chat_history,
+                    ),
                     inferenceConfig={
                         "temperature": float(temperature),
                         "maxTokens": int(max_tokens),
@@ -198,7 +209,6 @@ class BedrockProvider(LLMProvider):
 
                 stream = response.get("stream")
                 if stream:
-                    # In aioboto3, the EventStream is an async iterator
                     async for event in stream:
                         if "contentBlockDelta" in event:
                             delta = event["contentBlockDelta"].get("delta", {})
@@ -215,31 +225,39 @@ class BedrockProvider(LLMProvider):
         *,
         model_id: str,
         system_prompt: str,
-        user_prompt: str,
         document_bytes: bytes,
         document_name: str,
         document_format: str,
+        user_message: "Message | None" = None,
+        chat_history: Sequence["Message"] | None = None,
     ) -> dict[str, Any]:
         """Handles standard (non-structured) calls that include a document payload."""
+        messages = self._converse_messages(
+            user_message=user_message,
+            chat_history=chat_history,
+        )
+        if not messages or messages[-1]["role"] != "user":
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [{"text": "Summarize this document."}],
+                }
+            )
+        messages[-1]["content"].append(
+            {
+                "document": {
+                    "format": document_format,
+                    "name": document_name,
+                    "source": {"bytes": document_bytes},
+                }
+            }
+        )
+
         async with self._session.client("bedrock-runtime") as client:
             response = await client.converse(
                 modelId=model_id,
                 system=[{"text": system_prompt}],
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"text": user_prompt},
-                            {
-                                "document": {
-                                    "format": document_format,
-                                    "name": document_name,
-                                    "source": {"bytes": document_bytes},
-                                }
-                            },
-                        ],
-                    }
-                ],
+                messages=messages,
                 inferenceConfig={"temperature": 0.0, "maxTokens": 900},
             )
             return response

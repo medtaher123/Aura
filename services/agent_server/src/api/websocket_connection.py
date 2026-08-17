@@ -167,7 +167,11 @@ class WebSocketConnection:
     async def send_user_input_request(
         self, needs_input: dict[str, Any], pause_state: dict
     ) -> None:
-        """Send a request for one or more user inputs (kind → TRequest map)."""
+        """Ask the client for user inputs.
+
+        ``pause_state`` on the wire is only a resume reference
+        (typically ``{conversation_id}``); the full pause lives in the DB.
+        """
         await self.send(
             UserInputRequestMessage(needs_input=needs_input, pause_state=pause_state)
         )

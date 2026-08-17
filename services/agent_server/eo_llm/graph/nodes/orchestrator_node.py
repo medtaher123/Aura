@@ -6,6 +6,7 @@ import logging
 from typing import Any, Callable
 
 from eo_llm.adapters.bedrock import DomainRouteDecision, LocationHint
+from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.adapters.bedrock.types import RouteDecider
 from eo_llm.document_store import load_document_bytes
@@ -120,6 +121,7 @@ class OrchestratorNode(GraphNode):
             schema_name="domain_route_decision",
             schema_description="Routing decision for EO_LLM orchestrator",
             max_tokens=500,
+            chat_history=get_chat_history(),
         )
         return decision
 
@@ -204,6 +206,7 @@ class OrchestratorNode(GraphNode):
             schema_name="location_hint",
             schema_description="Location inferred from uploaded document and query",
             max_tokens=120,
+            chat_history=get_chat_history(),
         )
         return response.place_query.strip() if response else ""
 

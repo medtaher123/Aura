@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from eo_llm.adapters.bedrock import LocationHint
+from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.graph.geocode import search_location_candidates
 from eo_llm.graph.nodes.base import GraphNode
@@ -15,7 +16,42 @@ from eo_llm.graph.state import (
     GraphStateModel,
 )
 from eo_llm.prompts import get_query_location_prompt
-from src.schemas.user_inputs import LocationRequest, UserInputRouter
+from src.user_inputs import LocationRequest, UserInputRouter
+
+# Trailing feature words that often make Nominatim return zero hits
+# (e.g. "Fontainebleau forests" → retry as "Fontainebleau").
+_PLACE_FEATURE_SUFFIXES = frozenset(
+    {
+        "forest",
+        "forests",
+        "foret",
+        "forêt",
+        "woods",
+        "wood",
+        "park",
+        "parks",
+        "mountain",
+        "mountains",
+        "valley",
+        "region",
+        "area",
+        "areas",
+        "bay",
+        "lake",
+        "river",
+    }
+)
+
+
+def _simplify_place_query(place: str) -> str:
+    """Drop a trailing geographic feature word for a Nominatim retry."""
+    parts = [p for p in (place or "").strip().split() if p]
+    if len(parts) < 2:
+        return ""
+    last = parts[-1].lower().strip(".,;:")
+    if last not in _PLACE_FEATURE_SUFFIXES:
+        return ""
+    return " ".join(parts[:-1]).strip(" ,")
 
 
 def _candidate_to_resolved(c: dict[str, Any]) -> ResolvedLocationModel:
@@ -107,6 +143,12 @@ class LocationGateNode(GraphNode):
             return dump_state(s)
 
         found = await search_location_candidates(place, limit=8)
+        if not found:
+            simplified = _simplify_place_query(place)
+            if simplified:
+                found = await search_location_candidates(simplified, limit=8)
+                if found:
+                    s.location_query = simplified
 
         if not found:
             s.resolved_location = ResolvedLocationModel()
@@ -153,6 +195,7 @@ class LocationGateNode(GraphNode):
             schema_name="location_hint",
             schema_description="Geocodable place extracted from user query",
             max_tokens=120,
+            chat_history=get_chat_history(),
         )
         return response.place_query.strip() if response else ""
 

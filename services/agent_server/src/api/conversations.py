@@ -15,8 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import User, get_db
 from ..db.services import MessageService, ConversationService
 from ..schemas import (
-    MessageCreate,
-    MessageRead,
+        ConversationMessage,
     ConversationCreate,
     ConversationRead,
     ConversationWithMessages,
@@ -65,45 +64,17 @@ async def get_conversation(
     return ConversationWithMessages.from_domain(result)
 
 
-@router.post(
-    "/{conversation_id}/messages",
-    response_model=MessageRead,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_message(
-    conversation_id: uuid.UUID,
-    payload: MessageCreate,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> MessageRead:
-    """Save a chat message. Verifies conversation ownership before writing.
 
-    ``payload.metadata`` may be an arbitrary nested dictionary (e.g.
-    ``{"tool_name": "calculator", "output": {"result": 42}}``) and is persisted
-    to the JSONB ``metadata`` column.
-    """
-    message = await MessageService(db).create_message(
-        user,
-        conversation_id,
-        payload.model_dump(),
-    )
-    if message is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
-        )
-    return MessageRead.from_model(message)
-
-
-@router.get("/{conversation_id}/messages", response_model=list[MessageRead])
+@router.get("/{conversation_id}/messages", response_model=list[ConversationMessage])
 async def list_messages(
     conversation_id: uuid.UUID,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[MessageRead]:
+) -> list[ConversationMessage]:
     """List messages in a conversation, scoped to the current user."""
     messages = await MessageService(db).list_messages(user, conversation_id)
     if messages is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )
-    return [MessageRead.from_model(message) for message in messages]
+    return [message.to_frontend() for message in messages]

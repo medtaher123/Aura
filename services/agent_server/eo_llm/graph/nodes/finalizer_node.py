@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
+from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
 from eo_llm.prompts import get_finalizer_prompt
@@ -83,6 +84,7 @@ class FinalizerNode(GraphNode):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=900,
+            chat_history=get_chat_history(),
         ):
             if not chunk:
                 continue

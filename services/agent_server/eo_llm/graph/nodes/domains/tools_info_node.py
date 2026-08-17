@@ -1,7 +1,7 @@
 """Tools discovery domain node.
 
 Delegates to the MCP ``tools_info_tool`` so the graph pipeline shares the same
-catalog, formatting, and per-tool/category lookup logic as the legacy DataAgent.
+catalog, formatting, and per-tool/category lookup logic.
 """
 
 from __future__ import annotations

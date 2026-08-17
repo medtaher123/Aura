@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.adapters.mcp_client import MCPClient
 from src.core.event_emitter import DataAgentStepEvent, emit_event
@@ -266,6 +267,7 @@ class ToolPlanner:
             schema_name="domain_tool_plan",
             schema_description="Execution plan for a single EO_LLM domain agent",
             max_tokens=1200,
+            chat_history=get_chat_history(),
         )
 
         emit_decision_reasoning(
@@ -308,6 +310,7 @@ class ToolPlanner:
                 schema_name="step_argument_resolution",
                 schema_description="Resolved concrete arguments for one tool step",
                 max_tokens=900,
+                chat_history=get_chat_history(),
             )
             if parsed is not None:
                 resolved_args: dict[str, Any] = {}

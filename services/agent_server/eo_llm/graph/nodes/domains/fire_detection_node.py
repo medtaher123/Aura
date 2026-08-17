@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from eo_llm.graph.nodes.domain_base import ToolPlanDomainNode
-from eo_llm.graph.nodes.helpers import LocationContext
+from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
 class FireDetectionNode(ToolPlanDomainNode):
@@ -16,25 +16,16 @@ class FireDetectionNode(ToolPlanDomainNode):
         "clms_burnt_area_impact_tool",
     ]
 
-    @property
-    def missing_location_message(self) -> str:
-        return "Missing resolved lat/lon; fire tool not called."
-
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
-        lat = float(ctx.lat)  # type: ignore[arg-type]
-        lon = float(ctx.lon)  # type: ignore[arg-type]
-        location = ctx.display_name or None
+        location_args = omit_none(
+            {
+                **ctx.known_coords(),
+                "location": ctx.display_name or None,
+            }
+        )
         return {
-            "detect_fire_tool": {
-                "lat": lat,
-                "lon": lon,
-                "location": location,
-            },
-            "clms_burnt_area_impact_tool": {
-                "lat": lat,
-                "lon": lon,
-                "location": location,
-            },
+            "detect_fire_tool": dict(location_args),
+            "clms_burnt_area_impact_tool": dict(location_args),
         }
 
 

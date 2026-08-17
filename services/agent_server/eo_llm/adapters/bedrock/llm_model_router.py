@@ -1,16 +1,20 @@
-from dataclasses import dataclass
+from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import Enum
 import importlib
 import inspect
 import pkgutil
-from typing import Any, AsyncIterator, Iterator, Type, TypeVar
+from typing import Any, AsyncIterator, Type, TypeVar
 
 from pydantic import BaseModel
 
 from eo_llm.adapters.bedrock.llm_provider import LLMProvider
 from src.config import get_config
 from src.core.singleton_meta import SingletonMeta
+from src.db.models.message import Message, UserMessage
+
 
 class TaskType(Enum):
     FAST = "fast"               # High speed, low cost (e.g., basic summarization)
@@ -94,19 +98,34 @@ class LLMModelRouter(metaclass=SingletonMeta):
     def get_route(self, task: TaskType) -> LLMRoute:
         return self._routes[task]
 
-
+    @staticmethod
+    def _coerce_user_message(
+        *,
+        user_message: Message | None = None,
+        user_prompt: str | None = None,
+    ) -> Message | None:
+        """Prefer an explicit ``Message``; otherwise wrap ``user_prompt`` as ``UserMessage``."""
+        if user_message is not None:
+            return user_message
+        if user_prompt is None:
+            return None
+        text = str(user_prompt).strip()
+        if not text:
+            return None
+        return UserMessage.create(text)
 
     async def call_structured(
         self,
         *,
         system_prompt: str,
-        user_prompt: str,
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
+        user_prompt: str | None = None,
+        user_message: Message | None = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
-        user_content: list[dict[str, Any]] | None = None,
+        chat_history: Sequence[Message] | None = None,
         task_type: TaskType = TaskType.STRUCTURED,
         model: LLMRoute | None = None,
     ) -> T | None:
@@ -116,23 +135,28 @@ class LLMModelRouter(metaclass=SingletonMeta):
 
         return await model.provider.call_structured(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_message=self._coerce_user_message(
+                user_message=user_message,
+                user_prompt=user_prompt,
+            ),
             response_model=response_model,
             schema_name=schema_name,
             schema_description=schema_description,
             temperature=temperature,
             max_tokens=max_tokens,
-            user_content=user_content,
+            chat_history=chat_history,
             model_id=model.model_id,
         )
 
     def call_stream(
         self,
         *,
-        user_prompt: str,
-        temperature: float = 0.0,
         system_prompt: str,
+        user_prompt: str | None = None,
+        user_message: Message | None = None,
+        temperature: float = 0.0,
         max_tokens: int = 900,
+        chat_history: Sequence[Message] | None = None,
         task_type: TaskType = TaskType.REASONING,
         model: LLMRoute | None = None,
     ) -> AsyncIterator[str]:
@@ -141,10 +165,14 @@ class LLMModelRouter(metaclass=SingletonMeta):
             model = self.get_route(task_type)
 
         return model.provider.call_stream(
-            user_prompt=user_prompt,
+            user_message=self._coerce_user_message(
+                user_message=user_message,
+                user_prompt=user_prompt,
+            ),
             temperature=temperature,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
+            chat_history=chat_history,
             model_id=model.model_id,
         )
 
@@ -152,10 +180,12 @@ class LLMModelRouter(metaclass=SingletonMeta):
         self,
         *,
         system_prompt: str,
-        user_prompt: str,
         document_bytes: bytes,
         document_name: str,
         document_format: str,
+        user_prompt: str | None = None,
+        user_message: Message | None = None,
+        chat_history: Sequence[Message] | None = None,
         task_type: TaskType = TaskType.DOCUMENT,
         model: LLMRoute | None = None,
     ) -> dict[str, Any]:
@@ -165,11 +195,13 @@ class LLMModelRouter(metaclass=SingletonMeta):
 
         return await model.provider.call_standard_with_document(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_message=self._coerce_user_message(
+                user_message=user_message,
+                user_prompt=user_prompt,
+            ),
             document_bytes=document_bytes,
             document_name=document_name,
             document_format=document_format,
+            chat_history=chat_history,
             model_id=model.model_id,
         )
-
-    

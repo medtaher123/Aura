@@ -16,7 +16,7 @@ from eo_llm.graph.tool_plan import (
     ToolPlan,
     ToolPlanner,
 )
-from src.schemas.user_inputs import (
+from src.user_inputs import (
     BoundingBoxRequest,
     InputKind,
     LocationRequest,
@@ -75,7 +75,6 @@ class ToolPlanDomainNode(DomainNode):
 
     shared_tools: ClassVar[list[ToolName]] = ["web_search_tool"]
     tools: ClassVar[list[ToolName | DomainTool]]
-    requires_location: bool = True
     _tools_registry: ClassVar[dict[str, list[str]]] = {}
 
     def __init__(
@@ -202,10 +201,6 @@ class ToolPlanDomainNode(DomainNode):
             execution_context=execution_context,
         )
 
-    @property
-    def missing_location_message(self) -> str:
-        return f"Missing resolved lat/lon; {self.domain_name} tools not called."
-
     def _pause_for_user_inputs(
         self,
         s: GraphStateModel,
@@ -236,12 +231,7 @@ class ToolPlanDomainNode(DomainNode):
 
     async def execute(self, s: GraphStateModel) -> GraphState:
         ctx = LocationContext.from_state(s)
-        if self.requires_location and not ctx.has_coordinates:
-            return wrap_domain_result(
-                self.domain_name,
-                self._skipped_result(ctx),
-            )
-
+        # Only pass known location fields; omit gaps so the arg-resolver LLM can fill them.
         runtime_args = {
             **self.build_shared_runtime_args(s, ctx),
             **self.build_runtime_args(ctx),
@@ -270,14 +260,6 @@ class ToolPlanDomainNode(DomainNode):
             self.domain_name,
             self._success_result(ctx, plan, execution),
         )
-
-    def _skipped_result(self, ctx: LocationContext) -> dict[str, Any]:
-        return {
-            "status": "skipped",
-            "resolved_location": ctx.resolved or {},
-            "message": self.missing_location_message,
-            "error": True,
-        }
 
     def _error_result(self, ctx: LocationContext, exc: Exception) -> dict[str, Any]:
         return {

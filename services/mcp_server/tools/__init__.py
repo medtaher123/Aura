@@ -7,6 +7,7 @@ required for tool registration with FastMCP.
 """
 
 from tools.simple_tools import get_time, get_date, calculator
+from tools.web_search import web_search_tool
 from tools.fire_detection import detect_fire_tool
 from tools.disaster_detection import query_disaster_events_tool
 from tools.water_ingress import estimate_surface_water_ingress_tool
@@ -27,16 +28,19 @@ from tools.bdtopo_intersection import bdtopo_intersection_tool
 from tools.bdtopo_quality import bdtopo_coverage_quality_tool
 from tools.bdtopo_change import bdtopo_change_snapshot_tool
 from tools.bdtopo_explain import bdtopo_thematic_explain_tool
+from tools.bdtopo_visualize import bdtopo_visualize_tool
 from tools.maxar_open_data import maxar_open_data_imagery_tool
 from tools.terrazard.terrazard_available_dates import get_terrazard_available_dates_tool
 from tools.terrazard.terrazard_hazard_map import get_terrazard_hazard_map_tool
 from tools.terrazard.terrazard_flood_briefing import get_terrazard_flood_briefing_tool
+from tools.terrazard.terrazard_flood_damage import get_terrazard_flood_damage_tool
 
 
 __all__ = [
     "get_terrazard_available_dates_tool",
     "get_terrazard_hazard_map_tool",
     "get_terrazard_flood_briefing_tool",
+    "get_terrazard_flood_damage_tool",
     "detect_fire_tool",
     "query_disaster_events_tool",
     "estimate_surface_water_ingress_tool",
@@ -48,6 +52,7 @@ __all__ = [
     "get_time",
     "get_date",
     "calculator",
+    "web_search_tool",
     "streamflow_forecast_tool",
     "drought_flood_risk_tool",
     "nasa_power_hourly_tool",
@@ -59,6 +64,7 @@ __all__ = [
     "bdtopo_coverage_quality_tool",
     "bdtopo_change_snapshot_tool",
     "bdtopo_thematic_explain_tool",
+    "bdtopo_visualize_tool",
     "flood_depth_damage_tool",
     "flood_damage_city_tool",
     "maxar_open_data_imagery_tool",

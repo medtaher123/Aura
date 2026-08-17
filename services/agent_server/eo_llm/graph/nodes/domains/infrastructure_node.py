@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from eo_llm.graph.nodes.domain_base import ToolPlanDomainNode
-from eo_llm.graph.nodes.helpers import LocationContext
+from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
 class InfrastructureNode(ToolPlanDomainNode):
@@ -20,58 +20,52 @@ class InfrastructureNode(ToolPlanDomainNode):
         "bdtopo_thematic_explain_tool"
     ] # type: ignore[assignment]
 
-    @property
-    def missing_location_message(self) -> str:
-        return "Missing resolved lat/lon; infrastructure tool not called."
-
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
-        lat = float(ctx.lat)  # type: ignore[arg-type]
-        lon = float(ctx.lon)  # type: ignore[arg-type]
+        coords = ctx.known_coords()
+        display = ctx.display_name or None
+        bdtopo_base = omit_none(
+            {
+                "input_mode": "place_name" if display else ("point" if coords else None),
+                **coords,
+                "place_name": display,
+                "radius_m": 3000,
+                "themes": ["buildings", "transport", "activity_zones"],
+            }
+        )
         return {
-            "infrastructure_query_tool": {
-                "lat": lat,
-                "lon": lon,
-                "location": ctx.display_name or None,
-                "radius_km": 25.0,
-            },
+            "infrastructure_query_tool": omit_none(
+                {
+                    **coords,
+                    "location": display,
+                    "radius_km": 25.0,
+                }
+            ),
             "get_route_info": {},
-            "bdtopo_visualize_tool": {
-                "input_mode": "place_name" if ctx.display_name else "point",
-                "lat": lat,
-                "lon": lon,
-                "place_name": ctx.display_name or None,
-                "radius_m": 3000,
-                "themes": ["buildings", "transport", "activity_zones"],
-            },
-            "bdtopo_query_tool": {
-                "lat": lat,
-                "lon": lon,
-                "place_name": ctx.display_name or None,
-                "radius_m": 3000,
-                "themes": ["buildings", "transport", "activity_zones"],
-            },
-            "bdtopo_intersection_tool": {
-                "lat": lat,
-                "lon": lon,
-                "place_name": ctx.display_name or None,
-                "radius_m": 3000,
-                "themes": ["buildings", "transport", "activity_zones"],
-            },
-            "bdtopo_visualize_tool": {
-                "input_mode": "place_name" if ctx.display_name else "point",
-                "lat": lat,
-                "lon": lon,
-                "place_name": ctx.display_name or None,
-                "radius_m": 3000,
-                "themes": ["buildings", "transport", "activity_zones"],
-            },
-            "bdtopo_thematic_explain_tool": {
-                "lat": lat,
-                "lon": lon,
-                "place_name": ctx.display_name or None,
-                "radius_m": 3000,
-                "themes": ["buildings", "transport", "activity_zones"],
-            },
+            "bdtopo_visualize_tool": dict(bdtopo_base),
+            "bdtopo_query_tool": omit_none(
+                {
+                    **coords,
+                    "place_name": display,
+                    "radius_m": 3000,
+                    "themes": ["buildings", "transport", "activity_zones"],
+                }
+            ),
+            "bdtopo_intersection_tool": omit_none(
+                {
+                    **coords,
+                    "place_name": display,
+                    "radius_m": 3000,
+                    "themes": ["buildings", "transport", "activity_zones"],
+                }
+            ),
+            "bdtopo_thematic_explain_tool": omit_none(
+                {
+                    **coords,
+                    "place_name": display,
+                    "radius_m": 3000,
+                    "themes": ["buildings", "transport", "activity_zones"],
+                }
+            ),
         }
 
 

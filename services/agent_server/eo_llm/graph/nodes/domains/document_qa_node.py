@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 
+from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.document_store import load_document_bytes
 from eo_llm.graph.nodes.domain_base import DomainNode
@@ -120,6 +121,7 @@ class DocumentQADomainNode(DomainNode):
             document_bytes=doc_bytes,
             document_name=neutral_name,
             document_format=format_value,
+            chat_history=get_chat_history(),
         )
 
         return {

@@ -48,7 +48,6 @@ class GraphState(TypedDict, total=False):
     # Optional explicit place string (orchestrator / client can set; else query is used)
     place_hint: str
     document_ref: dict[str, Any]
-    document_context: dict[str, Any]
 
     # Location / user-input gate (after orchestrator, before router)
     location_query: str
@@ -153,7 +152,6 @@ class GraphStateModel(BaseModel):
     user_id: str = "anonymous"
     place_hint: str = ""
     document_ref: dict[str, Any] = Field(default_factory=dict)
-    document_context: dict[str, Any] = Field(default_factory=dict)
 
     # Location / user-input gate
     location_query: str = ""
