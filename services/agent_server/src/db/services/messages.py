@@ -20,22 +20,6 @@ class MessageService:
         self.messages = MessageRepository(db)
         self.conversations = ConversationService(db)
 
-    async def create_message(
-        self,
-        user: User,
-        conversation_id: uuid.UUID,
-        data: dict,
-        *,
-        commit: bool = True,
-    ) -> Optional[Message]:
-        """Create a message if the conversation belongs to ``user``."""
-        conversation = await self.conversations.get_conversation(user, conversation_id)
-        if conversation is None:
-            return None
-        return await self.messages.create_for_conversation(
-            conversation_id, data, commit=commit
-        )
-
     async def list_messages(
         self,
         user: User,

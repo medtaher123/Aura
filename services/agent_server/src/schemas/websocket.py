@@ -8,14 +8,13 @@ from enum import Enum
 import uuid
 from typing import Any as TypingAny
 from typing_extensions import Any, Literal, Optional
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
+from src.db.models.message import InputResponseMessage, UserMessage
+from src.db.models.message_attachments import AnyMessageAttachment
 from src.tools.contracts import ToolArtifacts
-from src.schemas.user_inputs import (
-    BoundingBoxResult,
+from src.user_inputs import (
     InputKind,
-    LocationOption,
-    LocationResult,
     get_osm_type_prefix,
 )
 from src.schemas.spatial import BoundingBox
@@ -27,9 +26,7 @@ OSMPrefixType = Literal["R", "W", "N"]
 __all__ = [
     "AgentStage",
     "BoundingBox",
-    "BoundingBoxResult",
     "CancelMessage",
-    "ChatMessage",
     "ChatRequestMessage",
     "ChatResumeMessage",
     "ClientMessage",
@@ -40,8 +37,6 @@ __all__ = [
     "Coordinates",
     "ErrorMessage",
     "InputKind",
-    "LocationOption",
-    "LocationResult",
     "OSMPrefixType",
     "OSMType",
     "ServerMessage",
@@ -97,13 +92,6 @@ class AgentStage(str, Enum):
 # =============================================================================
 
 
-class ChatMessage(BaseModel):
-    """A single chat message in history."""
-
-    role: str = Field(..., description="Message role: 'user' or 'assistant'")
-    content: str = Field(..., description="Message content")
-
-
 class Coordinates(BaseModel):
     """Geographic coordinates."""
 
@@ -121,33 +109,25 @@ class ChatRequestMessage(BaseModel):
 
     type: str = Field(default=ClientMessageType.CHAT_REQUEST.value)
     message: str = Field(..., description="User message")
-    conversation_history: list[ChatMessage] = Field(
-        default_factory=list,
-        validation_alias=AliasChoices("conversation_history", "chat_history"),
-        description="Previous conversation history",
-    )
     conversation_id: Optional[uuid.UUID] = Field(
         default=None,
-        description="Conversation ID to load history from when history is not provided",
-    )
-    confirmed_locations: dict[str, list[float]] = Field(
-        default_factory=dict,
-        description="Cache of confirmed locations: {name: [lat, lon]}",
-    )
-    document_context: Optional[str] = Field(
-        default=None, description="Extracted text from uploaded documents"
+        description="Conversation ID; omit to create a new conversation",
     )
     language: Optional[str] = Field(
         default=None,
         description="User's language for translation (auto-detected if None)",
     )
-    user_inputs: dict[str, TypingAny] = Field(
-        default_factory=dict,
+    attachments: list[AnyMessageAttachment] = Field(
+        default_factory=list,
         description=(
-            "Optional kind → TResult map attached proactively with the message "
-            "(same shapes as chat_resume.user_inputs)"
+            "Optional message attachments (e.g. type=location, type=bounding_box) "
+            "sent proactively with the message"
         ),
     )
+
+    def to_message(self) -> UserMessage:
+        """Build the persisted user turn from this wire payload."""
+        return UserMessage.create(self.message, attachments=list(self.attachments))
 
 
 class ChatResumeMessage(BaseModel):
@@ -162,26 +142,18 @@ class ChatResumeMessage(BaseModel):
     conversation_id: uuid.UUID = Field(
         ..., description="Conversation whose paused state should be resumed"
     )
-    user_inputs: dict[str, TypingAny] = Field(
-        default_factory=dict,
-        description="kind → TResult map answering needs_input keys",
-    )
-    # Accepted for older clients; copied into user_inputs["location"].
-    confirmed_location: Optional[LocationResult] = Field(
-        default=None,
-        description="Deprecated: use user_inputs['location'] instead",
+    attachments: list[AnyMessageAttachment] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Non-empty attachments answering needs_input "
+            "(type=location, type=bounding_box, …)"
+        ),
     )
 
-    @model_validator(mode="after")
-    def merge_confirmed_location_into_user_inputs(self) -> "ChatResumeMessage":
-        if self.confirmed_location is not None and "location" not in self.user_inputs:
-            self.user_inputs = {
-                **self.user_inputs,
-                "location": self.confirmed_location.to_dict(),
-            }
-        if not self.user_inputs:
-            raise ValueError("user_inputs must be non-empty (or provide confirmed_location)")
-        return self
+    def to_message(self) -> InputResponseMessage:
+        """Build the persisted input-response turn from this wire payload."""
+        return InputResponseMessage.create(attachments=list(self.attachments))
 
 
 class CancelMessage(BaseModel):
@@ -263,7 +235,11 @@ class UserInputRequestMessage(BaseModel):
         description="kind → TRequest map; non-empty means the agent is paused",
     )
     pause_state: dict[str, Any] = Field(
-        ..., description="Opaque pause reference (conversation_id)"
+        ...,
+        description=(
+            "Client resume reference only — currently {conversation_id}. "
+            "Full pause payload is stored server-side on the conversation."
+        ),
     )
 
 

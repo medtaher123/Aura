@@ -8,8 +8,11 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Type, TypeVar
 
 from pydantic import BaseModel
 
+from src.db.models.message_attachments import FileAttachment
+
 if TYPE_CHECKING:
     from src.db.models.message import Message
+    from src.db.models.message_attachments import MessageAttachment
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -25,63 +28,68 @@ class LLMProvider(ABC):
         """Must be implemented by subclasses to identify the provider."""
         pass
 
+    #TODO: to implement
+    def format_file_attachment(
+        self, attachment: FileAttachment
+    ) -> list[dict[str, Any]]:
+        """Provider-specific file content blocks. Empty until files are wired."""
+        return []
 
     def format_messages(
         self,
         messages: Sequence["Message"],
-        *,
-        user_message: "Message | None" = None,
     ) -> list[dict[str, Any]]:
         """Turn ORM ``Message`` history (+ optional current user turn) into provider messages.
-
-        The current turn is ``user_message`` (``rendered_content``).
 
         Default shape is Bedrock Converse ``[{role, content: [{text}]}]``, merging
         consecutive same-role turns. Subclasses may override for other vendors.
         """
         formatted: list[dict[str, Any]] = []
         for message in messages:
-            if not message.has_content:
-                continue
-            role = (message.role or "").strip().lower()
-            if role not in _LLM_ROLES:
-                role = "user"
-            text = message.rendered_content.strip()
-            if formatted and formatted[-1]["role"] == role:
-                prev = formatted[-1]["content"][0]["text"]
-                formatted[-1]["content"] = [{"text": f"{prev}\n{text}"}]
-            else:
-                formatted.append({"role": role, "content": [{"text": text}]})
-
-        if user_message is not None and user_message.has_content:
-            current: dict[str, Any] | None = {
-                "role": "user",
-                "content": [{"text": user_message.rendered_content.strip()}],
-            }
-        else:
-            current = None
-
-        if current is not None:
-            if formatted and formatted[-1]["role"] == "user":
-                prev_parts = list(formatted[-1]["content"])
-                for part in current["content"]:
-                    if (
-                        isinstance(part, dict)
-                        and "text" in part
-                        and prev_parts
-                        and isinstance(prev_parts[-1], dict)
-                        and "text" in prev_parts[-1]
-                    ):
-                        prev_parts[-1] = {
-                            "text": f"{prev_parts[-1]['text']}\n{part['text']}"
-                        }
-                    else:
-                        prev_parts.append(part)
-                formatted[-1]["content"] = prev_parts
-            else:
-                formatted.append(current)
-
+            formatted.append(self.format_message(message))
         return formatted
+
+    def _llm_role(self, role: str | None) -> str:
+        normalized = (role or "").strip().lower()
+        return normalized if normalized in _LLM_ROLES else "user"
+
+    def _content_blocks_for_message(
+        self, message: "Message"
+    ) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        text = (message.content or "").strip()
+        if text:
+            blocks.append({"text": text})
+        for attachment in message.attachments:
+            blocks.extend(self._content_blocks_for_attachment(attachment))
+        return blocks
+
+    def _content_blocks_for_attachment(
+        self, attachment: "MessageAttachment"
+    ) -> list[dict[str, Any]]:
+        if isinstance(attachment, FileAttachment):
+            return self.format_file_attachment(attachment)
+        llm_text = attachment.llm_text()
+        if not llm_text:
+            return []
+        return [{"text": llm_text}]
+
+    def format_message(
+        self,
+        message: "Message",
+    ) -> dict[str, Any]:
+        return {
+            "role": message.role,
+            "content": self._content_blocks_for_message(message),
+        }
+
+    
+
+
+
+    @staticmethod
+    def _is_text_part(part: Any) -> bool:
+        return isinstance(part, dict) and "text" in part
 
     @abstractmethod
     async def call_structured(

@@ -84,11 +84,11 @@ class ConversationService:
         self,
         user: User,
         conversation_id: uuid.UUID,
-        messages: Sequence[Message | dict],
+        messages: Sequence[Message],
         *,
         commit: bool = True,
     ) -> bool:
-        """Append messages to an owner-scoped conversation."""
+        """Append message subclass instances to an owner-scoped conversation."""
         conversation = await self.get_conversation(user, conversation_id)
         if conversation is None:
             return False

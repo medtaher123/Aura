@@ -34,7 +34,7 @@ class UserRead(BaseModel):
             email=user.email,
             created_at=user.created_at,
         )
-    
+
 
 class ConversationCreate(BaseModel):
     """Payload to create a new chat conversation."""
@@ -63,47 +63,36 @@ class ConversationRead(BaseModel):
         )
 
 
-class MessageCreate(BaseModel):
-    """Payload to persist a chat message.
 
-    ``metadata`` accepts arbitrary nested JSON (e.g. tool outputs) and is stored
-    in a JSONB column.
+class ConversationMessage(BaseModel):
+    """API / UI view of a persisted conversation message.
+
+    Built by ``Message.to_frontend()``. Use ``to_dict()`` when a plain dict is
+    required; FastAPI can also serialize this model directly.
     """
-
-    role: str = Field(..., max_length=32)
-    content: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class MessageRead(BaseModel):
-    """A chat message as returned by the API."""
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
-    conversation_id: uuid.UUID
+    id: int | None = None
+    conversation_id: uuid.UUID | None = None
     role: str
+    kind: str
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime
+    timestamp: datetime | None = None
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    needs_input: dict[str, Any] | None = None
 
-    @classmethod
-    def from_model(cls, message: "Message") -> "MessageRead":
-        """Map ORM message attributes to the public API schema."""
-        return cls(
-            id=message.id,
-            conversation_id=message.conversation_id,
-            role=message.role,
-            content=message.content,
-            metadata=message.message_metadata,
-            timestamp=message.timestamp,
-        )
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready dict for HTTP responses and clients."""
+        return self.model_dump(mode="json")
+
 
 
 class ConversationWithMessages(ConversationRead):
     """A chat conversation including its messages."""
 
-    messages: list[MessageRead] = Field(default_factory=list)
+    messages: list[ConversationMessage] = Field(default_factory=list)
 
     @classmethod
     def from_domain(cls, result: "ConversationWithMessagesResult") -> "ConversationWithMessages":
@@ -114,5 +103,5 @@ class ConversationWithMessages(ConversationRead):
             user_id=conversation.user_id,
             title=conversation.title,
             created_at=conversation.created_at,
-            messages=[MessageRead.from_model(message) for message in result.messages],
+            messages=[message.to_frontend() for message in result.messages],
         )

@@ -1,4 +1,4 @@
-"""Factory for mapping graph state into ToolResponse objects."""
+"""Factory for mapping graph state into GraphTurnResult objects."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ import json
 from typing import Any
 
 from eo_llm.graph.state import DomainResultModel, GraphStateModel, validate_state
-from src.schemas.user_inputs import LocationRequest, UserInputRouter
+from src.user_inputs import LocationRequest, UserInputRouter
+from src.tools.contracts import ToolArtifacts, ToolCoordinates
 
-from ...tools.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
 from .artifacts import ArtifactAggregator
-from .models import ArtifactBundle
+from .models import ArtifactBundle, GraphTurnResult
 
 
 def _json_safe(value: Any) -> Any:
@@ -18,18 +18,18 @@ def _json_safe(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
-class ToolResponseFactory:
+class GraphTurnResultFactory:
     def __init__(self, aggregator: ArtifactAggregator | None = None):
         self._aggregator = aggregator or ArtifactAggregator()
 
-    def from_state(self, state: GraphStateModel | dict[str, Any]) -> ToolResponse:
+    def from_state(self, state: GraphStateModel | dict[str, Any]) -> GraphTurnResult:
         model = state if isinstance(state, GraphStateModel) else validate_state(state)
         if model.stopped_for_user_input and model.needs_input:
             return self.from_paused_state(model)
         return self.from_completed_state(model)
 
     @staticmethod
-    def from_paused_state(state: GraphStateModel) -> ToolResponse:
+    def from_paused_state(state: GraphStateModel) -> GraphTurnResult:
         graph_state = _json_safe(state.model_dump(mode="python"))
         requests = UserInputRouter.requests_from_dict(state.needs_input)
         if not requests and state.location_candidates:
@@ -48,8 +48,7 @@ class ToolResponseFactory:
         bbox_req = requests.get("bounding_box")
         if bbox_req is not None and getattr(bbox_req, "prompt", None):
             prompt = str(bbox_req.prompt)
-        return ToolResponse(
-            tool_name="graph",
+        return GraphTurnResult(
             message=prompt,
             error=False,
             data={
@@ -58,12 +57,11 @@ class ToolResponseFactory:
             },
         )
 
-    def from_completed_state(self, state: GraphStateModel) -> ToolResponse:
+    def from_completed_state(self, state: GraphStateModel) -> GraphTurnResult:
         message = (state.final_answer or "").strip()
         artifacts = self._artifacts_from_state(state)
         coords, city = self._coordinates_from_state(state)
-        return ToolResponse(
-            tool_name="graph",
+        return GraphTurnResult(
             message=message or "I couldn't produce an answer for that request.",
             artifacts=artifacts,
             city=city,
@@ -122,6 +120,9 @@ class ToolResponseFactory:
                 lat, lon = state.resolved_area.centroid()
                 return {"lat": lat, "lon": lon}, state.resolved_area.label()
             return None, resolved.display_name or None
-        coords: ToolCoordinates = {"lat": float(resolved.lat), "lon": float(resolved.lon)}
+        coords: ToolCoordinates = {
+            "lat": float(resolved.lat),
+            "lon": float(resolved.lon),
+        }
         display = resolved.display_name or None
         return coords, display

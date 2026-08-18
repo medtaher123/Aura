@@ -73,12 +73,7 @@ def get_chat_llm(
 
     # Lazy imports so test imports don't require Bedrock connectivity.
     import boto3
-
-    try:
-        from langchain_aws import ChatBedrockConverse as _ChatBedrock
-    except Exception:  # pragma: no cover
-        # Fallback for older langchain-aws versions.
-        from langchain_aws import ChatBedrock as _ChatBedrock  # type: ignore
+    from langchain_aws import ChatBedrockConverse as _ChatBedrock
 
     model_id = model_id or DEFAULT_BEDROCK_MODEL_ID
     region = region or 'eu-west-3'
@@ -92,7 +87,6 @@ def get_chat_llm(
 
     client = boto3.client("bedrock-runtime", region_name=region)
 
-    # Support multiple langchain-aws versions by only passing supported fields.
     fields = getattr(_ChatBedrock, "model_fields", {}) or {}
     kwargs: dict[str, Any] = {}
 
@@ -118,13 +112,11 @@ def get_chat_llm(
     if "top_p" in fields and provider != "anthropic":
         kwargs["top_p"] = top_p
 
-    # Some versions use `model_kwargs` for provider-specific parameters.
     if "model_kwargs" in fields and "max_tokens" not in kwargs:
         model_kwargs = {
             "temperature": temperature,
             # Meta Llama on Bedrock typically expects `max_gen_len`.
             "max_gen_len": max_tokens,
-            # Keep a common alias too.
             "max_tokens": max_tokens,
         }
         if provider != "anthropic":

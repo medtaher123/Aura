@@ -1,17 +1,15 @@
 """Pydantic request/response schemas for the HTTP API."""
 
 from .chat import (
-    MessageCreate,
-    MessageRead,
     ConversationCreate,
+    ConversationMessage,
     ConversationRead,
     ConversationWithMessages,
 )
 
 __all__ = [
     "ConversationCreate",
+    "ConversationMessage",
     "ConversationRead",
     "ConversationWithMessages",
-    "MessageCreate",
-    "MessageRead",
 ]

@@ -8,13 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.graph.state import GraphState
 from src.core.event_emitter import EventEmitter
-from src.db.models.message import UserMessage
-from src.schemas.user_inputs import UserInputRouter
-
-
-class ChatMessage(BaseModel):
-    role: str = "assistant"
-    content: str = ""
+from src.db.models.message import Message, UserMessage
+from src.db.models.message_attachments import (
+    MessageAttachment,
+    apply_attachments,
+)
+from src.user_inputs import UserInputRouter
+from src.tools.contracts import ToolArtifacts, ToolCoordinates
 
 
 class ArtifactBundle(BaseModel):
@@ -27,6 +27,29 @@ class ArtifactBundle(BaseModel):
     urls: list[str] = Field(default_factory=list)
 
 
+class GraphTurnResult(BaseModel):
+    """Outcome of one graph turn for the websocket / persistence layer.
+
+    Distinct from ``ToolResponse``, which is the return type of a single MCP/tool call.
+    """
+
+    message: str
+    artifacts: ToolArtifacts = Field(default_factory=ToolArtifacts)
+    data: dict[str, Any] = Field(default_factory=dict)
+    error: bool = False
+    city: str | None = None
+    coordinates: ToolCoordinates | None = None
+
+    def pending_input_requests(self) -> dict[str, Any]:
+        """Typed ``needs_input`` requests when the turn paused for user input."""
+        return UserInputRouter.requests_from_dict(self.data.get("needs_input"))
+
+    def pause_payload(self) -> dict[str, Any]:
+        """``data.pause`` snapshot (includes ``graph_state``) for server-side resume."""
+        pause = self.data.get("pause")
+        return dict(pause) if isinstance(pause, dict) else {}
+
+
 class GraphTurnRequest(BaseModel):
     """Input for a fresh graph turn."""
 
@@ -37,45 +60,27 @@ class GraphTurnRequest(BaseModel):
     session_id: str
     document_ref: dict[str, Any] = Field(default_factory=dict)
     place_hint: str | None = None
-    chat_history: list[ChatMessage] = Field(default_factory=list)
+    chat_history: list[Message] = Field(default_factory=list)
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     @property
     def english_query(self) -> str:
-        """LLM-facing user text (includes attached user-input summaries)."""
-        return self.message.to_llm_dict()["content"]
-
-    @property
-    def user_inputs(self) -> dict[str, Any]:
-        return self.message.user_inputs
-
-    def contextualize_query(self) -> str:
-        q = (self.english_query or "").strip()
-        if not q:
-            return ""
-        recent = self.chat_history[-6:]
-        if not recent:
-            return q
-        lines: list[str] = [f"Current user message: {q}", "Recent conversation:"]
-        for item in recent:
-            content = (item.content or "").strip()
-            if content:
-                role = (item.role or "assistant").upper()
-                lines.append(f"- {role}: {content}")
-        return "\n".join(lines)
+        """Free-text user query; attachments are applied separately."""
+        return self.message.content
 
     def to_state_dict(self) -> GraphState:
+        # History stays on the request / LLM contextvar — not flattened into ``query``.
+        q = (self.english_query or "").strip()
         state: dict[str, Any] = {
-            "query": self.contextualize_query(),
-            "user_query": self.english_query,
+            "query": q,
+            "user_query": q,
             "user_id": self.user_id,
             "session_id": self.session_id,
             "document_ref": self.document_ref,
         }
         if self.place_hint and self.place_hint.strip():
             state["place_hint"] = self.place_hint.strip()
-        if self.user_inputs:
-            UserInputRouter.apply_results(self.user_inputs, state)
+        apply_attachments(self.message.attachments, state)
         return state  # type: ignore[return-value]
 
 
@@ -85,15 +90,10 @@ class GraphResumeRequest(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     graph_state: dict[str, Any]
-    user_inputs: dict[str, Any] = Field(default_factory=dict)
-    confirmed_index: int | None = None
+    attachments: list[MessageAttachment] = Field(default_factory=list)
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     def to_state_dict(self) -> GraphState:
         merged: dict[str, Any] = {**self.graph_state}
-        UserInputRouter.apply_results(
-            self.user_inputs,
-            merged,
-            confirmed_index=self.confirmed_index,
-        )
+        apply_attachments(self.attachments, merged)
         return merged  # type: ignore[return-value]

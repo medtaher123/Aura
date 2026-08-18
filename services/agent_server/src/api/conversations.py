@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import User, get_db
 from ..db.services import MessageService, ConversationService
 from ..schemas import (
-        ConversationMessage,
+    ConversationMessage,
     ConversationCreate,
     ConversationRead,
     ConversationWithMessages,

@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -29,10 +29,13 @@ class AgentServerConfig(BaseSettings):
     ws_traffic_log_enabled: bool = Field(default=True, description="Enable WebSocket traffic logging")
     ws_traffic_log_file: str = Field(default="logs/websocket_traffic.jsonl", description="WebSocket traffic log file")
 
-    # MCP Server connection
+    # MCP Server connection (Streamable HTTP at {url}/mcp)
     mcp_server_url: str = Field(
         default="http://localhost:8000",
-        description="MCP Server URL for tool integration (use http://mcp-server:8000 in Docker)",
+        description=(
+            "Base URL of the MCP server (Streamable HTTP). "
+            "Agent appends /mcp automatically; use http://mcp-server:8000 in Docker."
+        ),
     )
 
     # AWS Bedrock settings

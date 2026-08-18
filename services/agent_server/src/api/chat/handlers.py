@@ -12,9 +12,14 @@ from src.api.chat.pause_state import ConversationPauseState
 from src.api.chat.stream_bridge import stream_bridge
 from src.api.websocket_connection import WebSocketConnection
 from src.db import ConversationService, User
-from src.db.models.message import AssistantMessage, Message, UserMessage
+from src.db.models.message import (
+    AssistantMessage,
+    InputResponseMessage,
+    Message,
+    UserMessage,
+)
 from src.user_inputs import UserInputRouter
-from src.schemas.websocket import AgentStage, ChatRequestMessage, ChatResumeMessage
+from src.schemas.websocket import AgentStage
 from src.services import graph_runner
 from src.services.graph_runner import GraphTurnResult
 from src.services.translate_service import translate_from_english
@@ -159,14 +164,17 @@ async def _finalize_completed_turn(
 
 async def handle_chat_request(
     conn: WebSocketConnection,
-    message: ChatRequestMessage,
+    user_message: UserMessage,
     user: User,
     conversations: ConversationService,
+    *,
+    conversation_id: uuid.UUID | None = None,
+    language: str | None = None,
 ) -> None:
     """Handle a new chat_request from the client."""
     try:
         context = await conversations.get_or_create_conversation_with_messages(
-            user, message.conversation_id
+            user, conversation_id
         )
         if context is None:
             await conn.send_error("Conversation not found", recoverable=True)
@@ -174,31 +182,28 @@ async def handle_chat_request(
 
         conversation_id = context.conversation.id
         logger.info(
-            "Chat request received - len=%d conversation_id=%s new=%s history=%d user_inputs=%s",
-            len(message.message),
+            "Chat request received - len=%d conversation_id=%s new=%s history=%d attachments=%s",
+            len(user_message.content or ""),
             conversation_id,
             context.created,
             len(context.messages),
-            list((message.user_inputs or {}).keys()),
+            [a.type for a in user_message.attachments],
         )
 
         await conn.send_status(AgentStage.PLANNING, "Processing your request...")
         conn.begin_streaming_response()
 
         english_message, detected_lang = await asyncio.to_thread(
-            to_english, message.message, message.language
+            to_english, user_message.content, language
         )
-        user_turn_message = UserMessage.create(
-            english_message,
-            user_inputs=dict(message.user_inputs or {}) or None,
-        )
-        english_query = user_turn_message.rendered_content
+        user_message.content = english_message
+        english_query = user_message.content
         chat_history = [m for m in context.messages if m.has_content]
 
         with stream_bridge(conn) as stream_emitter:
             def run_turn(emitter=stream_emitter) -> GraphTurnResult:
                 return graph_runner.run_graph_turn(
-                    message=user_turn_message,
+                    message=user_message,
                     user_id=str(user.id),
                     session_id=str(conversation_id),
                     chat_history=chat_history,
@@ -222,7 +227,7 @@ async def handle_chat_request(
             await conversations.append_messages(
                 user,
                 conversation_id,
-                [user_turn_message],
+                [user_message],
                 commit=False,
             )
             await _send_user_input_pause(
@@ -248,7 +253,7 @@ async def handle_chat_request(
             title_user_message=english_query,
             conversation_title_pending=context.created,
             history_messages=[
-                user_turn_message,
+                user_message,
                 AssistantMessage.create(
                     turn.message, metadata=_assistant_metadata(turn)
                 ),
@@ -263,17 +268,18 @@ async def handle_chat_request(
 
 async def handle_chat_resume(
     conn: WebSocketConnection,
-    message: ChatResumeMessage,
+    input_message: InputResponseMessage,
     user: User,
     conversations: ConversationService,
+    *,
+    conversation_id: uuid.UUID,
 ) -> None:
     """Handle chat_resume after the client answered required user inputs."""
     try:
-        parsed_inputs = UserInputRouter.results_from_dict(message.user_inputs)
-        conversation_id = message.conversation_id
+        wire_attachments = input_message.attachments
         logger.info(
-            "Chat resume received - kinds=%s conversation_id=%s",
-            list(parsed_inputs.keys()),
+            "Chat resume received - attachments=%s conversation_id=%s",
+            [a.type for a in wire_attachments],
             conversation_id,
         )
 
@@ -305,11 +311,11 @@ async def handle_chat_resume(
             )
             return
 
-        if parsed_inputs:
+        if wire_attachments:
             await conversations.append_messages(
                 user,
                 conversation_id,
-                [UserInputRouter.to_response_message(parsed_inputs)],
+                [input_message],
             )
 
         await conn.send_status(
@@ -317,16 +323,16 @@ async def handle_chat_resume(
         )
         conn.begin_streaming_response()
 
-        user_inputs_payload = {
-            kind: model.model_dump(mode="python") for kind, model in parsed_inputs.items()
-        }
-        graph_state = pause.graph_state
+        graph_state = UserInputRouter.apply_resume_attachments(
+            wire_attachments,
+            dict(pause.graph_state),
+        )
 
         with stream_bridge(conn) as stream_emitter:
             def run_resume(emitter=stream_emitter) -> GraphTurnResult:
                 return graph_runner.resume_graph_turn(
                     graph_state=graph_state,
-                    user_inputs=user_inputs_payload,
+                    attachments=wire_attachments,
                     stream_emitter=emitter,
                 )
 

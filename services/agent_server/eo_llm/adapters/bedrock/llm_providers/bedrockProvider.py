@@ -41,10 +41,10 @@ class BedrockProvider(LLMProvider):
         user_message: "Message | None" = None,
         chat_history: Sequence["Message"] | None = None,
     ) -> list[dict[str, Any]]:
-        return self.format_messages(
-            chat_history or (),
-            user_message=user_message,
-        )
+        messages = chat_history or ()
+        if user_message is not None:
+            messages = list(messages) + [user_message]
+        return self.format_messages(messages)
 
     async def call_structured0(
         self,

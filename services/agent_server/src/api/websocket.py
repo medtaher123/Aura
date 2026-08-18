@@ -173,11 +173,19 @@ async def websocket_chat(
                 try:
                     if await _reject_if_busy(conn, active_task):
                         continue
-                    message = ChatRequestMessage(**data)
+                    request = ChatRequestMessage(**data)
+                    user_message = request.to_message()
                     conn.reset_cancellation()
                     active_task, keepalive_task = _spawn_request_task(
                         conn,
-                        handle_chat_request(conn, message, user, conversations),
+                        handle_chat_request(
+                            conn,
+                            user_message,
+                            user,
+                            conversations,
+                            conversation_id=request.conversation_id,
+                            language=request.language,
+                        ),
                     )
                 except ValidationError as exc:
                     logger.error("Chat request validation error: %s", exc)
@@ -189,11 +197,18 @@ async def websocket_chat(
                 try:
                     if await _reject_if_busy(conn, active_task):
                         continue
-                    message = ChatResumeMessage(**data)
+                    request = ChatResumeMessage(**data)
+                    input_message = request.to_message()
                     conn.reset_cancellation()
                     active_task, keepalive_task = _spawn_request_task(
                         conn,
-                        handle_chat_resume(conn, message, user, conversations),
+                        handle_chat_resume(
+                            conn,
+                            input_message,
+                            user,
+                            conversations,
+                            conversation_id=request.conversation_id,
+                        ),
                     )
                 except ValidationError as exc:
                     logger.error("Chat resume validation error: %s", exc)

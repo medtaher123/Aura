@@ -109,23 +109,19 @@ class ArtifactAggregator:
         bundles: list[ArtifactBundle],
         extra_urls: list[str] | None = None,
     ) -> ToolArtifacts:
-        maps_str: list[str] = []
         maps_other: list[Any] = []
         thumbs: list[str] = []
         urls: list[str] = []
 
         for bundle in bundles:
             for item in bundle.maps:
-                if isinstance(item, str):
-                    maps_str.append(item)
-                elif isinstance(item, dict):
+                if isinstance(item, dict):
                     maps_other.append(item)
             thumbs.extend(bundle.thumbnails)
             urls.extend(bundle.urls)
 
         urls.extend(u for u in (extra_urls or []) if u.strip())
 
-        maps_str = _dedup(maps_str)
         thumbs = _dedup(thumbs)
         urls = _dedup(urls)
 
@@ -147,8 +143,7 @@ class ArtifactAggregator:
             combined_specs.append(merger.merge(specs))
 
         combined_specs.extend(non_routed)
-        merged_maps: list[Any] = [*maps_str, *combined_specs]
-        return ToolArtifacts(maps=merged_maps, thumbnails=thumbs, urls=urls)
+        return ToolArtifacts(maps=combined_specs, thumbnails=thumbs, urls=urls)
 
     def _merger_for(self, spec: dict[str, Any]) -> ArtifactMerger | None:
         for merger in self.mergers:

@@ -1,7 +1,15 @@
-"""Message ORM model and typed conversation message subclasses."""
+"""Message ORM model and typed conversation message subclasses.
+
+``role`` is the LLM speaker (``user`` | ``assistant`` | ``system``).
+``kind`` is the product message type and the STI discriminator.
+
+Free-text lives in ``content``; structured extras live in ``attachments``.
+The LLM provider turns attachments into vendor content blocks.
+"""
 
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import Any, ClassVar, TYPE_CHECKING
@@ -11,21 +19,44 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..base import BaseModel
+from .message_attachments import (
+    MessageAttachment,
+    dump_attachments,
+    parse_attachments,
+)
 
 if TYPE_CHECKING:
     from src.db.models.conversation import Conversation
+    from src.schemas.chat import ConversationMessage
+
+
+class MessageRole(str, enum.Enum):
+    """Speaker role consumed by LLM providers."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+class MessageKind(str, enum.Enum):
+    """Product message type (also the SQLAlchemy STI discriminator)."""
+
+    USER_TEXT = "user_text"
+    ASSISTANT_TEXT = "assistant_text"
+    SYSTEM = "system"
+    INPUT_REQUEST = "input_request"
+    INPUT_RESPONSE = "input_response"
 
 
 class Message(BaseModel):
     """A single message within a chat conversation.
 
-    Subclasses are selected by ``role`` (SQLAlchemy single-table inheritance)
-    and know how to render themselves for the LLM and the frontend.
+    Subclasses are selected by ``kind``. ``role`` is always a valid LLM speaker.
     """
 
     __tablename__ = "messages"
     __mapper_args__: ClassVar[dict[str, Any]] = {
-        "polymorphic_on": "role",
+        "polymorphic_on": "kind",
         "polymorphic_identity": "message",
     }
 
@@ -42,6 +73,7 @@ class Message(BaseModel):
     )
 
     role: Mapped[str] = mapped_column(String(32), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     message_metadata: Mapped[dict[str, Any]] = mapped_column(
@@ -52,67 +84,74 @@ class Message(BaseModel):
         server_default="{}",
     )
 
+    _attachments: Mapped[list[Any]] = mapped_column(
+        "attachments",
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
 
-    def to_llm_dict(self) -> dict[str, str]:
-        """``{role, content}`` shape consumed by LLM / memory formatting."""
-        return {"role": self.role, "content": self.content or ""}
+    @property
+    def attachments(self) -> list[MessageAttachment]:
+        return parse_attachments(self._attachments)
 
-    def to_frontend_dict(self) -> dict[str, Any]:
-        """Shape sent to UI clients (includes ``message_type``)."""
-        meta = dict(self.message_metadata or {})
-        return {
-            "message_type": meta.get("message_type") or self.role,
-            "role": self.role,
-            "content": self.content or "",
-            "metadata": meta,
-        }
+    @attachments.setter
+    def attachments(self, value: list[MessageAttachment] | None) -> None:
+        self._attachments = dump_attachments(value)
+
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.content.strip() or self.attachments)
+
+    def to_frontend(self) -> "ConversationMessage":
+        """API / UI view of this persisted message."""
+        from src.schemas.chat import ConversationMessage
+
+        return ConversationMessage(
+            id=self.id,
+            conversation_id=self.conversation_id,
+            role=self.role,
+            kind=self.kind,
+            content=self.content or "",
+            metadata=dict(self.message_metadata or {}),
+            timestamp=self.timestamp,
+            attachments=dump_attachments(self.attachments),
+        )
 
 
 class UserMessage(Message):
-    """Message authored by the end user."""
+    """Normal user free-text turn (optionally with attachments)."""
 
-    __mapper_args__ = {"polymorphic_identity": "user"}
+    __mapper_args__ = {"polymorphic_identity": MessageKind.USER_TEXT.value}
 
     @classmethod
     def create(
         cls,
         content: str = "",
         *,
-        user_inputs: dict[str, Any] | None = None,
+        attachments: list[MessageAttachment] | None = None,
     ) -> UserMessage:
-        meta: dict[str, Any] = {"message_type": "user"}
-        if user_inputs:
-            meta["user_inputs"] = dict(user_inputs)
         return cls(
+            role=MessageRole.USER.value,
+            kind=MessageKind.USER_TEXT.value,
             content=content or "",
-            message_metadata=meta,
+            message_metadata={},
+            _attachments=dump_attachments(attachments),
         )
 
-    @property
-    def user_inputs(self) -> dict[str, Any]:
-        return dict((self.message_metadata or {}).get("user_inputs") or {})
-
-    def to_llm_dict(self) -> dict[str, str]:
-        """Include attached user inputs in the content the LLM sees."""
-        content = self.content or ""
-        inputs = self.user_inputs
-        if inputs:
-            from src.schemas.user_inputs import UserInputRouter
-
-            suffix = UserInputRouter.results_llm_text(inputs)
-            if suffix and suffix not in content:
-                content = UserInputRouter.append_user_inputs_text(content, inputs)
-        return {"role": "user", "content": content}
 
 class AssistantMessage(Message):
-    """Message authored by the assistant."""
+    """Normal assistant reply."""
 
-    __mapper_args__ = {"polymorphic_identity": "assistant"}
+    __mapper_args__ = {"polymorphic_identity": MessageKind.ASSISTANT_TEXT.value}
 
     @classmethod
     def create(
@@ -121,15 +160,18 @@ class AssistantMessage(Message):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> AssistantMessage:
-        meta = dict(metadata or {})
-        meta["message_type"] = "assistant"
-        return cls(content=content or "", message_metadata=meta)
+        return cls(
+            role=MessageRole.ASSISTANT.value,
+            kind=MessageKind.ASSISTANT_TEXT.value,
+            content=content or "",
+            message_metadata=dict(metadata or {}),
+        )
 
 
 class InputRequestMessage(Message):
     """Assistant-side pause asking the user for one or more inputs."""
 
-    __mapper_args__ = {"polymorphic_identity": "input_request"}
+    __mapper_args__ = {"polymorphic_identity": MessageKind.INPUT_REQUEST.value}
 
     @classmethod
     def create(
@@ -139,60 +181,48 @@ class InputRequestMessage(Message):
         needs_input: dict[str, Any] | None = None,
     ) -> InputRequestMessage:
         return cls(
+            role=MessageRole.ASSISTANT.value,
+            kind=MessageKind.INPUT_REQUEST.value,
             content=content or "",
-            message_metadata={
-                "message_type": "input_request",
-                "needs_input": dict(needs_input or {}),
-            },
+            message_metadata={"needs_input": dict(needs_input or {})},
         )
 
     @property
     def needs_input(self) -> dict[str, Any]:
         return dict((self.message_metadata or {}).get("needs_input") or {})
 
-    def to_llm_dict(self) -> dict[str, str]:
-        return {"role": "assistant", "content": self.content or ""}
+    def to_frontend(self) -> "ConversationMessage":
+        from src.schemas.chat import ConversationMessage
 
-    def to_frontend_dict(self) -> dict[str, Any]:
-        return {
-            "message_type": "input_request",
-            "role": "input_request",
-            "content": self.content or "",
-            "needs_input": self.needs_input,
-        }
+        return ConversationMessage(
+            id=self.id,
+            conversation_id=self.conversation_id,
+            role=self.role,
+            kind=self.kind,
+            content=self.content or "",
+            metadata=dict(self.message_metadata or {}),
+            timestamp=self.timestamp,
+            attachments=dump_attachments(self.attachments),
+            needs_input=self.needs_input,
+        )
 
 
 class InputResponseMessage(Message):
     """User-side answer covering the requested input kinds."""
 
-    __mapper_args__ = {"polymorphic_identity": "input_response"}
+    __mapper_args__ = {"polymorphic_identity": MessageKind.INPUT_RESPONSE.value}
 
     @classmethod
     def create(
         cls,
         content: str = "",
         *,
-        user_inputs: dict[str, Any] | None = None,
+        attachments: list[MessageAttachment] | None = None,
     ) -> InputResponseMessage:
         return cls(
+            role=MessageRole.USER.value,
+            kind=MessageKind.INPUT_RESPONSE.value,
             content=content or "",
-            message_metadata={
-                "message_type": "input_response",
-                "user_inputs": dict(user_inputs or {}),
-            },
+            message_metadata={},
+            _attachments=dump_attachments(attachments),
         )
-
-    @property
-    def user_inputs(self) -> dict[str, Any]:
-        return dict((self.message_metadata or {}).get("user_inputs") or {})
-
-    def to_llm_dict(self) -> dict[str, str]:
-        return {"role": "user", "content": self.content or ""}
-
-    def to_frontend_dict(self) -> dict[str, Any]:
-        return {
-            "message_type": "input_response",
-            "role": "input_response",
-            "content": self.content or "",
-            "user_inputs": self.user_inputs,
-        }

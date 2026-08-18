@@ -209,7 +209,11 @@ class ToolPlanDomainNode(DomainNode):
         missing: dict[InputKind, UserInputRequest],
     ) -> GraphState:
         needs_input = UserInputRouter.requests_to_dict(missing)
-        prompt_parts = [req.llm_text() for req in missing.values()]
+        prompt_parts = [
+            str(req.prompt)
+            for req in missing.values()
+            if getattr(req, "prompt", None)
+        ]
         prompt = " ".join(prompt_parts) if prompt_parts else (
             "Please provide the requested input to continue."
         )

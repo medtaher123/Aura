@@ -93,8 +93,10 @@ def get_all_tools() -> list[MCPRemoteTool]:
 
     if not tools:
         raise RuntimeError(
-            "MCP server returned zero tools. Ensure tools are registered in services/mcp_server/tools "
-            "and the server is healthy (/health)."
+            "MCP server returned zero tools. Ensure tools are registered via "
+            "services/mcp_server/modules (MCP SDK v2 Streamable HTTP at /mcp), "
+            "and that MCP_SERVER_URL points at the MCP base URL "
+            "(e.g. http://mcp-server:8000) and the server is healthy (/health)."
         )
 
     return tools
