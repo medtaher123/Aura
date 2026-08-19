@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Type, TypeVar
 
 from pydantic import BaseModel
@@ -19,6 +20,13 @@ T = TypeVar("T", bound=BaseModel)
 _LLM_ROLES = frozenset({"user", "assistant"})
 
 
+class FileMediaMode(str, Enum):
+    """How file attachments are sent on a provider call."""
+
+    CAPTION = "caption"
+    MEDIA = "media"
+
+
 class LLMProvider(ABC):
     """Interface for LLM communications."""
 
@@ -28,16 +36,21 @@ class LLMProvider(ABC):
         """Must be implemented by subclasses to identify the provider."""
         pass
 
-    #TODO: to implement
     def format_file_attachment(
-        self, attachment: FileAttachment
+        self,
+        attachment: FileAttachment,
+        *,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
-        """Provider-specific file content blocks. Empty until files are wired."""
-        return []
+        """Text caption. Providers may override with native document/image blocks."""
+        text = attachment.llm_text()
+        return [{"text": text}] if text else []
 
     def format_messages(
         self,
         messages: Sequence["Message"],
+        *,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
         """Turn ORM ``Message`` history into provider messages.
 
@@ -46,7 +59,9 @@ class LLMProvider(ABC):
         """
         formatted: list[dict[str, Any]] = []
         for message in messages:
-            blocks = self._content_blocks_for_message(message)
+            blocks = self._content_blocks_for_message(
+                message, file_media_mode=file_media_mode
+            )
             if not blocks:
                 continue
             formatted.append(
@@ -62,21 +77,33 @@ class LLMProvider(ABC):
         return normalized if normalized in _LLM_ROLES else "user"
 
     def _content_blocks_for_message(
-        self, message: "Message"
+        self,
+        message: "Message",
+        *,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         text = (message.content or "").strip()
         if text:
             blocks.append({"text": text})
         for attachment in message.attachments:
-            blocks.extend(self._content_blocks_for_attachment(attachment))
+            blocks.extend(
+                self._content_blocks_for_attachment(
+                    attachment, file_media_mode=file_media_mode
+                )
+            )
         return blocks
 
     def _content_blocks_for_attachment(
-        self, attachment: "MessageAttachment"
+        self,
+        attachment: "MessageAttachment",
+        *,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
         if isinstance(attachment, FileAttachment):
-            return self.format_file_attachment(attachment)
+            return self.format_file_attachment(
+                attachment, file_media_mode=file_media_mode
+            )
         llm_text = attachment.llm_text()
         if not llm_text:
             return []
@@ -106,6 +133,7 @@ class LLMProvider(ABC):
         temperature: float = 0.0,
         max_tokens: int = 800,
         chat_history: Sequence["Message"] | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> T | None:
         pass
 
@@ -118,6 +146,7 @@ class LLMProvider(ABC):
         temperature: float = 0.0,
         max_tokens: int = 900,
         chat_history: Sequence["Message"] | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> AsyncIterator[str]:
         yield ""
         raise NotImplementedError

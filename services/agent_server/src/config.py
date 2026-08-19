@@ -152,6 +152,44 @@ class AgentServerConfig(BaseSettings):
         description="Model ID for document LLM",
     )
 
+    # File storage (local disk or S3-compatible object storage)
+    file_storage_provider: str = Field(
+        default="local",
+        description="Active file storage backend: 'local' or 's3' (MinIO / AWS S3)",
+    )
+    file_storage_local_root: str = Field(
+        default="./data/files",
+        description="Root directory for the local file storage provider",
+    )
+    file_storage_s3_bucket: Optional[str] = Field(
+        default=None,
+        description="Bucket name for the S3-compatible file storage provider",
+    )
+    file_storage_s3_prefix: str = Field(
+        default="",
+        description="Optional key prefix inside the S3 bucket",
+    )
+    file_storage_s3_region: Optional[str] = Field(
+        default=None,
+        description="AWS region for S3; defaults to bedrock_region when unset",
+    )
+    file_storage_s3_endpoint_url: Optional[str] = Field(
+        default=None,
+        description="Custom S3 endpoint (MinIO). Leave unset for AWS S3",
+    )
+    file_storage_s3_access_key: Optional[str] = Field(
+        default=None,
+        description="Access key for MinIO / custom S3. AWS uses the default credential chain",
+    )
+    file_storage_s3_secret_key: Optional[str] = Field(
+        default=None,
+        description="Secret key for MinIO / custom S3",
+    )
+    file_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        description="Maximum upload size in bytes",
+    )
+
 
 
 @lru_cache(maxsize=1)

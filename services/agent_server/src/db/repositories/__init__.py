@@ -1,8 +1,9 @@
 """Repository layer exports."""
 
 from .base import BaseRepository
-from .messages import MessageRepository
 from .conversations import ConversationRepository
+from .files import FileRepository
+from .messages import MessageRepository
 from .users import UserRepository
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "UserRepository",
     "ConversationRepository",
     "MessageRepository",
+    "FileRepository",
 ]

@@ -56,8 +56,8 @@ engine = create_async_engine(
 async def init_db():
     """Initialize the database and create tables."""
     from src.db.base import BaseModel
-    # Make sure all your models are imported here or earlier
-    
+    import src.db.models  # noqa: F401  — register mapped tables on metadata
+
     async with engine.begin() as conn:
         await conn.run_sync(BaseModel.metadata.create_all)
 

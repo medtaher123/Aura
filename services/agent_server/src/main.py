@@ -10,10 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.auth.router import AuthRouter
 from src.db.database import init_db
+from src.files.router import FileStorageRouter
 
 from .config import get_config
 from .core.logger import get_logger, configure_log_level
-from .api import health_router, conversations_router, websocket_router
+from .api import health_router, conversations_router, websocket_router, files_router
 
 logger = get_logger()
 
@@ -86,9 +87,11 @@ app.add_middleware(
 # Include routers
 app.include_router(health_router)
 app.include_router(conversations_router)
+app.include_router(files_router)
 app.include_router(websocket_router)
 
 AuthRouter.initialize()
+FileStorageRouter.initialize()
 
 
 @app.get("/")
@@ -101,5 +104,6 @@ async def root():
             "health": "/health",
             "websocket": "/ws/chat",
             "conversations": "/conversations",
+            "files": "/files",
         },
     }

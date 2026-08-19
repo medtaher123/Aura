@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Type, TypeVar
 
 from pydantic import BaseModel
 
-from eo_llm.adapters.bedrock.llm_provider import LLMProvider
+from eo_llm.adapters.bedrock.llm_provider import LLMProvider, FileMediaMode
 from src.config import get_config
 from src.core.singleton_meta import SingletonMeta
 from src.db.models.message import Message
@@ -110,6 +110,7 @@ class LLMModelRouter(metaclass=SingletonMeta):
         chat_history: Sequence[Message] | None = None,
         task_type: TaskType = TaskType.STRUCTURED,
         model: LLMRoute | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.MEDIA,
     ) -> T | None:
         
         if model is None:
@@ -124,9 +125,10 @@ class LLMModelRouter(metaclass=SingletonMeta):
             max_tokens=max_tokens,
             chat_history=chat_history,
             model_id=model.model_id,
+            file_media_mode=file_media_mode,
         )
 
-    def call_stream(
+    async def call_stream(
         self,
         *,
         system_prompt: str,
@@ -135,18 +137,21 @@ class LLMModelRouter(metaclass=SingletonMeta):
         chat_history: Sequence[Message] | None = None,
         task_type: TaskType = TaskType.REASONING,
         model: LLMRoute | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.MEDIA,
     ) -> AsyncIterator[str]:
         
         if model is None:
             model = self.get_route(task_type)
 
-        return model.provider.call_stream(
+        async for chunk in model.provider.call_stream(
             temperature=temperature,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             chat_history=chat_history,
             model_id=model.model_id,
-        )
+            file_media_mode=file_media_mode,
+        ):
+            yield chunk
 
     async def call_standard_with_document(
         self,

@@ -7,7 +7,14 @@ from typing import Any, Callable
 
 from eo_llm.graph.builder import build_graph
 from eo_llm.graph.nodes.base import GraphNode
-from eo_llm.adapters.bedrock.chat_history_context import reset_chat_history, set_chat_history
+from eo_llm.adapters.bedrock.chat_history_context import (
+    reset_chat_history,
+    set_chat_history,
+)
+from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media_context import (
+    reset_file_catalog,
+    set_file_catalog,
+)
 from src.core.event_emitter import (
     EventEmitter,
     GraphStatusEvent,
@@ -15,6 +22,7 @@ from src.core.event_emitter import (
     reset_stream_emitter,
     set_stream_emitter,
 )
+from src.files.catalog import FileCatalog
 
 from ...core.logger import get_logger
 from .models import GraphRunnerRequest, GraphTurnResult
@@ -62,6 +70,9 @@ class GraphRunnerService:
     ) -> dict[str, Any]:
         emitted: set[str] = set()
         final_state: dict[str, Any] = dict(state)
+        user_id = str(state.get("user_id") or "").strip()
+        catalog = FileCatalog(user_id) if user_id else None
+        catalog_token = set_file_catalog(catalog)
 
         token = None
         if stream_emitter is not None:
@@ -85,5 +96,6 @@ class GraphRunnerService:
         finally:
             if token is not None:
                 reset_stream_emitter(token)
+            reset_file_catalog(catalog_token)
 
         return final_state

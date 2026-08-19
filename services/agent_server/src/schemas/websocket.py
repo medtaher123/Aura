@@ -120,7 +120,7 @@ class ChatRequestMessage(BaseModel):
     attachments: list[AnyMessageAttachment] = Field(
         default_factory=list,
         description=(
-            "Optional message attachments (e.g. type=location, type=bounding_box) "
+            "Optional message attachments (e.g. type=location, type=bounding_box, type=file) "
             "sent proactively with the message"
         ),
     )

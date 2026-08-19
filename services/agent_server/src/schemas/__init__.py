@@ -6,10 +6,12 @@ from .chat import (
     ConversationRead,
     ConversationWithMessages,
 )
+from .files import FileRead
 
 __all__ = [
     "ConversationCreate",
     "ConversationMessage",
     "ConversationRead",
     "ConversationWithMessages",
+    "FileRead",
 ]

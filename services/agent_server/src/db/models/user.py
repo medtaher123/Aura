@@ -12,6 +12,7 @@ from ..base import BaseModel
 
 if TYPE_CHECKING:
     from src.db.models.conversation import Conversation
+    from src.db.models.file import File
 
 class User(BaseModel):
     """An application user, keyed by the identity provider's subject id."""
@@ -27,6 +28,11 @@ class User(BaseModel):
     )
 
     conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    files: Mapped[list["File"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Annotated, Any, Literal, Optional, Union
+from uuid import UUID
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
@@ -94,20 +95,15 @@ class BoundingBoxAttachment(MessageAttachment):
         return state
 
 
-#TODO: to implement
 class FileAttachment(MessageAttachment):
-    """Uploaded file reference (stub — not wired to upload yet)."""
+    """Reference to a row in the ``files`` table."""
 
     type: Literal["file"] = "file"
-    name: str = Field(default="", description="Original filename")
-    path: str = Field(default="", description="Server-side storage path")
-    format: str = Field(default="", description="File format, e.g. pdf")
-    size_bytes: Optional[int] = Field(default=None, description="Byte size")
+    file_id: UUID = Field(..., description="Stored file id")
+    name: str = Field(default="", description="Original filename snapshot")
 
     def llm_text(self) -> str:
-        label = self.name or self.path or "attached file"
-        if self.format:
-            return f"Attached file: {label} ({self.format})."
+        label = self.name or str(self.file_id)
         return f"Attached file: {label}."
 
 
@@ -137,7 +133,7 @@ def dump_attachments(
 ) -> list[dict[str, Any]]:
     if not attachments:
         return []
-    return [a.model_dump(mode="python") for a in attachments]
+    return [a.model_dump(mode="json") for a in attachments]
 
 
 

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.models.user import User
 
 if TYPE_CHECKING:
+    from src.db.models.file import File
     from src.db.models.message import Message
 
 
@@ -49,4 +50,8 @@ class Conversation(BaseModel):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="Message.id",
+    )
+    files: Mapped[list["File"]] = relationship(
+        back_populates="conversation",
+        passive_deletes=True,
     )
