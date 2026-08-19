@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from abc import ABC, abstractmethod
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.graph.state import GraphState
 from src.core.event_emitter import EventEmitter
 from src.db.models.message import Message, UserMessage
-from src.db.models.message_attachments import (
-    MessageAttachment,
-    apply_attachments,
-)
+from src.db.models.message_attachments import apply_attachments
 from src.user_inputs import UserInputRouter
 from src.tools.contracts import ToolArtifacts, ToolCoordinates
 
@@ -49,24 +47,65 @@ class GraphTurnResult(BaseModel):
         pause = self.data.get("pause")
         return dict(pause) if isinstance(pause, dict) else {}
 
+    def assistant_metadata(self) -> dict[str, Any]:
+        """Metadata stored on the persisted assistant message."""
+        return {
+            "artifacts": self.artifacts.model_dump(mode="json"),
+            "error": bool(self.error),
+        }
 
-class GraphTurnRequest(BaseModel):
-    """Input for a fresh graph turn."""
+
+class GraphRunnerRequest(BaseModel, ABC):
+    """How the graph is started. Subclass for a new entry mode (fresh vs resume)."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    message: Message
+    chat_history: list[Message] = Field(default_factory=list)
+    stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
+
+    def llm_chat_history(self) -> list[Message]:
+        """Prior conversation plus this turn's incoming user message."""
+        return [*self.chat_history, self.message]
+
+    def apply_incoming_attachments(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Apply this turn's attachments onto graph state (new chat and resume)."""
+        attachments = self.message.attachments
+        UserInputRouter.apply_resume_attachments(attachments, state)
+        apply_attachments(attachments, state)
+        return state
+
+    @abstractmethod
+    def to_state_dict(self) -> GraphState:
+        """LangGraph input state for this execution."""
+
+    @abstractmethod
+    def start_log_message(self) -> str:
+        """One-line log when this execution begins."""
+
+    def with_stream_emitter(self, emitter: EventEmitter) -> Self:
+        return self.model_copy(update={"stream_emitter": emitter})
+
+
+class GraphTurnRequest(GraphRunnerRequest):
+    """Input for a fresh graph turn."""
 
     message: UserMessage
     user_id: str
     session_id: str
     document_ref: dict[str, Any] = Field(default_factory=dict)
     place_hint: str | None = None
-    chat_history: list[Message] = Field(default_factory=list)
-    stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     @property
     def english_query(self) -> str:
         """Free-text user query; attachments are applied separately."""
         return self.message.content
+
+    def start_log_message(self) -> str:
+        return (
+            f"Graph turn starting - session_id: {self.session_id}, "
+            f"query length: {len(self.english_query)}"
+        )
 
     def to_state_dict(self) -> GraphState:
         # History stays on the request / LLM contextvar — not flattened into ``query``.
@@ -80,21 +119,20 @@ class GraphTurnRequest(BaseModel):
         }
         if self.place_hint and self.place_hint.strip():
             state["place_hint"] = self.place_hint.strip()
-        apply_attachments(self.message.attachments, state)
+        self.apply_incoming_attachments(state)
         return state  # type: ignore[return-value]
 
 
-class GraphResumeRequest(BaseModel):
+class GraphResumeRequest(GraphRunnerRequest):
     """Input for resuming a graph paused for user input."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     graph_state: dict[str, Any]
-    attachments: list[MessageAttachment] = Field(default_factory=list)
-    chat_history: list[Message] = Field(default_factory=list)
-    stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
+
+    def start_log_message(self) -> str:
+        types = [getattr(a, "type", type(a).__name__) for a in self.message.attachments]
+        return f"Graph resume starting - attachment_types: {types}"
 
     def to_state_dict(self) -> GraphState:
         merged: dict[str, Any] = {**self.graph_state}
-        apply_attachments(self.attachments, merged)
+        self.apply_incoming_attachments(merged)
         return merged  # type: ignore[return-value]

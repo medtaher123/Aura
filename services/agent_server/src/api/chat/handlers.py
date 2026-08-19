@@ -1,16 +1,24 @@
-"""Chat turn handlers: new request and resume-after-user-input."""
+"""New chat and resume chat share one ``ChatTurn.run()``.
+
+``ChatTurn`` — run the graph, then pause or send the final answer.
+``NewChat``  — client sent a new message.
+``ResumeChat`` — client answered a question the agent asked.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any, ClassVar
 
 from src.api.chat.language import to_english
 from src.api.chat.pause_state import ConversationPauseState
 from src.api.chat.stream_bridge import stream_bridge
 from src.api.websocket_connection import WebSocketConnection
+from src.core.logger import get_logger
 from src.db import ConversationService, User
 from src.db.models.message import (
     AssistantMessage,
@@ -18,148 +26,303 @@ from src.db.models.message import (
     Message,
     UserMessage,
 )
-from src.user_inputs import UserInputRouter
 from src.schemas.websocket import AgentStage
-from src.services import graph_runner
-from src.services.graph_runner import GraphTurnResult
+from src.services.graph_runner import GraphTurnResult, get_graph_runner_service
+from src.services.graph_runner.models import (
+    GraphResumeRequest,
+    GraphRunnerRequest,
+    GraphTurnRequest,
+)
+from src.services.graph_runner.service import GraphRunnerService
 from src.services.translate_service import translate_from_english
-from src.core.logger import get_logger
+from src.user_inputs import UserInputRouter
 
 logger = get_logger("chat_turn")
 
 
-def _assistant_metadata(turn: GraphTurnResult) -> dict[str, Any]:
-    return {
-        "artifacts": turn.artifacts.model_dump(mode="json"),
-        "error": bool(turn.error),
-    }
+class ChatTurn(ABC):
+    """One graph run for a conversation. Subclasses only differ in ``start()``."""
 
+    kind: ClassVar[str] = "chat"
 
-async def _run_graph_in_thread(fn: Callable[[], GraphTurnResult]) -> GraphTurnResult:
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return await loop.run_in_executor(pool, fn)
+    def __init__(
+        self,
+        conn: WebSocketConnection,
+        user: User,
+        conversations: ConversationService,
+        *,
+        graph_runner: GraphRunnerService | None = None,
+    ) -> None:
+        self.conn = conn
+        self.user = user
+        self.conversations = conversations
+        self.graph_runner = graph_runner or get_graph_runner_service()
 
+        self.conversation_id: uuid.UUID | None = None
+        self.graph_request: GraphRunnerRequest | None = None
+        self.language = "en"
+        self.status_text = "Processing your request..."
+        self.user_query = ""
+        self.needs_title = False
+        self.messages_to_save: list[Message] = []
+        self.clear_pause_when_done = False
+        self.user_message_already_saved = False
 
-async def _generate_and_send_title(
-    *,
-    conn: WebSocketConnection,
-    conversations: ConversationService,
-    user: User,
-    conversation_id: uuid.UUID,
-    user_message: str,
-    assistant_message: str,
-) -> None:
-    try:
-        title = await asyncio.to_thread(
-            conversations.generate_title, user_message, assistant_message
-        )
-        conversation = await conversations.update_title(user, conversation_id, title)
-        if conversation is None:
-            logger.warning(
-                "Skipped title event; conversation not found: %s", conversation_id
+    async def run(self) -> None:
+        try:
+            if not await self.start():
+                return
+            result = await self.run_graph()
+            await self.after_graph(result)
+        except Exception as exc:
+            logger.exception("Error running %s", self.kind)
+            await self.conn.send_error(str(exc), recoverable=True)
+
+    @abstractmethod
+    async def start(self) -> bool:
+        """Fill conversation_id and graph_request. Return False after sending an error."""
+
+    async def run_graph(self) -> GraphTurnResult:
+        assert self.graph_request is not None
+        await self.conn.send_status(AgentStage.PLANNING, self.status_text)
+        self.conn.begin_streaming_response()
+        with stream_bridge(self.conn) as emitter:
+            request = self.graph_request.with_stream_emitter(emitter)
+            return await _run_graph_in_thread(lambda: self.graph_runner.execute(request))
+
+    async def after_graph(self, result: GraphTurnResult) -> None:
+        if self.conn.is_closed or self.conversation_id is None:
+            return
+        if self.conn.is_cancelled():
+            await self.conn.send_complete(
+                response="Request cancelled.",
+                conversation_id=self.conversation_id,
+                error=False,
             )
             return
-        await conn.send_conversation_title(conversation.id, conversation.title)
-    except Exception as exc:
-        logger.warning(
-            "Conversation title generation failed for %s: %s: %s",
-            conversation_id,
-            type(exc).__name__,
-            exc,
+        if result.pending_input_requests():
+            await self.ask_user_for_input(result)
+            return
+        await self.send_final_answer(result)
+
+    async def ask_user_for_input(self, result: GraphTurnResult) -> None:
+        assert self.conversation_id is not None
+        pause = ConversationPauseState.from_turn(
+            result,
+            conversation_id=str(self.conversation_id),
+            detected_lang=self.language,
+            title_user_message=self.user_query,
+            conversation_title_pending=self.needs_title,
+            user_message_persisted=self.user_message_already_saved,
+            needs_input=UserInputRouter.requests_to_dict(result.pending_input_requests()),
+        )
+        history = list(self.messages_to_save)
+        if history:
+            pause.user_message_persisted = True
+        pending = result.pending_input_requests()
+        if pending:
+            history.append(UserInputRouter.to_request_message(pending))
+        if history:
+            await self.conversations.append_messages(
+                self.user, self.conversation_id, history, commit=False
+            )
+        logger.info("User input required - kinds=%s", list(pause.needs_input.keys()))
+        await self.conversations.set_pause_state(
+            self.user, self.conversation_id, pause.to_storage()
+        )
+        await self.conn.send_user_input_request(
+            pause.needs_input,
+            {"conversation_id": str(self.conversation_id)},
         )
 
-
-async def _send_user_input_pause(
-    *,
-    conn: WebSocketConnection,
-    conversations: ConversationService,
-    user: User,
-    conversation_id: uuid.UUID,
-    turn: GraphTurnResult,
-    detected_lang: str,
-    title_user_message: str,
-    conversation_title_pending: bool = False,
-    user_message_persisted: bool = False,
-) -> None:
-    pending = turn.pending_input_requests()
-    needs_input = UserInputRouter.requests_to_dict(pending)
-    pause = ConversationPauseState.from_turn(
-        turn,
-        conversation_id=str(conversation_id),
-        detected_lang=detected_lang,
-        title_user_message=title_user_message,
-        conversation_title_pending=conversation_title_pending,
-        user_message_persisted=user_message_persisted,
-        needs_input=needs_input,
-    )
-
-    history_messages: list[Message] = []
-    if not pause.user_message_persisted and title_user_message:
-        history_messages.append(UserMessage.create(title_user_message))
-        pause.user_message_persisted = True
-    if pending:
-        history_messages.append(UserInputRouter.to_request_message(pending))
-    if history_messages:
-        await conversations.append_messages(
-            user, conversation_id, history_messages, commit=False
+    async def send_final_answer(self, result: GraphTurnResult) -> None:
+        assert self.conversation_id is not None
+        response = await asyncio.to_thread(
+            translate_from_english, result.message, self.language
+        )
+        if self.clear_pause_when_done:
+            await self.conversations.clear_pause_state(self.user, self.conversation_id)
+        await self.conversations.append_messages(
+            self.user,
+            self.conversation_id,
+            [
+                *self.messages_to_save,
+                AssistantMessage.create(
+                    result.message, metadata=result.assistant_metadata()
+                ),
+            ],
+        )
+        if self.needs_title:
+            await self.send_title(result)
+        logger.info(
+            "Chat turn completed - error=%s maps=%d urls=%d",
+            result.error,
+            len(result.artifacts.maps),
+            len(result.artifacts.urls),
+        )
+        await self.conn.send_complete(
+            response=response,
+            conversation_id=self.conversation_id,
+            artifacts=result.artifacts,
+            error=result.error,
         )
 
-    logger.info("User input required - kinds=%s", list(needs_input.keys()))
-    await conversations.set_pause_state(user, conversation_id, pause.to_storage())
-    # Wire field is still named pause_state; payload is only a conversation ref.
-    await conn.send_user_input_request(
-        needs_input,
-        {"conversation_id": str(conversation_id)},
-    )
+    async def send_title(self, result: GraphTurnResult) -> None:
+        assert self.conversation_id is not None
+        try:
+            title = await asyncio.to_thread(
+                self.conversations.generate_title, self.user_query, result.message
+            )
+            conversation = await self.conversations.update_title(
+                self.user, self.conversation_id, title
+            )
+            if conversation is None:
+                logger.warning(
+                    "Skipped title event; conversation not found: %s",
+                    self.conversation_id,
+                )
+                return
+            await self.conn.send_conversation_title(conversation.id, conversation.title)
+        except Exception as exc:
+            logger.warning(
+                "Conversation title generation failed for %s: %s: %s",
+                self.conversation_id,
+                type(exc).__name__,
+                exc,
+            )
 
 
-async def _finalize_completed_turn(
-    *,
-    conn: WebSocketConnection,
-    conversations: ConversationService,
-    user: User,
-    conversation_id: uuid.UUID,
-    turn: GraphTurnResult,
-    detected_lang: str,
-    title_user_message: str,
-    conversation_title_pending: bool,
-    history_messages: list[Message],
-    clear_pause: bool,
-) -> None:
-    """Shared completion path for a finished (non-paused) graph turn."""
-    response_message = await asyncio.to_thread(
-        translate_from_english, turn.message, detected_lang
-    )
+class NewChat(ChatTurn):
+    """Client sent a new message (websocket type ``chat_request``)."""
 
-    if clear_pause:
-        await conversations.clear_pause_state(user, conversation_id)
+    kind = "new chat"
 
-    if history_messages:
-        await conversations.append_messages(user, conversation_id, history_messages)
+    def __init__(
+        self,
+        conn: WebSocketConnection,
+        user: User,
+        conversations: ConversationService,
+        user_message: UserMessage,
+        *,
+        conversation_id: uuid.UUID | None = None,
+        language: str | None = None,
+        graph_runner: GraphRunnerService | None = None,
+    ) -> None:
+        super().__init__(conn, user, conversations, graph_runner=graph_runner)
+        self.user_message = user_message
+        self.incoming_conversation_id = conversation_id
+        self.incoming_language = language
 
-    if conversation_title_pending:
-        await _generate_and_send_title(
-            conn=conn,
-            conversations=conversations,
-            user=user,
-            conversation_id=conversation_id,
-            user_message=title_user_message,
-            assistant_message=turn.message,
+    async def start(self) -> bool:
+        context = await self.conversations.get_or_create_conversation_with_messages(
+            self.user, self.incoming_conversation_id
         )
+        if context is None:
+            await self.conn.send_error("Conversation not found", recoverable=True)
+            return False
 
-    logger.info(
-        "Chat turn completed - error=%s maps=%d urls=%d",
-        turn.error,
-        len(turn.artifacts.maps),
-        len(turn.artifacts.urls),
-    )
-    await conn.send_complete(
-        response=response_message,
-        conversation_id=conversation_id,
-        artifacts=turn.artifacts,
-        error=turn.error,
-    )
+        self.conversation_id = context.conversation.id
+        logger.info(
+            "Chat request received - len=%d conversation_id=%s new=%s history=%d attachments=%s",
+            len(self.user_message.content or ""),
+            self.conversation_id,
+            context.created,
+            len(context.messages),
+            [a.type for a in self.user_message.attachments],
+        )
+        english, language = await asyncio.to_thread(
+            to_english, self.user_message.content, self.incoming_language
+        )
+        self.user_message.content = english
+        self.language = language
+        self.user_query = english
+        self.needs_title = context.created
+        self.messages_to_save = [self.user_message]
+        self.status_text = "Processing your request..."
+        self.graph_request = GraphTurnRequest(
+            message=self.user_message,
+            user_id=str(self.user.id),
+            session_id=str(self.conversation_id),
+            chat_history=list(context.messages),
+        )
+        return True
+
+
+class ResumeChat(ChatTurn):
+    """Client answered a question (websocket type ``chat_resume``)."""
+
+    kind = "resume chat"
+
+    def __init__(
+        self,
+        conn: WebSocketConnection,
+        user: User,
+        conversations: ConversationService,
+        input_message: InputResponseMessage,
+        *,
+        conversation_id: uuid.UUID,
+        graph_runner: GraphRunnerService | None = None,
+    ) -> None:
+        super().__init__(conn, user, conversations, graph_runner=graph_runner)
+        self.input_message = input_message
+        self.conversation_id = conversation_id
+        self.clear_pause_when_done = True
+        self.status_text = "Resuming with provided user input..."
+
+    async def start(self) -> bool:
+        logger.info(
+            "Chat resume received - attachments=%s conversation_id=%s",
+            [a.type for a in self.input_message.attachments],
+            self.conversation_id,
+        )
+        found = await self.conversations.get_conversation_with_messages(
+            self.user, self.conversation_id
+        )
+        if found is None:
+            await self.conn.send_error("Conversation not found", recoverable=True)
+            return False
+        pause = await self._pause_from_conversation(found.conversation.pause_state)
+        if pause is None:
+            return False
+        leftover = pause.unpersisted_user_message()
+        self.language = pause.detected_lang
+        self.user_query = pause.title_user_message
+        self.needs_title = pause.conversation_title_pending
+        self.user_message_already_saved = pause.user_message_persisted
+        self.messages_to_save = [leftover] if leftover else []
+        self.messages_to_save.append(self.input_message)
+        self.graph_request = GraphResumeRequest(
+            graph_state=dict(pause.graph_state),
+            message=self.input_message,
+            chat_history=list(found.messages),
+        )
+        return True
+
+    async def _pause_from_conversation(
+        self, raw_pause: dict[str, Any] | None
+    ) -> ConversationPauseState | None:
+        pause = ConversationPauseState.from_storage(raw_pause)
+        if pause is None:
+            logger.warning(
+                "Resume requested but no paused state for conversation %s",
+                self.conversation_id,
+            )
+            await self.conn.send_error(
+                "No paused request to resume for this conversation.",
+                recoverable=True,
+            )
+            return None
+        if not pause.graph_state:
+            logger.warning(
+                "Resume requested but no graph_state for conversation %s",
+                self.conversation_id,
+            )
+            await self.conn.send_error(
+                "No paused graph state to resume for this conversation.",
+                recoverable=True,
+            )
+            return None
+        return pause
 
 
 async def handle_chat_request(
@@ -171,99 +334,14 @@ async def handle_chat_request(
     conversation_id: uuid.UUID | None = None,
     language: str | None = None,
 ) -> None:
-    """Handle a new chat_request from the client."""
-    try:
-        context = await conversations.get_or_create_conversation_with_messages(
-            user, conversation_id
-        )
-        if context is None:
-            await conn.send_error("Conversation not found", recoverable=True)
-            return
-
-        conversation_id = context.conversation.id
-        logger.info(
-            "Chat request received - len=%d conversation_id=%s new=%s history=%d attachments=%s",
-            len(user_message.content or ""),
-            conversation_id,
-            context.created,
-            len(context.messages),
-            [a.type for a in user_message.attachments],
-        )
-
-        await conn.send_status(AgentStage.PLANNING, "Processing your request...")
-        conn.begin_streaming_response()
-
-        english_message, detected_lang = await asyncio.to_thread(
-            to_english, user_message.content, language
-        )
-        user_message.content = english_message
-        english_query = user_message.content
-        chat_history = [m for m in context.messages if m.has_content]
-
-        with stream_bridge(conn) as stream_emitter:
-            def run_turn(emitter=stream_emitter) -> GraphTurnResult:
-                return graph_runner.run_graph_turn(
-                    message=user_message,
-                    user_id=str(user.id),
-                    session_id=str(conversation_id),
-                    chat_history=chat_history,
-                    stream_emitter=emitter,
-                )
-
-            turn = await _run_graph_in_thread(run_turn)
-
-        if conn.is_closed:
-            return
-
-        if conn.is_cancelled():
-            await conn.send_complete(
-                response="Request cancelled.",
-                conversation_id=conversation_id,
-                error=False,
-            )
-            return
-
-        if turn.pending_input_requests():
-            await conversations.append_messages(
-                user,
-                conversation_id,
-                [user_message],
-                commit=False,
-            )
-            await _send_user_input_pause(
-                conn=conn,
-                conversations=conversations,
-                user=user,
-                conversation_id=conversation_id,
-                turn=turn,
-                detected_lang=detected_lang,
-                title_user_message=english_query,
-                conversation_title_pending=context.created,
-                user_message_persisted=True,
-            )
-            return
-
-        await _finalize_completed_turn(
-            conn=conn,
-            conversations=conversations,
-            user=user,
-            conversation_id=conversation_id,
-            turn=turn,
-            detected_lang=detected_lang,
-            title_user_message=english_query,
-            conversation_title_pending=context.created,
-            history_messages=[
-                user_message,
-                AssistantMessage.create(
-                    turn.message, metadata=_assistant_metadata(turn)
-                ),
-            ],
-            clear_pause=False,
-        )
-
-    except Exception as exc:
-        logger.exception("Error handling chat request")
-        await conn.send_error(str(exc), recoverable=True)
+    await NewChat(
+        conn,
+        user,
+        conversations,
+        user_message,
+        conversation_id=conversation_id,
+        language=language,
+    ).run()
 
 
 async def handle_chat_resume(
@@ -274,123 +352,16 @@ async def handle_chat_resume(
     *,
     conversation_id: uuid.UUID,
 ) -> None:
-    """Handle chat_resume after the client answered required user inputs."""
-    try:
-        wire_attachments = input_message.attachments
-        logger.info(
-            "Chat resume received - attachments=%s conversation_id=%s",
-            [a.type for a in wire_attachments],
-            conversation_id,
-        )
+    await ResumeChat(
+        conn,
+        user,
+        conversations,
+        input_message,
+        conversation_id=conversation_id,
+    ).run()
 
-        conversation = await conversations.get_conversation(user, conversation_id)
-        if conversation is None:
-            await conn.send_error("Conversation not found", recoverable=True)
-            return
 
-        pause = ConversationPauseState.from_storage(conversation.pause_state)
-        if pause is None:
-            logger.warning(
-                "Resume requested but no paused state for conversation %s",
-                conversation_id,
-            )
-            await conn.send_error(
-                "No paused request to resume for this conversation.",
-                recoverable=True,
-            )
-            return
-
-        if not pause.graph_state:
-            logger.warning(
-                "Resume requested but no graph_state for conversation %s",
-                conversation_id,
-            )
-            await conn.send_error(
-                "No paused graph state to resume for this conversation.",
-                recoverable=True,
-            )
-            return
-
-        if wire_attachments:
-            await conversations.append_messages(
-                user,
-                conversation_id,
-                [input_message],
-            )
-
-        loaded = await conversations.get_conversation_with_messages(
-            user, conversation_id
-        )
-        chat_history = [
-            m for m in (loaded.messages if loaded else []) if m.has_content
-        ]
-
-        await conn.send_status(
-            AgentStage.PLANNING, "Resuming with provided user input..."
-        )
-        conn.begin_streaming_response()
-
-        graph_state = UserInputRouter.apply_resume_attachments(
-            wire_attachments,
-            dict(pause.graph_state),
-        )
-
-        with stream_bridge(conn) as stream_emitter:
-            def run_resume(emitter=stream_emitter) -> GraphTurnResult:
-                return graph_runner.resume_graph_turn(
-                    graph_state=graph_state,
-                    attachments=wire_attachments,
-                    chat_history=chat_history,
-                    stream_emitter=emitter,
-                )
-
-            turn = await _run_graph_in_thread(run_resume)
-
-        if conn.is_closed:
-            return
-
-        if conn.is_cancelled():
-            await conn.send_complete(
-                response="Request cancelled.",
-                conversation_id=conversation_id,
-                error=False,
-            )
-            return
-
-        if turn.pending_input_requests():
-            await _send_user_input_pause(
-                conn=conn,
-                conversations=conversations,
-                user=user,
-                conversation_id=conversation_id,
-                turn=turn,
-                detected_lang=pause.detected_lang,
-                title_user_message=pause.title_user_message,
-                conversation_title_pending=pause.conversation_title_pending,
-                user_message_persisted=pause.user_message_persisted,
-            )
-            return
-
-        history_messages: list[Message] = []
-        if not pause.user_message_persisted and pause.resume_user_text:
-            history_messages.append(UserMessage.create(pause.resume_user_text))
-        history_messages.append(
-            AssistantMessage.create(turn.message, metadata=_assistant_metadata(turn))
-        )
-
-        await _finalize_completed_turn(
-            conn=conn,
-            conversations=conversations,
-            user=user,
-            conversation_id=conversation_id,
-            turn=turn,
-            detected_lang=pause.detected_lang,
-            title_user_message=pause.title_user_message,
-            conversation_title_pending=pause.conversation_title_pending,
-            history_messages=history_messages,
-            clear_pause=True,
-        )
-
-    except Exception as exc:
-        logger.exception("Error handling chat resume")
-        await conn.send_error(str(exc), recoverable=True)
+async def _run_graph_in_thread(fn: Callable[[], GraphTurnResult]) -> GraphTurnResult:
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return await loop.run_in_executor(pool, fn)

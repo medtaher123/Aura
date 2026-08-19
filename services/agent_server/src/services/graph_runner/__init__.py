@@ -15,9 +15,13 @@ from typing import Any
 
 from src.core.event_emitter import EventEmitter
 from src.db.models.message import Message, UserMessage
-from src.db.models.message_attachments import MessageAttachment, parse_attachments
 
-from .models import GraphResumeRequest, GraphTurnRequest, GraphTurnResult
+from .models import (
+    GraphResumeRequest,
+    GraphRunnerRequest,
+    GraphTurnRequest,
+    GraphTurnResult,
+)
 from .responses import GraphTurnResultFactory
 from .service import GraphRunnerService
 
@@ -51,28 +55,29 @@ def run_graph_turn(
         chat_history=list(chat_history or []),
         stream_emitter=stream_emitter,
     )
-    return get_graph_runner_service().run_turn(request)
+    return get_graph_runner_service().execute(request)
 
 
 def resume_graph_turn(
     *,
     graph_state: dict[str, Any],
-    attachments: list[MessageAttachment] | list[dict[str, Any]] | None = None,
+    message: Message,
     chat_history: list[Message] | None = None,
     stream_emitter: EventEmitter | None = None,
 ) -> GraphTurnResult:
     """Resume a paused graph after the user provided required inputs."""
     request = GraphResumeRequest(
         graph_state=graph_state,
-        attachments=parse_attachments(attachments),
+        message=message,
         chat_history=list(chat_history or []),
         stream_emitter=stream_emitter,
     )
-    return get_graph_runner_service().resume_turn(request)
+    return get_graph_runner_service().execute(request)
 
 
 __all__ = [
     "GraphResumeRequest",
+    "GraphRunnerRequest",
     "GraphRunnerService",
     "GraphTurnRequest",
     "GraphTurnResult",

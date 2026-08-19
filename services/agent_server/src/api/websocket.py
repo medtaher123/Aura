@@ -173,14 +173,13 @@ async def websocket_chat(
                 try:
                     if await _reject_if_busy(conn, active_task):
                         continue
-                    request = ChatRequestMessage(**data)
-                    user_message = request.to_message()
+                    request = ChatRequestMessage.model_validate(data)
                     conn.reset_cancellation()
                     active_task, keepalive_task = _spawn_request_task(
                         conn,
                         handle_chat_request(
                             conn,
-                            user_message,
+                            request.to_message(),
                             user,
                             conversations,
                             conversation_id=request.conversation_id,
@@ -197,14 +196,13 @@ async def websocket_chat(
                 try:
                     if await _reject_if_busy(conn, active_task):
                         continue
-                    request = ChatResumeMessage(**data)
-                    input_message = request.to_message()
+                    request = ChatResumeMessage.model_validate(data)
                     conn.reset_cancellation()
                     active_task, keepalive_task = _spawn_request_task(
                         conn,
                         handle_chat_resume(
                             conn,
-                            input_message,
+                            request.to_message(),
                             user,
                             conversations,
                             conversation_id=request.conversation_id,

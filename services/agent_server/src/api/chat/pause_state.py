@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.db.models.message import UserMessage
 from src.services.graph_runner.models import GraphTurnResult
 
 
@@ -62,3 +63,12 @@ class ConversationPauseState(BaseModel):
     def resume_user_text(self) -> str:
         """Original user query for history if it was not persisted before pause."""
         return str(self.graph_state.get("user_query") or self.title_user_message or "")
+
+    def unpersisted_user_message(self) -> UserMessage | None:
+        """Original user turn to persist if it was skipped before the pause."""
+        if self.user_message_persisted:
+            return None
+        text = self.resume_user_text
+        if not text:
+            return None
+        return UserMessage.create(text)

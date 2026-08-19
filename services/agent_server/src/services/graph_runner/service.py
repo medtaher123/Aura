@@ -17,7 +17,7 @@ from src.core.event_emitter import (
 )
 
 from ...core.logger import get_logger
-from .models import GraphResumeRequest, GraphTurnRequest, GraphTurnResult
+from .models import GraphRunnerRequest, GraphTurnResult
 from .responses import GraphTurnResultFactory
 
 logger = get_logger("graph_runner")
@@ -34,28 +34,11 @@ class GraphRunnerService:
         self._graph = graph_builder()
         self._result_factory = result_factory or GraphTurnResultFactory()
 
-    def run_turn(self, request: GraphTurnRequest) -> GraphTurnResult:
-        """Run one graph turn and return a GraphTurnResult for the websocket layer."""
+    def execute(self, request: GraphRunnerRequest) -> GraphTurnResult:
+        """Run the graph for any ``GraphRunnerRequest`` (fresh turn or resume)."""
         state = request.to_state_dict()
-        logger.info(
-            f"Graph turn starting - session_id: {request.session_id}, "
-            f"query length: {len(request.english_query)}"
-        )
-        history_token = set_chat_history([*request.chat_history, request.message])
-        try:
-            final = self._run_streaming(state, request.stream_emitter)
-        finally:
-            reset_chat_history(history_token)
-        return self._result_factory.from_state(final)
-
-    def resume_turn(self, request: GraphResumeRequest) -> GraphTurnResult:
-        """Resume a paused graph after the user provided required inputs."""
-        state = request.to_state_dict()
-        logger.info(
-            f"Graph resume starting - attachment_types: "
-            f"{[getattr(a, 'type', type(a).__name__) for a in request.attachments]}"
-        )
-        history_token = set_chat_history(request.chat_history)
+        logger.info(request.start_log_message())
+        history_token = set_chat_history(request.llm_chat_history())
         try:
             final = self._run_streaming(state, request.stream_emitter)
         finally:
