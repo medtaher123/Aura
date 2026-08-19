@@ -132,7 +132,7 @@ class LocationGateNode(GraphNode):
         # explicit place hint -> existing location query -> LLM-extracted place from query.
         place = (s.place_hint or s.location_query).strip()
         if not place:
-            place = await self._extract_location_hint(query=s.query)
+            place = await self._extract_location_hint()
         s.location_query = place
 
         if not place:
@@ -185,12 +185,10 @@ class LocationGateNode(GraphNode):
         s.stopped_for_user_input = True
         return dump_state(s)
 
-    async def _extract_location_hint(self, *, query: str) -> str:
-        """Extract a geocodable place from a user query."""
-        system_prompt, user_prompt = get_query_location_prompt(query=query)
+    async def _extract_location_hint(self) -> str:
+        """Extract a geocodable place from the current conversation."""
         response = await LLMModelRouter().call_structured(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            system_prompt=get_query_location_prompt(),
             response_model=LocationHint,
             schema_name="location_hint",
             schema_description="Geocodable place extracted from user query",

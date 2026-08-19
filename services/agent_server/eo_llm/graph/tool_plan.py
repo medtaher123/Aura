@@ -255,14 +255,12 @@ class ToolPlanner:
 
     async def select_tool_plan(self, query: str) -> ToolPlan:
         
-        system_prompt, user_prompt = get_tool_planner_prompt(
+        system_prompt = get_tool_planner_prompt(
             domain=self._domain,
-            query=query,
             allowed_tools=self._allowed_tools,
         )
         candidate = await LLMModelRouter().call_structured(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
             response_model=ToolPlan,
             schema_name="domain_tool_plan",
             schema_description="Execution plan for a single EO_LLM domain agent",
@@ -292,7 +290,7 @@ class ToolPlanner:
 
         if ( tool_param_names):
             today_utc = datetime.now(timezone.utc).date().isoformat()
-            system_prompt, user_prompt = get_arg_resolver_prompt(
+            system_prompt = get_arg_resolver_prompt(
                 today_utc=today_utc,
                 domain=plan.domain,
                 tool_name=step.tool_name,
@@ -305,7 +303,6 @@ class ToolPlanner:
             )
             parsed = await LLMModelRouter().call_structured(
                 system_prompt=system_prompt,
-                user_prompt=user_prompt,
                 response_model=StepArgumentResolution,
                 schema_name="step_argument_resolution",
                 schema_description="Resolved concrete arguments for one tool step",

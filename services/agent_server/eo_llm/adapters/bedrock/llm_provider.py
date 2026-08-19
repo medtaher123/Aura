@@ -39,14 +39,22 @@ class LLMProvider(ABC):
         self,
         messages: Sequence["Message"],
     ) -> list[dict[str, Any]]:
-        """Turn ORM ``Message`` history (+ optional current user turn) into provider messages.
+        """Turn ORM ``Message`` history into provider messages.
 
-        Default shape is Bedrock Converse ``[{role, content: [{text}]}]``, merging
-        consecutive same-role turns. Subclasses may override for other vendors.
+        Default shape is Bedrock Converse ``[{role, content: [{text}]}]``.
+        Messages with no content blocks are skipped.
         """
         formatted: list[dict[str, Any]] = []
         for message in messages:
-            formatted.append(self.format_message(message))
+            blocks = self._content_blocks_for_message(message)
+            if not blocks:
+                continue
+            formatted.append(
+                {
+                    "role": self._llm_role(message.role),
+                    "content": blocks,
+                }
+            )
         return formatted
 
     def _llm_role(self, role: str | None) -> str:
@@ -77,19 +85,14 @@ class LLMProvider(ABC):
     def format_message(
         self,
         message: "Message",
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
+        blocks = self._content_blocks_for_message(message)
+        if not blocks:
+            return None
         return {
-            "role": message.role,
-            "content": self._content_blocks_for_message(message),
+            "role": self._llm_role(message.role),
+            "content": blocks,
         }
-
-    
-
-
-
-    @staticmethod
-    def _is_text_part(part: Any) -> bool:
-        return isinstance(part, dict) and "text" in part
 
     @abstractmethod
     async def call_structured(
@@ -100,7 +103,6 @@ class LLMProvider(ABC):
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
-        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
         chat_history: Sequence["Message"] | None = None,
@@ -113,7 +115,6 @@ class LLMProvider(ABC):
         *,
         model_id: str,
         system_prompt: str,
-        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 900,
         chat_history: Sequence["Message"] | None = None,
@@ -130,7 +131,6 @@ class LLMProvider(ABC):
         document_bytes: bytes,
         document_name: str,
         document_format: str,
-        user_message: "Message | None" = None,
         chat_history: Sequence["Message"] | None = None,
     ) -> dict[str, Any]:
         pass

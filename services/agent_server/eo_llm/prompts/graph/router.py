@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from eo_llm.prompts.builder import PromptSpec, render_system_user
+from eo_llm.prompts.builder import PromptSpec, render_system
 from eo_llm.prompts.shared.grounding import GROUNDING_RULES
 from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 from eo_llm.prompts.shared.user_experience import USER_EXPERIENCE_RULES
@@ -67,5 +67,5 @@ ROUTER_PROMPT = PromptSpec(
 )
 
 
-def get_router_prompt(*, query: str) -> tuple[str, str]:
-    return render_system_user(ROUTER_PROMPT, query=query)
+def get_router_prompt(*, place_hint: str | None = None) -> str:
+    return render_system(ROUTER_PROMPT, place_hint=place_hint)

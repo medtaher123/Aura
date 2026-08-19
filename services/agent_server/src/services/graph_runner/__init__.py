@@ -58,12 +58,14 @@ def resume_graph_turn(
     *,
     graph_state: dict[str, Any],
     attachments: list[MessageAttachment] | list[dict[str, Any]] | None = None,
+    chat_history: list[Message] | None = None,
     stream_emitter: EventEmitter | None = None,
 ) -> GraphTurnResult:
     """Resume a paused graph after the user provided required inputs."""
     request = GraphResumeRequest(
         graph_state=graph_state,
         attachments=parse_attachments(attachments),
+        chat_history=list(chat_history or []),
         stream_emitter=stream_emitter,
     )
     return get_graph_runner_service().resume_turn(request)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from eo_llm.prompts.builder import PromptSpec, render_system_user
+from eo_llm.prompts.builder import PromptSpec, render_system
 from eo_llm.prompts.shared.grounding import GROUNDING_RULES
 from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 from eo_llm.prompts.shared.temporal import TEMPORAL_RULES
@@ -50,8 +50,8 @@ def get_arg_resolver_prompt(
     docstring: str,
     candidate_args: dict[str, Any],
     execution_context: dict[str, Any],
-) -> tuple[str, str]:
-    return render_system_user(
+) -> str:
+    return render_system(
         ARG_RESOLVER_PROMPT,
         today_utc=today_utc,
         domain=domain,

@@ -38,13 +38,9 @@ class BedrockProvider(LLMProvider):
     def _converse_messages(
         self,
         *,
-        user_message: "Message | None" = None,
         chat_history: Sequence["Message"] | None = None,
     ) -> list[dict[str, Any]]:
-        messages = chat_history or ()
-        if user_message is not None:
-            messages = list(messages) + [user_message]
-        return self.format_messages(messages)
+        return self.format_messages(chat_history or ())
 
     async def call_structured0(
         self,
@@ -54,7 +50,6 @@ class BedrockProvider(LLMProvider):
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
-        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
         chat_history: Sequence["Message"] | None = None,
@@ -72,7 +67,6 @@ class BedrockProvider(LLMProvider):
                     modelId=model_id,
                     system=[{"text": system_prompt}],
                     messages=self._converse_messages(
-                        user_message=user_message,
                         chat_history=chat_history,
                     ),
                     inferenceConfig={
@@ -120,7 +114,6 @@ class BedrockProvider(LLMProvider):
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
-        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
         chat_history: Sequence["Message"] | None = None,
@@ -156,7 +149,6 @@ class BedrockProvider(LLMProvider):
                     modelId=model_id,
                     system=[{"text": system_prompt}],
                     messages=self._converse_messages(
-                        user_message=user_message,
                         chat_history=chat_history,
                     ),
                     inferenceConfig={
@@ -180,7 +172,6 @@ class BedrockProvider(LLMProvider):
         *,
         model_id: str,
         system_prompt: str,
-        user_message: "Message | None" = None,
         temperature: float = 0.0,
         max_tokens: int = 900,
         chat_history: Sequence["Message"] | None = None,
@@ -198,7 +189,6 @@ class BedrockProvider(LLMProvider):
                     modelId=model_id,
                     system=[{"text": system_prompt}],
                     messages=self._converse_messages(
-                        user_message=user_message,
                         chat_history=chat_history,
                     ),
                     inferenceConfig={
@@ -228,21 +218,19 @@ class BedrockProvider(LLMProvider):
         document_bytes: bytes,
         document_name: str,
         document_format: str,
-        user_message: "Message | None" = None,
         chat_history: Sequence["Message"] | None = None,
     ) -> dict[str, Any]:
         """Handles standard (non-structured) calls that include a document payload."""
         messages = self._converse_messages(
-            user_message=user_message,
             chat_history=chat_history,
         )
         if not messages or messages[-1]["role"] != "user":
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [{"text": "Summarize this document."}],
-                }
-            )
+            messages.append({"role": "user", "content": [{"text": " "}]})
+        elif not any(
+            isinstance(part, dict) and "text" in part
+            for part in messages[-1]["content"]
+        ):
+            messages[-1]["content"].insert(0, {"text": " "})
         messages[-1]["content"].append(
             {
                 "document": {

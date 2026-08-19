@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from eo_llm.prompts.builder import PromptSpec, render_system_user
+from eo_llm.prompts.builder import PromptSpec, render_system
 from eo_llm.prompts.shared.grounding import GROUNDING_RULES
 from eo_llm.prompts.shared.temporal import TEMPORAL_RULES
 from eo_llm.prompts.shared.user_experience import USER_EXPERIENCE_RULES
@@ -38,16 +38,14 @@ FINALIZER_PROMPT = PromptSpec(
 def get_finalizer_prompt(
     *,
     today_utc: str,
-    query: str,
     answer_source: str,
     aggregated_evidence: str,
     domain_results_json: str,
     web_results_json: str,
-) -> tuple[str, str]:
-    return render_system_user(
+) -> str:
+    return render_system(
         FINALIZER_PROMPT,
         today_utc=today_utc,
-        user_query=query,
         answer_source=answer_source,
         aggregated_evidence_summary=aggregated_evidence,
         domain_results_json=domain_results_json,

@@ -113,11 +113,8 @@ class DocumentQADomainNode(DomainNode):
 
         neutral_name = str(document_ref.get("neutral_name") or "Uploaded Document").strip()
         format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
-        user_prompt = (query or "").strip() or "Summarize this document."
-
         response = await LLMModelRouter().call_standard_with_document(
             system_prompt=DOCUMENT_QA_SYSTEM,
-            user_prompt=user_prompt,
             document_bytes=doc_bytes,
             document_name=neutral_name,
             document_format=format_value,

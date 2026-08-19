@@ -112,11 +112,9 @@ class OrchestratorNode(GraphNode):
     status_stage = "planning"
     status_message = "Planning your request..."
 
-    async def route_domains(self, *, query: str) -> DomainRouteDecision:
-        system_prompt, user_prompt = get_router_prompt(query=query)
+    async def route_domains(self, *, place_hint: str | None = None) -> DomainRouteDecision:
         decision = await LLMModelRouter().call_structured(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            system_prompt=get_router_prompt(place_hint=place_hint),
             response_model=DomainRouteDecision,
             schema_name="domain_route_decision",
             schema_description="Routing decision for EO_LLM orchestrator",
@@ -148,12 +146,8 @@ class OrchestratorNode(GraphNode):
             if place_from_doc:
                 s.place_hint = place_from_doc
 
-        route_query = user_msg
-        if s.place_hint:
-            route_query = f"{user_msg}\nImplicit location context: {s.place_hint}"
-
         try:
-            decision = await self.route_domains(query=route_query)
+            decision = await self.route_domains(place_hint=s.place_hint or None)
             selected_domains = [d for d in decision.domains if d != "websearch_only"]
             emit_decision_reasoning(
                 "route_domains",
@@ -197,11 +191,8 @@ class OrchestratorNode(GraphNode):
 
         neutral_name = str(document_ref.get("neutral_name") or "Uploaded Document").strip()
         format_value = str(document_ref.get("format") or "pdf").strip().lower() or "pdf"
-        user_prompt = (query or "").strip() or "Summarize this document."
-
         response = await LLMModelRouter().call_structured(
-            system_prompt=get_document_location_prompt(query=query),
-            user_prompt=user_prompt,
+            system_prompt=get_document_location_prompt(),
             response_model=LocationHint,
             schema_name="location_hint",
             schema_description="Location inferred from uploaded document and query",

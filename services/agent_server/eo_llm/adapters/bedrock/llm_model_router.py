@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from eo_llm.adapters.bedrock.llm_provider import LLMProvider
 from src.config import get_config
 from src.core.singleton_meta import SingletonMeta
-from src.db.models.message import Message, UserMessage
+from src.db.models.message import Message
 
 
 class TaskType(Enum):
@@ -98,22 +98,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
     def get_route(self, task: TaskType) -> LLMRoute:
         return self._routes[task]
 
-    @staticmethod
-    def _coerce_user_message(
-        *,
-        user_message: Message | None = None,
-        user_prompt: str | None = None,
-    ) -> Message | None:
-        """Prefer an explicit ``Message``; otherwise wrap ``user_prompt`` as ``UserMessage``."""
-        if user_message is not None:
-            return user_message
-        if user_prompt is None:
-            return None
-        text = str(user_prompt).strip()
-        if not text:
-            return None
-        return UserMessage.create(text)
-
     async def call_structured(
         self,
         *,
@@ -121,8 +105,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
         response_model: Type[T],
         schema_name: str,
         schema_description: str,
-        user_prompt: str | None = None,
-        user_message: Message | None = None,
         temperature: float = 0.0,
         max_tokens: int = 800,
         chat_history: Sequence[Message] | None = None,
@@ -135,10 +117,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
 
         return await model.provider.call_structured(
             system_prompt=system_prompt,
-            user_message=self._coerce_user_message(
-                user_message=user_message,
-                user_prompt=user_prompt,
-            ),
             response_model=response_model,
             schema_name=schema_name,
             schema_description=schema_description,
@@ -152,8 +130,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
         self,
         *,
         system_prompt: str,
-        user_prompt: str | None = None,
-        user_message: Message | None = None,
         temperature: float = 0.0,
         max_tokens: int = 900,
         chat_history: Sequence[Message] | None = None,
@@ -165,10 +141,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
             model = self.get_route(task_type)
 
         return model.provider.call_stream(
-            user_message=self._coerce_user_message(
-                user_message=user_message,
-                user_prompt=user_prompt,
-            ),
             temperature=temperature,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
@@ -183,8 +155,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
         document_bytes: bytes,
         document_name: str,
         document_format: str,
-        user_prompt: str | None = None,
-        user_message: Message | None = None,
         chat_history: Sequence[Message] | None = None,
         task_type: TaskType = TaskType.DOCUMENT,
         model: LLMRoute | None = None,
@@ -195,10 +165,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
 
         return await model.provider.call_standard_with_document(
             system_prompt=system_prompt,
-            user_message=self._coerce_user_message(
-                user_message=user_message,
-                user_prompt=user_prompt,
-            ),
             document_bytes=document_bytes,
             document_name=document_name,
             document_format=document_format,

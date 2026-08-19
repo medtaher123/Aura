@@ -17,7 +17,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any
 
-from eo_llm.prompts import BROWSER_SYSTEM_PROMPT, get_browser_user_prompt
+from eo_llm.prompts import get_browser_system_prompt, get_browser_user_prompt
 
 
 def _urls_from_text(text: str, *, limit: int = 8) -> list[str]:
@@ -122,11 +122,8 @@ def run_browser_research(
 
     uq = (user_query or contextualized_query or "").strip()
     hint = (domain_failure_hint or "").strip()
-    user_prompt = get_browser_user_prompt(
-        user_query=uq,
-        contextualized_query=contextualized_query,
-        domain_failure_hint=hint,
-    )
+    system_prompt = get_browser_system_prompt(domain_failure_hint=hint)
+    user_prompt = get_browser_user_prompt(user_query=uq)
 
     max_tool = int(getattr(cfg, "agentcore_browser_max_tool_rounds", 4) or 4)
     max_tool = max(1, min(max_tool, 25))
@@ -213,7 +210,7 @@ def run_browser_research(
         browser_tool = AgentCoreBrowser(region=region, session_timeout=session_timeout)
         agent = Agent(
             tools=[browser_tool.browser],
-            system_prompt=BROWSER_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             hooks=[_BrowserToolBudget(max_tool)],
             callback_handler=null_callback_handler,
             conversation_manager=SlidingWindowConversationManager(

@@ -41,7 +41,7 @@ class GraphRunnerService:
             f"Graph turn starting - session_id: {request.session_id}, "
             f"query length: {len(request.english_query)}"
         )
-        history_token = set_chat_history(request.chat_history)
+        history_token = set_chat_history([*request.chat_history, request.message])
         try:
             final = self._run_streaming(state, request.stream_emitter)
         finally:
@@ -55,7 +55,11 @@ class GraphRunnerService:
             f"Graph resume starting - attachment_types: "
             f"{[getattr(a, 'type', type(a).__name__) for a in request.attachments]}"
         )
-        final = self._run_streaming(state, request.stream_emitter)
+        history_token = set_chat_history(request.chat_history)
+        try:
+            final = self._run_streaming(state, request.stream_emitter)
+        finally:
+            reset_chat_history(history_token)
         return self._result_factory.from_state(final)
 
     def _run_streaming(

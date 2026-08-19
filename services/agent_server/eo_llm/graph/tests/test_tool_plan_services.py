@@ -7,7 +7,13 @@ import time
 from typing import Any
 from unittest.mock import MagicMock
 
-from eo_llm.adapters.mcp_client import reset_stream_callback, set_stream_callback
+from src.core.event_emitter import (
+    DataAgentStepEvent,
+    EventEmitter,
+    reset_stream_emitter,
+    set_stream_emitter,
+)
+from src.tools.contracts import ToolArtifacts, ToolResponse
 from eo_llm.graph.tool_plan import (
     OnFailurePolicy,
     RetryPolicy,
@@ -16,6 +22,7 @@ from eo_llm.graph.tool_plan import (
     ToolIntrospector,
     ToolPlan,
     ToolPlanner,
+    ToolStepExecution,
     ToolStepPlan,
 )
 
@@ -49,7 +56,6 @@ def test_planner_select_tool_plan_validates_domain_and_tools() -> None:
     )
 
     planner = ToolPlanner(
-        adapter=adapter,
         domain="fire_detection",
         allowed_tools=["detect_fire_tool"],
     )
@@ -71,10 +77,8 @@ def test_planner_resolve_step_arguments_without_bedrock() -> None:
     adapter = MagicMock()
     adapter.is_ready.return_value = False
     planner = ToolPlanner(
-        adapter=adapter,
         domain="fire_detection",
         allowed_tools=["detect_fire_tool"],
-        introspector=introspector,
     )
     step = ToolStepPlan(
         step_id="s1",
@@ -95,6 +99,44 @@ def test_planner_resolve_step_arguments_without_bedrock() -> None:
 
     assert resolved["missing"] == []
     assert resolved["arguments"]["lat"] == 1.0
+
+
+def test_planner_resolve_step_arguments_flags_missing_required_tool_params() -> None:
+    introspector = ToolIntrospector(
+        cache={
+            "flood_depth_damage_tool": {
+                "all_params": ["country", "depth_m", "asset_class"],
+                "required_params": ["country", "depth_m", "asset_class"],
+                "docstring": "",
+            }
+        }
+    )
+    adapter = MagicMock()
+    adapter.is_ready.return_value = False
+    planner = ToolPlanner(
+        adapter=adapter,
+        domain="flood_damage",
+        allowed_tools=["flood_depth_damage_tool"],
+        introspector=introspector,
+    )
+    step = ToolStepPlan(
+        step_id="s1",
+        tool_name="flood_depth_damage_tool",
+        priority=1,
+        required_inputs=["country", "depth_m"],
+        retry_policy=RetryPolicy(),
+        on_failure=OnFailurePolicy(),
+    )
+    plan = ToolPlan(domain="flood_damage", tool_steps=[step], stop_policy=StopPolicy())
+
+    resolved = planner.resolve_step_arguments(
+        plan=plan,
+        step=step,
+        candidate_args={"country": "France", "depth_m": 3.0},
+        execution_context={},
+    )
+
+    assert resolved["missing"] == ["asset_class"]
 
 
 def test_executor_runs_tool_caller_and_records_success() -> None:
@@ -226,20 +268,12 @@ def test_executor_batches_by_priority() -> None:
 
 
 def test_executor_emits_tool_start_and_done_events() -> None:
-    planner = MagicMock()
-    planner.resolve_step_arguments.return_value = {
-        "arguments": {"lat": 48.0, "lon": 2.0},
-        "missing": [],
-    }
-    events: list[dict[str, Any]] = []
-    token = set_stream_callback(events.append)
-
-    def tool_caller(name: str, args: dict[str, Any]) -> dict[str, Any]:
-        time.sleep(0.02)
-        return {"message": "ok", "error": False}
+    events: list[Any] = []
+    emitter = EventEmitter()
+    emitter.add_listener(DataAgentStepEvent, events.append)
+    token = set_stream_emitter(emitter)
 
     try:
-        executor = ToolExecutor(tool_caller=tool_caller, planner=planner)
         step = ToolStepPlan(
             step_id="s1",
             tool_name="detect_fire_tool",
@@ -247,42 +281,62 @@ def test_executor_emits_tool_start_and_done_events() -> None:
             retry_policy=RetryPolicy(max_retries=0),
             on_failure=OnFailurePolicy(),
         )
-        plan = ToolPlan(domain="fire_detection", tool_steps=[step], stop_policy=StopPolicy())
-        result = executor.execute(
-            plan=plan,
-            runtime_args_by_tool={"detect_fire_tool": {"lat": 48.0, "lon": 2.0}},
+        args = {"lat": 48.0, "lon": 2.0}
+        ToolExecutor._emit_tool_running(
+            step=step,
+            args=args,
+            execution_context={"domain": "fire_detection"},
+        )
+        ToolExecutor._emit_tool_done(
+            step=step,
+            args=args,
+            execution=ToolStepExecution(
+                step_id="s1",
+                tool_name="detect_fire_tool",
+                status="done",
+                attempts=1,
+                latency_ms=25,
+                error_type=None,
+                error_message="",
+                input_arguments=args,
+                result=ToolResponse(
+                    tool_name="detect_fire_tool",
+                    message="ok",
+                    artifacts=ToolArtifacts(
+                        maps=[{"title": "fires", "layers": []}],
+                        thumbnails=["https://example.com/t.png"],
+                        urls=["https://example.com/data"],
+                    ),
+                ),
+            ),
             execution_context={"domain": "fire_detection"},
         )
     finally:
-        reset_stream_callback(token)
+        reset_stream_emitter(token)
 
-    assert result.summary.successful_steps == 1
     assert len(events) == 2
-    assert events[0]["phase"] == "running"
-    assert events[0]["tool_name"] == "detect_fire_tool"
-    assert events[0]["step_id"] == "s1"
-    assert events[0]["domain"] == "fire_detection"
-    assert events[1]["phase"] == "done"
-    assert events[1]["status"] == "done"
-    assert events[1]["execution_time_seconds"] >= 0.02
-    assert events[1]["attempts"] == 1
-    assert events[1]["error"] is False
+    assert isinstance(events[0], DataAgentStepEvent)
+    assert events[0].phase == "running"
+    assert events[0].tool_name == "detect_fire_tool"
+    assert events[0].step_id == "s1"
+    assert events[0].domain == "fire_detection"
+    assert events[1].phase == "done"
+    assert events[1].status == "done"
+    assert events[1].execution_time_seconds == 0.025
+    assert events[1].attempts == 1
+    assert events[1].error is False
+    assert events[1].artifacts.maps == [{"title": "fires", "layers": []}]
+    assert events[1].artifacts.thumbnails == ["https://example.com/t.png"]
+    assert events[1].artifacts.urls == ["https://example.com/data"]
 
 
 def test_executor_emits_done_event_on_tool_error() -> None:
-    planner = MagicMock()
-    planner.resolve_step_arguments.return_value = {
-        "arguments": {"lat": 48.0, "lon": 2.0},
-        "missing": [],
-    }
-    events: list[dict[str, Any]] = []
-    token = set_stream_callback(events.append)
-
-    def tool_caller(name: str, args: dict[str, Any]) -> dict[str, Any]:
-        return {"message": "failed", "error": True}
+    events: list[Any] = []
+    emitter = EventEmitter()
+    emitter.add_listener(DataAgentStepEvent, events.append)
+    token = set_stream_emitter(emitter)
 
     try:
-        executor = ToolExecutor(tool_caller=tool_caller, planner=planner)
         step = ToolStepPlan(
             step_id="s1",
             tool_name="detect_fire_tool",
@@ -290,12 +344,30 @@ def test_executor_emits_done_event_on_tool_error() -> None:
             retry_policy=RetryPolicy(max_retries=0),
             on_failure=OnFailurePolicy(),
         )
-        plan = ToolPlan(domain="fire_detection", tool_steps=[step], stop_policy=StopPolicy())
-        executor.execute(plan=plan, runtime_args_by_tool={})
+        ToolExecutor._emit_tool_done(
+            step=step,
+            args={"lat": 48.0, "lon": 2.0},
+            execution=ToolStepExecution(
+                step_id="s1",
+                tool_name="detect_fire_tool",
+                status="error",
+                attempts=1,
+                latency_ms=10,
+                error_type="unknown",
+                error_message="failed",
+                input_arguments={"lat": 48.0, "lon": 2.0},
+                result=ToolResponse(
+                    tool_name="detect_fire_tool",
+                    message="failed",
+                    error=True,
+                ),
+            ),
+            execution_context={"domain": "fire_detection"},
+        )
     finally:
-        reset_stream_callback(token)
+        reset_stream_emitter(token)
 
-    done_events = [event for event in events if event.get("phase") == "done"]
+    done_events = [event for event in events if event.phase == "done"]
     assert len(done_events) == 1
-    assert done_events[0]["status"] == "error"
-    assert done_events[0]["error"] is True
+    assert done_events[0].status == "error"
+    assert done_events[0].error is True

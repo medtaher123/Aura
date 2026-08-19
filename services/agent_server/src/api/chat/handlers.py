@@ -318,6 +318,13 @@ async def handle_chat_resume(
                 [input_message],
             )
 
+        loaded = await conversations.get_conversation_with_messages(
+            user, conversation_id
+        )
+        chat_history = [
+            m for m in (loaded.messages if loaded else []) if m.has_content
+        ]
+
         await conn.send_status(
             AgentStage.PLANNING, "Resuming with provided user input..."
         )
@@ -333,6 +340,7 @@ async def handle_chat_resume(
                 return graph_runner.resume_graph_turn(
                     graph_state=graph_state,
                     attachments=wire_attachments,
+                    chat_history=chat_history,
                     stream_emitter=emitter,
                 )
 

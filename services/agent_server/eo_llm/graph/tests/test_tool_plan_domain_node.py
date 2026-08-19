@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ToolPlanDomainNode
-from eo_llm.graph.nodes.helpers import LocationContext
+import pytest
+
+from eo_llm.graph.nodes.domain_base import DomainTool, ToolPlanDomainNode
+from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 from eo_llm.graph.tool_plan import (
     ToolExecutionResult,
     ToolExecutionSummary,
     ToolPlan,
     ToolStepExecution,
+    ToolStepPlan,
+    RetryPolicy,
+    OnFailurePolicy,
     StopPolicy,
 )
+from eo_llm.graph.transitions.domain_transitions import choose_after_domain
+from src.schemas.spatial import BoundingBox
 
 
 class _StubToolPlanDomainNode(ToolPlanDomainNode):
@@ -20,7 +27,36 @@ class _StubToolPlanDomainNode(ToolPlanDomainNode):
     tools = ["stub_tool"]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
-        return {"stub_tool": {"lat": float(ctx.lat), "lon": float(ctx.lon)}}
+        return {
+            "stub_tool": omit_none(
+                {
+                    **ctx.known_coords(),
+                    "location": ctx.display_name or None,
+                }
+            )
+        }
+
+
+class _FloodLikeDomainNode(ToolPlanDomainNode):
+    domain_name = "flood_like"
+    tools = [
+        "get_terrazard_flood_briefing_tool",
+        DomainTool(
+            "get_terrazard_flood_damage_tool",
+            required_user_inputs=("bounding_box",),
+        ),
+    ]
+
+    def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
+        return {
+            "get_terrazard_flood_damage_tool": omit_none(
+                {
+                    "location": ctx.display_name or None,
+                    **ctx.known_coords(),
+                    "bbox": ctx.bbox_list,
+                }
+            )
+        }
 
 
 def _state(**overrides: Any) -> dict[str, Any]:
@@ -38,24 +74,65 @@ def _state(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def test_tool_plan_domain_not_selected_returns_empty() -> None:
+def _damage_plan() -> ToolPlan:
+    return ToolPlan(
+        domain="flood_damage",
+        tool_steps=[
+            ToolStepPlan(
+                step_id="s1",
+                tool_name="get_terrazard_flood_damage_tool",
+                priority=1,
+                args_template={"observation_date": "2024-03-15"},
+                retry_policy=RetryPolicy(),
+                on_failure=OnFailurePolicy(),
+            )
+        ],
+        stop_policy=StopPolicy(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_plan_domain_not_selected_returns_empty() -> None:
     node = _StubToolPlanDomainNode()
-    out = node(_state(selected_domains=["other"]))
+    out = await node(_state(selected_domains=["other"]))
     assert out == {}
 
 
-def test_tool_plan_domain_skipped_without_coordinates() -> None:
-    node = _StubToolPlanDomainNode()
-    out = node(_state(resolved_location={"display_name": "Paris, France"}))
+@pytest.mark.asyncio
+async def test_tool_plan_domain_omits_missing_coordinates() -> None:
+    """Without resolved lat/lon, still plan/execute and leave coords for the LLM."""
+    captured: dict[str, Any] = {}
+
+    class ReadyNode(_StubToolPlanDomainNode):
+        async def select_tool_plan(self, query: str) -> ToolPlan:
+            return ToolPlan(
+                domain="stub_domain",
+                tool_steps=[],
+                stop_policy=StopPolicy(),
+            )
+
+        async def execute_tool_plan(self, **kwargs):
+            captured.update(kwargs)
+            return ToolExecutionResult(
+                domain="stub_domain",
+                steps=[],
+                summary=ToolExecutionSummary(successful_steps=0),
+            )
+
+    node = ReadyNode()
+    out = await node(_state(resolved_location={"display_name": "Paris, France"}))
     result = out["domain_results"]["stub_domain"]
-    assert result["status"] == "skipped"
-    assert result["error"] is True
-    assert "Missing resolved lat/lon" in result["message"]
+    assert result["status"] == "error"  # no successful steps
+    runtime = captured["runtime_args_by_tool"]["stub_tool"]
+    assert "lat" not in runtime
+    assert "lon" not in runtime
+    assert runtime.get("location") == "Paris, France"
 
 
-def test_tool_plan_domain_success_envelope() -> None:
+@pytest.mark.asyncio
+async def test_tool_plan_domain_success_envelope() -> None:
     class SuccessNode(_StubToolPlanDomainNode):
-        def select_tool_plan(self, query: str) -> ToolPlan:
+        async def select_tool_plan(self, query: str) -> ToolPlan:
             assert query == "fires near Paris"
             return ToolPlan(
                 domain="stub_domain",
@@ -63,7 +140,7 @@ def test_tool_plan_domain_success_envelope() -> None:
                 stop_policy=StopPolicy(),
             )
 
-        def execute_tool_plan(self, **kwargs):
+        async def execute_tool_plan(self, **kwargs):
             step = ToolStepExecution(
                 step_id="s1",
                 tool_name="detect_fire_tool",
@@ -71,7 +148,7 @@ def test_tool_plan_domain_success_envelope() -> None:
                 attempts=1,
                 latency_ms=1,
                 input_arguments={"lat": 48.8566},
-                result={"message": "ok"},
+                result={"tool_name": "detect_fire_tool", "message": "ok"},
             )
             return ToolExecutionResult(
                 domain="stub_domain",
@@ -80,7 +157,7 @@ def test_tool_plan_domain_success_envelope() -> None:
             )
 
     node = SuccessNode()
-    out = node(_state())
+    out = await node(_state())
     result = out["domain_results"]["stub_domain"]
     assert result["status"] == "done"
     assert result["tool"] == "detect_fire_tool"
@@ -92,23 +169,142 @@ def test_tool_plan_domain_tools_registry() -> None:
 
     build_graph()
     assert ToolPlanDomainNode.tools_for("stac") == [
+        "web_search_tool",
         "query_stac_catalog",
         "maxar_open_data_imagery_tool",
     ]
     assert ToolPlanDomainNode.tools_for("unknown") == []
+    assert "get_terrazard_flood_damage_tool" in ToolPlanDomainNode.tools_for(
+        "flood_damage"
+    )
 
 
-def test_tool_plan_domain_error_envelope() -> None:
+def test_tool_plan_domain_resolved_tools_merge_shared() -> None:
+    assert _StubToolPlanDomainNode.resolved_tools() == [
+        "web_search_tool",
+        "stub_tool",
+    ]
+    assert _StubToolPlanDomainNode.shared_tools == ["web_search_tool"]
+    assert _FloodLikeDomainNode.resolved_tools() == [
+        "web_search_tool",
+        "get_terrazard_flood_briefing_tool",
+        "get_terrazard_flood_damage_tool",
+    ]
+    specs = _FloodLikeDomainNode.tool_specs()
+    assert specs["get_terrazard_flood_damage_tool"].required_user_inputs == (
+        "bounding_box",
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_plan_domain_error_envelope() -> None:
     class FailingNode(_StubToolPlanDomainNode):
-        def select_tool_plan(self, query: str) -> ToolPlan:
+        async def select_tool_plan(self, query: str) -> ToolPlan:
             raise RuntimeError("planner unavailable")
 
-        def execute_tool_plan(self, **kwargs):
+        async def execute_tool_plan(self, **kwargs):
             raise AssertionError("should not execute")
 
     node = FailingNode()
-    out = node(_state())
+    out = await node(_state())
     result = out["domain_results"]["stub_domain"]
     assert result["status"] == "error"
     assert "planner unavailable" in result["message"]
     assert result["summary"]["successful_steps"] == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_plan_domain_pauses_for_missing_bbox() -> None:
+    class PauseNode(_FloodLikeDomainNode):
+        async def select_tool_plan(self, query: str) -> ToolPlan:
+            return _damage_plan()
+
+        async def execute_tool_plan(self, **kwargs):
+            raise AssertionError("should not execute while bbox is missing")
+
+    node = PauseNode()
+    out = await node(
+        _state(
+            query="flood damage in Paris",
+            selected_domains=["flood_like"],
+        )
+    )
+    assert out["stopped_for_user_input"] is True
+    assert "bounding_box" in (out.get("needs_input") or {})
+    assert out["domain_results"]["flood_like"]["status"] == "paused"
+    assert choose_after_domain(out) == "end"
+
+
+@pytest.mark.asyncio
+async def test_tool_plan_domain_executes_when_bbox_present() -> None:
+    executed: dict[str, Any] = {}
+
+    class ReadyNode(_FloodLikeDomainNode):
+        async def select_tool_plan(self, query: str) -> ToolPlan:
+            return _damage_plan()
+
+        async def execute_tool_plan(self, **kwargs):
+            executed.update(kwargs)
+            step = ToolStepExecution(
+                step_id="s1",
+                tool_name="get_terrazard_flood_damage_tool",
+                status="done",
+                attempts=1,
+                latency_ms=1,
+                input_arguments={"bbox": [48.0, 49.0, 2.0, 3.0]},
+                result={
+                    "tool_name": "get_terrazard_flood_damage_tool",
+                    "message": "ok",
+                },
+            )
+            return ToolExecutionResult(
+                domain="flood_like",
+                steps=[step],
+                summary=ToolExecutionSummary(successful_steps=1),
+            )
+
+    node = ReadyNode()
+    out = await node(
+        _state(
+            query="flood damage in Paris",
+            selected_domains=["flood_like"],
+            resolved_area={
+                "kind": "bounding_box",
+                "min_lat": 48.0,
+                "max_lat": 49.0,
+                "min_lon": 2.0,
+                "max_lon": 3.0,
+            },
+        )
+    )
+    assert out.get("stopped_for_user_input") is not True
+    assert choose_after_domain(out) == "aggregator"
+    result = out["domain_results"]["flood_like"]
+    assert result["status"] == "done"
+    runtime = executed["runtime_args_by_tool"]["get_terrazard_flood_damage_tool"]
+    assert runtime["bbox"] == [48.0, 49.0, 2.0, 3.0]
+
+
+def test_choose_after_domain_routes() -> None:
+    assert choose_after_domain({"stopped_for_user_input": True}) == "end"
+    assert choose_after_domain({}) == "aggregator"
+    assert choose_after_domain({"stopped_for_user_input": False}) == "aggregator"
+
+
+def test_location_context_exposes_bbox() -> None:
+    from eo_llm.graph.state import validate_state
+
+    s = validate_state(
+        _state(
+            resolved_area={
+                "kind": "bounding_box",
+                "min_lat": 1.0,
+                "max_lat": 2.0,
+                "min_lon": 3.0,
+                "max_lon": 4.0,
+            }
+        )
+    )
+    ctx = LocationContext.from_state(s)
+    assert isinstance(ctx.resolved_area, BoundingBox)
+    assert ctx.bbox_list == [1.0, 2.0, 3.0, 4.0]

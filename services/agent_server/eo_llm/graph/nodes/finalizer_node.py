@@ -37,11 +37,9 @@ class FinalizerNode(GraphNode):
 
         source = s.answer_source or "domain_tools"
         evidence = s.aggregated_evidence or "No evidence."
-        query = s.query
 
         try:
             s.final_answer = await self._stream_final_answer(
-                query=query,
                 answer_source=source,
                 aggregated_evidence=evidence,
                 domain_results=dict(s.domain_results),
@@ -61,18 +59,14 @@ class FinalizerNode(GraphNode):
     async def _stream_final_answer(
         self,
         *,
-        query: str,
         answer_source: str,
         aggregated_evidence: str,
         domain_results: dict,
         web_results: list,
     ) -> str:
-        
-
         today_utc = datetime.now(timezone.utc).date().isoformat()
-        system_prompt, user_prompt = get_finalizer_prompt(
+        system_prompt = get_finalizer_prompt(
             today_utc=today_utc,
-            query=query,
             answer_source=answer_source,
             aggregated_evidence=aggregated_evidence,
             domain_results_json=json.dumps(domain_results, default=str)[:6000],
@@ -82,7 +76,6 @@ class FinalizerNode(GraphNode):
         parts: list[str] = []
         async for chunk in LLMModelRouter().call_stream(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
             max_tokens=900,
             chat_history=get_chat_history(),
         ):

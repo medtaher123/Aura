@@ -20,9 +20,27 @@ def _format_rules(title: str, rules: tuple[str, ...]) -> str:
     return f"{title}:\n{lines}"
 
 
+def _format_context(**context: Any) -> str:
+    lines: list[str] = []
+    for key, value in context.items():
+        if value is None or value == "":
+            continue
+        if isinstance(value, (dict, list)):
+            import json
+
+            rendered = json.dumps(value, ensure_ascii=True, default=str)
+        else:
+            rendered = str(value).strip()
+        if not rendered:
+            continue
+        label = key.replace("_", " ").strip().capitalize()
+        lines.append(f"{label}: {rendered}")
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class PromptSpec:
-    """Composable prompt definition for system + user messages."""
+    """Composable prompt definition for the system message."""
 
     role: str
     task: str
@@ -46,34 +64,15 @@ class PromptSpec:
         rules_block = _format_rules("Rules", all_rules)
         if rules_block:
             sections.append(rules_block)
+        if self.include_schema_rules:
+            from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
+
+            sections.append(_format_rules("Output", SCHEMA_OUTPUT_RULES))
         if self.examples:
             sections.append("Examples:\n" + "\n\n".join(self.examples))
         return _join_sections(*sections)
 
-    def user(self, **context: Any) -> str:
-        lines: list[str] = []
-        for key, value in context.items():
-            if value is None or value == "":
-                continue
-            if isinstance(value, (dict, list)):
-                import json
 
-                rendered = json.dumps(value, ensure_ascii=True, default=str)
-            else:
-                rendered = str(value).strip()
-            if not rendered:
-                continue
-            label = key.replace("_", " ").strip().capitalize()
-            lines.append(f"{label}: {rendered}")
-        body = "\n".join(lines)
-        if self.include_schema_rules:
-            from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
-
-            schema_note = _format_rules("Output", SCHEMA_OUTPUT_RULES)
-            return _join_sections(body, schema_note)
-        return body
-
-
-def render_system_user(spec: PromptSpec, **user_context: Any) -> tuple[str, str]:
-    """Return (system_prompt, user_prompt) from a spec and runtime context."""
-    return spec.system(), spec.user(**user_context)
+def render_system(spec: PromptSpec, **context: Any) -> str:
+    """Return a system prompt from a spec plus optional labeled context."""
+    return _join_sections(spec.system(), _format_context(**context))

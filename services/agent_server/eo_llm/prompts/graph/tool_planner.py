@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from eo_llm.prompts.builder import PromptSpec, render_system_user
+from eo_llm.prompts.builder import PromptSpec, render_system
 from eo_llm.prompts.shared.grounding import GROUNDING_RULES
 from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 from eo_llm.prompts.shared.user_experience import USER_EXPERIENCE_RULES
@@ -42,7 +42,7 @@ _DOMAIN_EXAMPLES: dict[str, tuple[str, ...]] = {
 }
 
 
-def get_tool_planner_prompt(*, domain: str, query: str, allowed_tools: list[str]) -> tuple[str, str]:
+def get_tool_planner_prompt(*, domain: str, allowed_tools: list[str]) -> str:
     domain_rules = DOMAIN_TOOL_RULES.get(domain, ())
     examples = _DOMAIN_EXAMPLES.get(domain, ())
     spec = PromptSpec(
@@ -52,9 +52,8 @@ def get_tool_planner_prompt(*, domain: str, query: str, allowed_tools: list[str]
         examples=examples,
         include_schema_rules=True,
     )
-    return render_system_user(
+    return render_system(
         spec,
         domain=domain,
         allowed_tools=", ".join(allowed_tools),
-        user_query=(query or "").strip(),
     )

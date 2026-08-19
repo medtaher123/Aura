@@ -91,6 +91,7 @@ class GraphResumeRequest(BaseModel):
 
     graph_state: dict[str, Any]
     attachments: list[MessageAttachment] = Field(default_factory=list)
+    chat_history: list[Message] = Field(default_factory=list)
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     def to_state_dict(self) -> GraphState:

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from eo_llm.prompts.builder import PromptSpec, render_system_user
+from eo_llm.prompts.builder import PromptSpec, render_system
 from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 
 _LOCATION_RULES: tuple[str, ...] = (
     *SCHEMA_OUTPUT_RULES,
     "Extract only the most relevant place name for geocoding.",
-    "Return one place suitable for geocoding (city/region/country).",
+    "Return one place suitable for geocoding (city/town/region/country).",
+    "Prefer the settlement or region name; drop feature words like forest(s), woods, park, mountains unless they are the official place name.",
     "Return empty string if no location is present.",
     "Prefer adding country context when unambiguous (e.g. Paris -> Paris, France).",
 )
@@ -18,6 +19,7 @@ _LOCATION_EXAMPLES: tuple[str, ...] = (
     "Query: storms in spain 2015-2025 -> Spain",
     "Query: show me water risk in Casablanca -> Casablanca, Morocco",
     "Query: meteo dresden -> Dresden, Germany",
+    "Query: Were there any fires around fontainebleau forests in 2026? -> Fontainebleau, France",
     "Query: hello -> (empty string)",
 )
 
@@ -43,9 +45,9 @@ DOCUMENT_LOCATION_PROMPT = PromptSpec(
 )
 
 
-def get_query_location_prompt(*, query: str) -> tuple[str, str]:
-    return render_system_user(QUERY_LOCATION_PROMPT, query=query)
+def get_query_location_prompt() -> str:
+    return render_system(QUERY_LOCATION_PROMPT)
 
 
-def get_document_location_prompt(*, query: str) -> tuple[str, str]:
-    return render_system_user(DOCUMENT_LOCATION_PROMPT, user_query=query)
+def get_document_location_prompt() -> str:
+    return render_system(DOCUMENT_LOCATION_PROMPT)
