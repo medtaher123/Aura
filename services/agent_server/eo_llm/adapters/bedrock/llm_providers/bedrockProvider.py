@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Type
 import aioboto3
 
 from eo_llm.adapters.bedrock import LLMProvider
-from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media import (
+from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media import (
     MAX_DOCUMENTS_PER_MESSAGE,
 )
-from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media_context import (
+from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media_context import (
     ensure_bedrock_media_for_messages,
     get_bedrock_file_media,
 )

@@ -16,6 +16,10 @@ from eo_llm.graph.tool_plan import (
     ToolPlan,
     ToolPlanner,
 )
+from src.tools.platform.agent_filter import (
+    get_cached_agent_profile,
+    resolve_allowed_tools,
+)
 from src.user_inputs import (
     BoundingBoxRequest,
     InputKind,
@@ -104,7 +108,11 @@ class ToolPlanDomainNode(DomainNode):
 
     @classmethod
     def resolved_tools(cls) -> list[str]:
-        """Shared tools first, then domain tools (order preserved, duplicates dropped)."""
+        """Shared tools first, then domain tools (order preserved, duplicates dropped).
+
+        Tools whose provider is not currently registered (e.g. disabled MCP server)
+        are excluded so the planner cannot select them.
+        """
         seen: set[str] = set()
         out: list[str] = []
         for entry in [*cls.shared_tools, *cls.tools]:
@@ -113,7 +121,17 @@ class ToolPlanDomainNode(DomainNode):
                 continue
             seen.add(name)
             out.append(name)
-        return out
+        allowed = resolve_allowed_tools(out, get_cached_agent_profile())
+        try:
+            from src.tools.platform.gateway import get_tool_gateway
+
+            registry = get_tool_gateway().registry
+            available = {d.name for d in registry.list_descriptors()}
+            if available:
+                allowed = [name for name in allowed if name in available]
+        except Exception:
+            pass
+        return allowed
 
     @classmethod
     def tools_for(cls, domain: str) -> list[str]:

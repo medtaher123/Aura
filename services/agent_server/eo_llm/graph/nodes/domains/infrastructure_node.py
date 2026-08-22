@@ -17,7 +17,7 @@ class InfrastructureNode(ToolPlanDomainNode):
         "bdtopo_visualize_tool",
         "bdtopo_query_tool",
         "bdtopo_intersection_tool",
-        "bdtopo_thematic_explain_tool"
+        "bdtopo_thematic_explain_tool",
     ] # type: ignore[assignment]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:

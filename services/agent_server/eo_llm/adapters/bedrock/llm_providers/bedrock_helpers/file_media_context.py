@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media import (
+from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media import (
     BedrockFileMedia,
     BedrockFileMediaCache,
 )

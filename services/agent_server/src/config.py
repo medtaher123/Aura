@@ -37,6 +37,23 @@ class AgentServerConfig(BaseSettings):
             "Agent appends /mcp automatically; use http://mcp-server:8000 in Docker."
         ),
     )
+    node_mcp_url: str = Field(
+        default="http://localhost",
+        description=(
+            "Base URL of the Node MCP runner host (no port). "
+            "YAML entries with runner: node append their port "
+            "(e.g. http://localhost + :8101). In Docker use http://node-mcp."
+        ),
+    )
+    external_mcp_config_file: str = Field(
+        default="config/external_mcp_servers.yaml",
+        description=(
+            "Path to the YAML file listing *external* MCP servers "
+            "(reconciled on startup). Metaplanet MCP is first-party and comes "
+            "from mcp_server_url / MCP_SERVER_URL, not this file. Runtime "
+            "enable/disable is stored in the database and preserved across reconciles."
+        ),
+    )
 
     # AWS Bedrock settings
     bedrock_region: str = Field(

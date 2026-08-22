@@ -11,7 +11,7 @@ from eo_llm.adapters.bedrock.chat_history_context import (
     reset_chat_history,
     set_chat_history,
 )
-from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media_context import (
+from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media_context import (
     reset_file_catalog,
     set_file_catalog,
 )

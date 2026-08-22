@@ -19,14 +19,21 @@ from .message_attachments import (
     MessageAttachment,
     parse_attachments,
 )
+from .agent_profile import AgentProfile, AgentToolBinding
 from .conversation import Conversation
 from .file import File
+from .mcp_server import McpServer
+from .tool_definition import ToolDefinition
 from .user import User
 
 __all__ = [
     "User",
     "Conversation",
     "File",
+    "McpServer",
+    "ToolDefinition",
+    "AgentProfile",
+    "AgentToolBinding",
     "Message",
     "MessageKind",
     "MessageRole",

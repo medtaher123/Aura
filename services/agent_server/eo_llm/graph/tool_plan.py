@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
-from eo_llm.adapters.mcp_client import MCPClient
+from src.tools.platform.gateway import get_tool_gateway
 from src.core.event_emitter import DataAgentStepEvent, emit_event
 from eo_llm.stream.decision_reasoning import emit_decision_reasoning
 from eo_llm.graph.backoff import backoff_strategy_for
@@ -191,7 +191,7 @@ class ToolIntrospector(metaclass=SingletonMeta):
         }
 
         try:
-            fetched = await MCPClient().get_tool_metadata(tool_name)
+            fetched = await get_tool_gateway().get_metadata(tool_name)
             if fetched and fetched.get("all_params"):
                 meta = {
                     "all_params": list(fetched.get("all_params") or []),
@@ -617,7 +617,7 @@ class ToolExecutor(metaclass=SingletonMeta):
         for attempt in range(1, max_attempts + 1):
             attempts = attempt
             t0 = time.perf_counter()
-            last_result = await MCPClient().call_mcp_tool(step.tool_name, args)
+            last_result = await get_tool_gateway().invoke(step.tool_name, args)
             latency_ms += int((time.perf_counter() - t0) * 1000)
             if not last_result.error:
                 execution = ToolStepExecution(

@@ -1,4 +1,8 @@
-"""Simple MCP client adapter for graph domain nodes (MCP SDK v2 Streamable HTTP)."""
+"""Simple MCP client adapter for graph domain nodes (MCP SDK v2 Streamable HTTP).
+
+Deprecated: prefer :class:`src.tools.platform.gateway.ToolGateway` for new code.
+This class delegates to the unified tool gateway when available.
+"""
 
 from __future__ import annotations
 
@@ -31,7 +35,6 @@ class MCPClient(metaclass=SingletonMeta):
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
-        # MCP 1.x yields (read, write, get_session_id); MCP 2.x yields (read, write).
         async with streamable_http_client(self.mcp_http_url) as streams:
             read, write = streams[0], streams[1]
             async with ClientSession(read, write) as session:
@@ -52,7 +55,6 @@ class MCPClient(metaclass=SingletonMeta):
         result = await self._list_tools_async()
         tools = getattr(result, "tools", None) or []
         out: dict[str, dict[str, Any]] = {}
-
         for tool in tools:
             name = getattr(tool, "name", None)
             if not name:
@@ -60,27 +62,14 @@ class MCPClient(metaclass=SingletonMeta):
             out[name] = tool_metadata_from_mcp_tool(tool)
         return out
 
-    async def get_tool_metadata(self, tool_name: str) -> dict[str, Any]:
-        if self._tool_metadata_cache is None:
-            try:
-                self._tool_metadata_cache = await self._build_tool_metadata_cache()
-            except Exception:
-                self._tool_metadata_cache = {}
-
-        return self._tool_metadata_cache.get(
-            tool_name, {"all_params": [], "required_params": [], "docstring": ""}
-        )
-
     def reset_tool_metadata_cache(self) -> None:
         self._tool_metadata_cache = None
 
     @staticmethod
     def _parse_result(tool_name: str, result: Any) -> ToolResponse:
-        """Parse MCP transport payload into a typed ToolResponse."""
         parsed = extract_tool_payload(tool_name, result)
         if not isinstance(parsed, dict):
             return ToolResponse(tool_name=tool_name, message=str(parsed))
-
         parsed.setdefault("tool_name", tool_name)
         parsed.setdefault("message", "")
         try:
@@ -101,10 +90,36 @@ class MCPClient(metaclass=SingletonMeta):
                 error=bool(parsed.get("error", False)),
             )
 
+    async def get_tool_metadata(self, tool_name: str) -> dict[str, Any]:
+        try:
+            from src.tools.platform.gateway import get_tool_gateway
+
+            meta = await get_tool_gateway().get_metadata(tool_name)
+            if meta.get("all_params") or meta.get("docstring"):
+                return meta
+        except Exception:
+            pass
+
+        if self._tool_metadata_cache is None:
+            try:
+                self._tool_metadata_cache = await self._build_tool_metadata_cache()
+            except Exception:
+                self._tool_metadata_cache = {}
+
+        return self._tool_metadata_cache.get(
+            tool_name, {"all_params": [], "required_params": [], "docstring": ""}
+        )
+
     async def call_mcp_tool(
         self, tool_name: str, arguments: dict[str, Any]
     ) -> ToolResponse:
-        """Call an MCP tool and return a typed ToolResponse."""
+        """Call a tool and return a typed ToolResponse."""
+        try:
+            from src.tools.platform.gateway import get_tool_gateway
+
+            return await get_tool_gateway().invoke(tool_name, arguments)
+        except Exception:
+            pass
         try:
             raw = await self._call_tool_async(tool_name, arguments)
             return self._parse_result(tool_name, raw)

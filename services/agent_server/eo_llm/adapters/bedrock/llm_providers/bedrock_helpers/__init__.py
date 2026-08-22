@@ -1,6 +1,6 @@
 """Bedrock-specific file media helpers for Converse API blocks."""
 
-from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media import (
+from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media import (
     BedrockDocumentName,
     BedrockFileFormat,
     BedrockFileMedia,
@@ -11,7 +11,7 @@ from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media import (
     MAX_DOCUMENTS_PER_MESSAGE,
     build_bedrock_file_media,
 )
-from eo_llm.adapters.bedrock.llm_providers.bedrock.file_media_context import (
+from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media_context import (
     ensure_bedrock_media_for_messages,
     get_bedrock_file_media,
     reset_file_catalog,
