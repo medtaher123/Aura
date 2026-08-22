@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from src.tools.platform.provider import ToolDescriptor, ToolProvider
+from src.tools.providers.base import ToolDescriptor, ToolProvider
 
 
 class ToolRegistry:

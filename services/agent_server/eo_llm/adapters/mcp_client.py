@@ -1,6 +1,6 @@
 """Simple MCP client adapter for graph domain nodes (MCP SDK v2 Streamable HTTP).
 
-Deprecated: prefer :class:`src.tools.platform.gateway.ToolGateway` for new code.
+Deprecated: prefer :class:`src.tools.runtime.gateway.ToolGateway` for new code.
 This class delegates to the unified tool gateway when available.
 """
 
@@ -92,7 +92,7 @@ class MCPClient(metaclass=SingletonMeta):
 
     async def get_tool_metadata(self, tool_name: str) -> dict[str, Any]:
         try:
-            from src.tools.platform.gateway import get_tool_gateway
+            from src.tools.runtime.gateway import get_tool_gateway
 
             meta = await get_tool_gateway().get_metadata(tool_name)
             if meta.get("all_params") or meta.get("docstring"):
@@ -115,7 +115,7 @@ class MCPClient(metaclass=SingletonMeta):
     ) -> ToolResponse:
         """Call a tool and return a typed ToolResponse."""
         try:
-            from src.tools.platform.gateway import get_tool_gateway
+            from src.tools.runtime.gateway import get_tool_gateway
 
             return await get_tool_gateway().invoke(tool_name, arguments)
         except Exception:

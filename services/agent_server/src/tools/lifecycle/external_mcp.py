@@ -25,7 +25,7 @@ from src.config import AgentServerConfig, get_config
 from src.core.logger import get_logger
 from src.db.models.mcp_server import McpServer
 from src.db.repositories.tool_platform import McpServerRepository
-from src.tools.platform.metaplanet_provider import (
+from src.tools.providers.metaplanet import (
     METAPLANET_MCP_DISPLAY_NAME,
     METAPLANET_MCP_SLUG,
     is_metaplanet_server,

@@ -16,7 +16,7 @@ from eo_llm.graph.tool_plan import (
     ToolPlan,
     ToolPlanner,
 )
-from src.tools.platform.agent_filter import (
+from src.tools.filtering.agent_filter import (
     get_cached_agent_profile,
     resolve_allowed_tools,
 )
@@ -123,7 +123,7 @@ class ToolPlanDomainNode(DomainNode):
             out.append(name)
         allowed = resolve_allowed_tools(out, get_cached_agent_profile())
         try:
-            from src.tools.platform.gateway import get_tool_gateway
+            from src.tools.runtime.gateway import get_tool_gateway
 
             registry = get_tool_gateway().registry
             available = {d.name for d in registry.list_descriptors()}

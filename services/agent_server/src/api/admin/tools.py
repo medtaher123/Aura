@@ -22,18 +22,18 @@ from src.db.repositories.tool_platform import (
     McpServerRepository,
     ToolDefinitionRepository,
 )
-from src.tools.platform.bootstrap import get_tool_platform
-from src.tools.platform.factory import build_mcp_provider
-from src.tools.platform.gateway import get_tool_gateway
-from src.tools.platform.metaplanet_provider import MetaplanetMcpProvider
-from src.tools.platform.schemas import (
+from src.tools.lifecycle.bootstrap import get_tool_platform
+from src.tools.providers.factory import build_mcp_provider
+from src.tools.runtime.gateway import get_tool_gateway
+from src.tools.providers.metaplanet import MetaplanetMcpProvider
+from src.api.admin.tool_schemas import (
     AdminDashboardResponse,
     McpServerEnabledUpdate,
     McpServerRead,
     ToolDefinitionDetail,
     ToolDefinitionRead,
 )
-from src.tools.platform.sync import ToolCatalogSyncService
+from src.tools.lifecycle.sync import ToolCatalogSyncService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

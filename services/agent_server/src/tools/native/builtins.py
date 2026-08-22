@@ -1,20 +1,12 @@
-"""
-Tools module for Agent Server
-Provides access to all available tools via MCP server
-"""
+"""In-process native tools."""
 
 from datetime import date, datetime
-from langchain.tools import tool
 
-from .mcp_remote_tools import MCPRemoteTool
-
-from ..core.logger import get_logger
-from ..tools.contracts import ToolResponse
-
-logger = get_logger("tools")
+from src.tools.contracts import ToolResponse
+from src.tools.native.decorator import native_tool
 
 
-@tool
+@native_tool
 def get_time() -> ToolResponse:
     """
     Get the current time in a human-readable string format.
@@ -28,7 +20,7 @@ def get_time() -> ToolResponse:
     )
 
 
-@tool
+@native_tool
 def get_date() -> ToolResponse:
     """
     Get the current date in a human-readable string format.
@@ -42,7 +34,7 @@ def get_date() -> ToolResponse:
     )
 
 
-@tool
+@native_tool
 def calculator(expression: str) -> ToolResponse:
     """
     Evaluate a simple arithmetic expression (e.g., '23 * 7').
@@ -72,31 +64,3 @@ def calculator(expression: str) -> ToolResponse:
             data={"expression": expression},
             error=True,
         )
-
-
-def get_all_tools() -> list[MCPRemoteTool]:
-    """
-    Return the list of all tools available to the agent.
-    """
-    try:
-        from .mcp_remote_tools import get_mcp_tools
-
-        tools = get_mcp_tools()
-        logger.info(f"Successfully loaded {len(tools)} tools from MCP server")
-        logger.debug(f"Available tools: {[tool.name for tool in tools]}")
-    except Exception as e:
-        raise RuntimeError(
-            "Failed to load tools from MCP server. "
-            "Ensure the MCP server is running and MCP_SERVER_URL is correct. "
-            f"Details: {e}"
-        )
-
-    if not tools:
-        raise RuntimeError(
-            "MCP server returned zero tools. Ensure tools are registered via "
-            "services/mcp_server/modules (MCP SDK v2 Streamable HTTP at /mcp), "
-            "and that MCP_SERVER_URL points at the MCP base URL "
-            "(e.g. http://mcp-server:8000) and the server is healthy (/health)."
-        )
-
-    return tools

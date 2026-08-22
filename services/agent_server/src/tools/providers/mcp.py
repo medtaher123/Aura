@@ -15,7 +15,7 @@ from eo_llm.adapters.mcp_transport import (
     tool_metadata_from_mcp_tool,
 )
 from src.tools.contracts import ToolArtifacts, ToolResponse
-from src.tools.platform.provider import ProviderHealth, ToolDescriptor, ToolProvider
+from src.tools.providers.base import ProviderHealth, ToolDescriptor, ToolProvider
 
 # First ``npx -y …`` install can be slow; keep bounded so sync/health cannot hang forever.
 _STDIO_OP_TIMEOUT_SECONDS = 60.0

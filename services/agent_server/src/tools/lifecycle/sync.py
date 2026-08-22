@@ -12,12 +12,12 @@ from src.db.repositories.tool_platform import (
     McpServerRepository,
     ToolDefinitionRepository,
 )
-from src.tools.platform.factory import build_mcp_provider
-from src.tools.platform.native_provider import build_default_native_provider
-from src.tools.platform.registry import ToolRegistry
+from src.tools.providers.factory import build_mcp_provider
+from src.tools.providers.native import build_default_native_provider
+from src.tools.runtime.registry import ToolRegistry
 
 if TYPE_CHECKING:
-    from src.tools.platform.bootstrap import ToolPlatformState
+    from src.tools.lifecycle.bootstrap import ToolPlatformState
 
 logger = get_logger("tool_platform")
 
@@ -140,7 +140,7 @@ async def build_providers_from_db(
     registry: ToolRegistry,
 ) -> ToolPlatformState:
     """Load all providers into the registry from DB configuration."""
-    from src.tools.platform.bootstrap import ToolPlatformState
+    from src.tools.lifecycle.bootstrap import ToolPlatformState
 
     servers_repo = McpServerRepository(db)
     tools_repo = ToolDefinitionRepository(db)

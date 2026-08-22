@@ -20,7 +20,7 @@ from .config import get_config
 from .core.logger import get_logger, configure_log_level
 from .api import health_router, conversations_router, websocket_router, files_router
 from .api.admin import admin_router
-from src.tools.platform.bootstrap import get_tool_platform
+from src.tools.lifecycle.bootstrap import get_tool_platform
 
 logger = get_logger()
 

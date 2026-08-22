@@ -10,12 +10,12 @@ from src.core.logger import get_logger
 from src.core.singleton_meta import SingletonMeta
 from src.db.database import AsyncSessionLocal
 from src.db.repositories.tool_platform import McpServerRepository
-from src.tools.platform.gateway import ToolGateway, get_tool_gateway
-from src.tools.platform.mcp_provider import McpToolProvider
-from src.tools.platform.native_provider import NativeToolProvider
-from src.tools.platform.registry import ToolRegistry
-from src.tools.platform.external_mcp import ExternalMcpReconciler
-from src.tools.platform.sync import ToolCatalogSyncService, build_providers_from_db
+from src.tools.runtime.gateway import ToolGateway, get_tool_gateway
+from src.tools.providers.mcp import McpToolProvider
+from src.tools.providers.native import NativeToolProvider
+from src.tools.runtime.registry import ToolRegistry
+from src.tools.lifecycle.external_mcp import ExternalMcpReconciler
+from src.tools.lifecycle.sync import ToolCatalogSyncService, build_providers_from_db
 
 logger = get_logger("tool_platform")
 

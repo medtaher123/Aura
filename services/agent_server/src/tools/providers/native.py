@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from src.tools.contracts import ToolResponse
-from src.tools.platform.provider import ProviderHealth, ToolDescriptor, ToolProvider
+from src.tools.providers.base import ProviderHealth, ToolDescriptor, ToolProvider
 
 NativeHandler = Callable[..., ToolResponse | Awaitable[ToolResponse]]
 
@@ -116,24 +116,20 @@ class NativeToolProvider(ToolProvider):
 def build_default_native_provider(
     db_tools: list[tuple[UUID | None, str, str, dict[str, Any]]] | None = None,
 ) -> NativeToolProvider:
-    """Register built-in native tools from ``src.tools.tools``."""
-    import src.tools.tools as native_tools_module
+    """Register every ``@native_tool`` found under ``src.tools.native``."""
+    from src.tools.native.discover import discover_native_tools
 
     provider = NativeToolProvider()
-    db_by_name = {name: (tid, desc, schema) for tid, name, desc, schema in (db_tools or [])}
+    db_by_name = {
+        name: (tid, desc, schema) for tid, name, desc, schema in (db_tools or [])
+    }
 
-    for attr in ("get_time", "get_date", "calculator"):
-        handler = getattr(native_tools_module, attr, None)
-        if handler is None:
-            continue
-        fn = getattr(handler, "func", handler)
-        if not callable(fn):
-            continue
-        db_entry = db_by_name.get(attr)
+    for name, handler, description in discover_native_tools():
+        db_entry = db_by_name.get(name)
         provider.register(
-            attr,
-            fn,
-            description=db_entry[1] if db_entry else (inspect.getdoc(fn) or ""),
+            name,
+            handler,
+            description=db_entry[1] if db_entry else description,
             input_schema=db_entry[2] if db_entry else None,
             tool_id=db_entry[0] if db_entry else None,
         )

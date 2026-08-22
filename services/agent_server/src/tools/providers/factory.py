@@ -5,8 +5,8 @@ from __future__ import annotations
 from uuid import UUID
 
 from src.db.models.mcp_server import McpServer
-from src.tools.platform.mcp_provider import McpToolProvider
-from src.tools.platform.metaplanet_provider import (
+from src.tools.providers.mcp import McpToolProvider
+from src.tools.providers.metaplanet import (
     MetaplanetMcpProvider,
     is_metaplanet_server,
 )

@@ -6,8 +6,8 @@ from typing import Any
 
 from src.core.singleton_meta import SingletonMeta
 from src.tools.contracts import ToolResponse
-from src.tools.platform.provider import ProviderHealth, ToolDescriptor
-from src.tools.platform.registry import ToolRegistry
+from src.tools.providers.base import ProviderHealth, ToolDescriptor
+from src.tools.runtime.registry import ToolRegistry
 
 
 class ToolGateway(metaclass=SingletonMeta):

@@ -1,4 +1,4 @@
-"""Pydantic schemas for tool platform admin API."""
+"""Pydantic schemas for admin MCP / tools API."""
 
 from __future__ import annotations
 

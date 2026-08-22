@@ -13,8 +13,8 @@ from uuid import UUID
 
 import httpx
 
-from src.tools.platform.mcp_provider import McpToolProvider
-from src.tools.platform.provider import ProviderHealth
+from src.tools.providers.mcp import McpToolProvider
+from src.tools.providers.base import ProviderHealth
 
 METAPLANET_MCP_SLUG = "metaplanet"
 METAPLANET_MCP_DISPLAY_NAME = "Metaplanet MCP"
