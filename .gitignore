@@ -29,6 +29,3 @@ src/maps/RiskMask_*.html
 test.ipynb
 *.html
 **/fixtures/*
-
-docker-compose-with-sso.sh
-docker-compose.yml
