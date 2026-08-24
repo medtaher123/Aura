@@ -15,8 +15,11 @@ from src.tools.native.decorator import is_native_tool, native_tool_name
 _SKIP_MODULES = frozenset(
     {
         "src.tools.native",
+        "src.tools.native.base",
         "src.tools.native.decorator",
         "src.tools.native.discover",
+        "src.tools.native.user_inputs",
+        "src.tools.native.user_inputs.base",
     }
 )
 

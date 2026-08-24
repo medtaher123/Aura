@@ -1,9 +1,10 @@
-"""In-process native tools (auto-discovered via ``@native_tool``).
+"""In-process native tools (auto-discovered via ``NativeTool`` / ``@native_tool``).
 
-Add a module under this package, decorate callables with ``@native_tool``,
-and ``build_default_native_provider`` will pick them up automatically.
+Subclass ``NativeTool`` or decorate a function with ``@native_tool`` under
+this package; ``build_default_native_provider`` picks them up on startup.
 """
 
+from src.tools.native.base import NativeTool
 from src.tools.native.decorator import native_tool
 
-__all__ = ["native_tool"]
+__all__ = ["NativeTool", "native_tool"]

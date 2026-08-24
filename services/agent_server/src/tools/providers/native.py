@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from src.tools.contracts import ToolResponse
+from src.tools.native.base import NATIVE_INPUT_SCHEMA_ATTR
 from src.tools.providers.base import ProviderHealth, ToolDescriptor, ToolProvider
 
 NativeHandler = Callable[..., ToolResponse | Awaitable[ToolResponse]]
@@ -126,11 +127,12 @@ def build_default_native_provider(
 
     for name, handler, description in discover_native_tools():
         db_entry = db_by_name.get(name)
+        schema = getattr(handler, NATIVE_INPUT_SCHEMA_ATTR, None)
         provider.register(
             name,
             handler,
             description=db_entry[1] if db_entry else description,
-            input_schema=db_entry[2] if db_entry else None,
+            input_schema=db_entry[2] if db_entry else schema,
             tool_id=db_entry[0] if db_entry else None,
         )
     return provider

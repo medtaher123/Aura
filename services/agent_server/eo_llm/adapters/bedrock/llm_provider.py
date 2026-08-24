@@ -5,11 +5,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator, Type, TypeVar
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Type, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.db.models.message_attachments import FileAttachment
+from src.tools.contracts import ToolResponse
+from src.tools.providers.base import ToolDescriptor
 
 if TYPE_CHECKING:
     from src.db.models.message import Message
@@ -25,6 +27,37 @@ class FileMediaMode(str, Enum):
 
     CAPTION = "caption"
     MEDIA = "media"
+
+
+class ConverseToolCall(BaseModel):
+    """One tool invocation requested by the model."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentToolCallRecord(BaseModel):
+    """One executed tool call, used to rebuild provider converse history."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_use_id: str = ""
+    turn_index: int = Field(default=0, ge=0)
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["done", "error"] = "done"
+    latency_ms: int = Field(default=0, ge=0)
+    result: ToolResponse | None = None
+    error_message: str | None = None
+
+
+class ConverseResponse(BaseModel):
+    """Normalized result of one converse turn."""
+
+    stop_reason: Literal["end_turn", "tool_use", "other"] = "other"
+    text: str = ""
+    tool_calls: list[ConverseToolCall] = Field(default_factory=list)
 
 
 class LLMProvider(ABC):
@@ -52,11 +85,7 @@ class LLMProvider(ABC):
         *,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
-        """Turn ORM ``Message`` history into provider messages.
-
-        Default shape is Bedrock Converse ``[{role, content: [{text}]}]``.
-        Messages with no content blocks are skipped.
-        """
+        """Turn ORM ``Message`` history into provider messages."""
         formatted: list[dict[str, Any]] = []
         for message in messages:
             blocks = self._content_blocks_for_message(
@@ -152,6 +181,21 @@ class LLMProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def call_converse(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        chat_history: Sequence["Message"] | None = None,
+        tools: list[ToolDescriptor] | None = None,
+        tool_call_records: Sequence[AgentToolCallRecord] = (),
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+    ) -> ConverseResponse:
+        """One multi-modal / tool-use converse turn."""
+
+    @abstractmethod
     async def call_standard_with_document(
         self,
         *,
@@ -163,3 +207,91 @@ class LLMProvider(ABC):
         chat_history: Sequence["Message"] | None = None,
     ) -> dict[str, Any]:
         pass
+
+    async def format_converse_messages(
+        self,
+        *,
+        chat_history: Sequence["Message"] | None = None,
+        tool_call_records: Sequence[AgentToolCallRecord] = (),
+        query: str | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+    ) -> list[dict[str, Any]]:
+        """Chat history plus prior tool rounds in provider-native message shape."""
+        messages = self.format_messages(chat_history or (), file_media_mode=file_media_mode)
+        if not messages and query:
+            messages = [{"role": "user", "content": [{"text": query}]}]
+        messages.extend(self.format_tool_call_records(tool_call_records))
+        return messages
+
+    def format_tool_call_records(
+        self,
+        records: Sequence[AgentToolCallRecord],
+    ) -> list[dict[str, Any]]:
+        """Turn executed tool records into assistant/user tool-use messages."""
+        if not records:
+            return []
+
+        messages: list[dict[str, Any]] = []
+        sorted_records = sorted(records, key=lambda record: record.turn_index)
+        turn_indices = {record.turn_index for record in sorted_records}
+
+        for turn_index in sorted(turn_indices):
+            turn_records = [
+                record
+                for record in sorted_records
+                if record.turn_index == turn_index and record.tool_use_id
+            ]
+            if not turn_records:
+                continue
+
+            tool_use_blocks: list[dict[str, Any]] = []
+            tool_result_blocks: list[dict[str, Any]] = []
+            for record in turn_records:
+                tool_use_blocks.append(
+                    {   
+                        "toolUse": {
+                            "toolUseId": record.tool_use_id,
+                            "name": record.tool_name,
+                            "input": record.arguments,
+                        }
+                    }
+                )
+                if record.result is not None:
+                    result_payload = record.result.model_dump(mode="python")
+                    result_status: Literal["success", "error"] = (
+                        "error" if record.status == "error" else "success"
+                    )
+                else:
+                    result_payload = {
+                        "message": record.error_message or "",
+                        "error": True,
+                    }
+                    result_status = "error"
+                tool_result_blocks.append(
+                    self.tool_result_content_block(
+                        tool_use_id=record.tool_use_id,
+                        result=result_payload,
+                        status=result_status,
+                    )
+                )
+
+            messages.append({"role": "assistant", "content": tool_use_blocks})
+            messages.append({"role": "user", "content": tool_result_blocks})
+
+        return messages
+
+    def tool_result_content_block(
+        self,
+        *,
+        tool_use_id: str,
+        result: dict[str, Any],
+        status: Literal["success", "error"] = "success",
+    ) -> dict[str, Any]:
+        """One tool-result content block (Bedrock Converse shape)."""
+        return {
+            "toolResult": {
+                "toolUseId": tool_use_id,
+                "content": [{"json": result}],
+                "status": status,
+            }
+        }

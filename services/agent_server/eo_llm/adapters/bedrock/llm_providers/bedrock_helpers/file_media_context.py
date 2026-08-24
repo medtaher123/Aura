@@ -53,7 +53,7 @@ def get_bedrock_file_media(file_id: UUID) -> BedrockFileMedia | None:
         return None
     return cache.get(file_id)
 
-
+#TODO: is this needed? MTBH
 async def ensure_bedrock_media_for_messages(
     messages: Sequence["Message"],
 ) -> None:

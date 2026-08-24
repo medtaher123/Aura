@@ -10,10 +10,16 @@ from typing import Any, AsyncIterator, Type, TypeVar
 
 from pydantic import BaseModel
 
-from eo_llm.adapters.bedrock.llm_provider import LLMProvider, FileMediaMode
+from eo_llm.adapters.bedrock.llm_provider import (
+    AgentToolCallRecord,
+    ConverseResponse,
+    FileMediaMode,
+    LLMProvider,
+)
 from src.config import get_config
 from src.core.singleton_meta import SingletonMeta
 from src.db.models.message import Message
+from src.tools.providers.base import ToolDescriptor
 
 
 class TaskType(Enum):
@@ -152,6 +158,33 @@ class LLMModelRouter(metaclass=SingletonMeta):
             file_media_mode=file_media_mode,
         ):
             yield chunk
+
+    async def call_converse(
+        self,
+        *,
+        system_prompt: str,
+        chat_history: Sequence[Message] | None = None,
+        tools: list[ToolDescriptor] | None = None,
+        tool_call_records: Sequence[AgentToolCallRecord] = (),
+        temperature: float = 0.1,
+        max_tokens: int = 4096,
+        task_type: TaskType = TaskType.REASONING,
+        model: LLMRoute | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.MEDIA,
+    ) -> ConverseResponse:
+        if model is None:
+            model = self.get_route(task_type)
+
+        return await model.provider.call_converse(
+            system_prompt=system_prompt,
+            tools=tools,
+            tool_call_records=tool_call_records,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            chat_history=chat_history,
+            model_id=model.model_id,
+            file_media_mode=file_media_mode,
+        )
 
     async def call_standard_with_document(
         self,

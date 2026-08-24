@@ -10,6 +10,7 @@ from eo_llm.graph.nodes.orchestrator_node import orchestrator_node
 from eo_llm.graph.nodes.location_gate_node import location_gate_node
 from eo_llm.graph.nodes.location_response_node import location_response_node
 from eo_llm.graph.nodes.router_node import router_node
+from eo_llm.graph.nodes.domains.agentic_test_node import agentic_test_node
 from eo_llm.graph.nodes.domains.flood_damage_node import flood_damage_node
 from eo_llm.graph.nodes.domains.fire_detection_node import fire_detection_node
 from eo_llm.graph.nodes.domains.disaster_detection_node import disaster_detection_node
@@ -37,6 +38,7 @@ def build_graph():
     graph.add_node("location_gate", location_gate_node)
     graph.add_node("location_response", location_response_node)
     graph.add_node("router", router_node)
+    graph.add_node("agentic_test", agentic_test_node)
     graph.add_node("flood_damage", flood_damage_node)
     graph.add_node("fire_detection", fire_detection_node)
     graph.add_node("disaster_detection", disaster_detection_node)
@@ -69,6 +71,7 @@ def build_graph():
         "router",
         choose_after_router,
         {
+            "agentic_test": "agentic_test",
             "flood_damage": "flood_damage",
             "fire_detection": "fire_detection",
             "disaster_detection": "disaster_detection",
@@ -84,6 +87,7 @@ def build_graph():
     # tools_info returns a formatted catalog and skips aggregation/LLM compose.
     _domain_pause_targets = {"aggregator": "aggregator", "end": END}
     for _domain in (
+        "agentic_test",
         "flood_damage",
         "fire_detection",
         "disaster_detection",

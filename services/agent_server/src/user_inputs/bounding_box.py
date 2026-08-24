@@ -13,7 +13,11 @@ from .types import InputKind
 
 
 class BoundingBoxRequest(UserInputRequest):
-    """Payload the server sends when requesting a map bounding box."""
+    """Payload the server sends when requesting a map bounding box.
+    The map_center is the initial center of the map, and the map_zoom is the initial zoom level.
+    The prompt is the prompt that will be displayed to the user.
+    This tool presents to the user an interactive map and asks them to draw a precise bounding box on the map.
+    """
 
     prompt: Optional[str] = Field(default=None, description="UI prompt")
     map_center: Optional[list[float]] = Field(

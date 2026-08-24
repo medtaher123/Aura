@@ -15,7 +15,15 @@ from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media_context im
     ensure_bedrock_media_for_messages,
     get_bedrock_file_media,
 )
-from eo_llm.adapters.bedrock.llm_provider import FileMediaMode, T
+from eo_llm.adapters.bedrock.llm_provider import (
+    AgentToolCallRecord,
+    ConverseResponse,
+    ConverseToolCall,
+    FileMediaMode,
+    LLMProvider,
+    T,
+)
+from src.tools.providers.base import ToolDescriptor
 from src.config import get_config
 from src.db.models.message_attachments import FileAttachment
 
@@ -123,17 +131,74 @@ class BedrockProvider(LLMProvider):
     def last_failure_reason(self) -> str:
         return self._last_failure_reason
 
-    async def _prepare_converse_messages(
+    async def format_converse_messages(
         self,
         *,
         chat_history: Sequence["Message"] | None = None,
+        tool_call_records: Sequence[AgentToolCallRecord] = (),
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
         messages = list(chat_history or ())
         if file_media_mode is FileMediaMode.MEDIA and messages:
             await ensure_bedrock_media_for_messages(messages)
-        return self.format_messages(messages, file_media_mode=file_media_mode)
+        formatted = self.format_messages(messages, file_media_mode=file_media_mode)
+        formatted.extend(self.format_tool_call_records(tool_call_records))
+        return formatted
 
+    @staticmethod
+    def _parse_converse_response(raw: dict[str, Any]) -> ConverseResponse:
+        stop_reason = str(raw.get("stopReason") or "").lower()
+        content = list((raw.get("output") or {}).get("message", {}).get("content") or [])
+        text_parts: list[str] = []
+        tool_calls: list[ConverseToolCall] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if "text" in block:
+                text = str(block.get("text") or "").strip()
+                if text:
+                    text_parts.append(text)
+            tool_use = block.get("toolUse")
+            if isinstance(tool_use, dict):
+                raw_input = tool_use.get("input") or {}
+                tool_calls.append(
+                    ConverseToolCall(
+                        id=str(tool_use.get("toolUseId") or ""),
+                        name=str(tool_use.get("name") or ""),
+                        arguments=raw_input if isinstance(raw_input, dict) else {},
+                    )
+                )
+        normalized_stop = (
+            "tool_use"
+            if stop_reason == "tool_use"
+            else "end_turn"
+            if stop_reason == "end_turn"
+            else "other"
+        )
+        return ConverseResponse(
+            stop_reason=normalized_stop,
+            text="\n".join(text_parts).strip(),
+            tool_calls=tool_calls,
+        )
+
+    @staticmethod
+    def _bedrock_tool_config(tools: list[ToolDescriptor]) -> dict[str, Any]:
+        return {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": tool.name,
+                        "description": tool.description or tool.name,
+                        "inputSchema": {
+                            "json": tool.input_schema
+                            or {"type": "object", "properties": {}},
+                        },
+                    }
+                }
+                for tool in tools
+            ],
+            "toolChoice": {"auto": {}},
+        }
 
     async def call_structured(
         self,
@@ -178,7 +243,7 @@ class BedrockProvider(LLMProvider):
                 response = await client.converse(
                     modelId=model_id,
                     system=[{"text": system_prompt}],
-                    messages=await self._prepare_converse_messages(
+                    messages=await self.format_converse_messages(
                         chat_history=chat_history,
                         file_media_mode=file_media_mode,
                     ),
@@ -220,7 +285,7 @@ class BedrockProvider(LLMProvider):
                 response = await client.converse_stream(
                     modelId=model_id,
                     system=[{"text": system_prompt}],
-                    messages=await self._prepare_converse_messages(
+                    messages=await self.format_converse_messages(
                         chat_history=chat_history,
                         file_media_mode=file_media_mode,
                     ),
@@ -242,6 +307,45 @@ class BedrockProvider(LLMProvider):
             self._last_failure_reason = f"{type(e).__name__}:{e}"
             logger.warning("Bedrock streaming call failed: %s", e)
             raise RuntimeError(f"Streaming failed: {self._last_failure_reason}") from e
+
+    async def call_converse(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        chat_history: Sequence["Message"] | None = None,
+        tools: list[ToolDescriptor] | None = None,
+        tool_call_records: Sequence[AgentToolCallRecord] = (),
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+    ) -> ConverseResponse:
+        if not model_id:
+            self._last_failure_reason = "model_not_ready"
+            raise RuntimeError("Bedrock model_id is not configured")
+
+        converse_messages = await self.format_converse_messages(
+            chat_history=chat_history,
+            tool_call_records=tool_call_records,
+            file_media_mode=file_media_mode,
+        )
+
+        self._last_failure_reason = ""
+        request: dict[str, Any] = {
+            "modelId": model_id,
+            "system": [{"text": system_prompt}],
+            "messages": converse_messages,
+            "inferenceConfig": {
+                "temperature": float(temperature),
+                "maxTokens": int(max_tokens),
+            },
+        }
+        if tools:
+            request["toolConfig"] = self._bedrock_tool_config(tools)
+
+        async with self._session.client("bedrock-runtime") as client:
+            raw = await client.converse(**request)
+        return self._parse_converse_response(raw)
 
     async def call_standard_with_document(
         self,

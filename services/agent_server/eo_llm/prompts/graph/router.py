@@ -8,6 +8,7 @@ from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 from eo_llm.prompts.shared.user_experience import USER_EXPERIENCE_RULES
 
 ROUTER_DOMAINS = (
+    "agentic_test",
     "flood_damage",
     "fire_detection",
     "disaster_detection",
@@ -26,6 +27,7 @@ _ROUTER_RULES: tuple[str, ...] = (
     f"Allowed domains: {', '.join(ROUTER_DOMAINS)}.",
     "Prefer specific domain(s) when the intent is clear.",
     "Use websearch_only only when no EO domain fits.",
+    "Use agentic_test only for internal development when explicitly testing the agentic tool loop.",
     "Use tools_info when the user asks what tools/capabilities are available, how a tool works, what data sources are used, or what questions they can ask.",
     "Do NOT use tools_info for greetings, thanks, or casual chat.",
     "Use document_qa when the user asks about uploaded/attached document contents.",

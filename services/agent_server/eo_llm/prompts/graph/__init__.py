@@ -3,6 +3,7 @@
 from .arg_resolver import get_arg_resolver_prompt
 from .browser import BROWSER_SYSTEM_PROMPT, get_browser_system_prompt, get_browser_user_prompt
 from .document_qa import DOCUMENT_QA_SYSTEM
+from .domain_agent import get_domain_agent_prompt
 from .finalizer import get_finalizer_prompt
 from .location import get_document_location_prompt, get_query_location_prompt
 from .router import get_router_prompt
@@ -15,6 +16,7 @@ __all__ = [
     "get_browser_system_prompt",
     "get_browser_user_prompt",
     "get_document_location_prompt",
+    "get_domain_agent_prompt",
     "get_finalizer_prompt",
     "get_query_location_prompt",
     "get_router_prompt",

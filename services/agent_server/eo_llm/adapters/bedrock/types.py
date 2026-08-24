@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Literal
 
 RouteDomain = Literal[
+    "agentic_test",
     "flood_damage",
     "fire_detection",
     "disaster_detection",

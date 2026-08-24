@@ -6,6 +6,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from eo_llm.graph.domain_agent import DomainAgentRunResult, DomainToolAgent
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.nodes.helpers import LocationContext, wrap_domain_result
 from eo_llm.graph.state import GraphState, GraphStateModel, dump_state
@@ -16,6 +17,7 @@ from eo_llm.graph.tool_plan import (
     ToolPlan,
     ToolPlanner,
 )
+from eo_llm.prompts import get_domain_agent_prompt
 from src.tools.filtering.agent_filter import (
     get_cached_agent_profile,
     resolve_allowed_tools,
@@ -68,34 +70,19 @@ class DomainNode(GraphNode):
     async def execute(self, s: GraphStateModel) -> GraphState: ...
 
 
-class ToolPlanDomainNode(DomainNode):
-    """Domain node that plans and executes MCP tools via Bedrock LLM.
-
-    ``shared_tools`` are available to every domain; ``tools`` are domain-specific.
-    The planner/executor always see ``shared_tools + tools`` (deduped).
-    Entries in ``tools`` may be plain tool names or ``DomainTool`` specs that
-    declare ``required_user_inputs``.
-    """
+class DomainToolsNode(DomainNode):
+    """Domain node with a shared tool catalog (used by plan-based and agentic nodes)."""
 
     shared_tools: ClassVar[list[ToolName]] = ["web_search_tool"]
     tools: ClassVar[list[ToolName | DomainTool]]
     _tools_registry: ClassVar[dict[str, list[str]]] = {}
 
-    def __init__(
-        self,
-        planner: ToolPlanner | None = None,
-    ) -> None:
-        super().__init__()
-        planner = ToolPlanner(
-            domain=self.domain_name,
-            allowed_tools=self.resolved_tools(),
-        )
-        self._executor = ToolExecutor()
-
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if cls.domain_name and getattr(cls, "tools", None) is not None:
-            ToolPlanDomainNode._tools_registry[cls.domain_name] = cls.resolved_tools()
+        domain_name = getattr(cls, "domain_name", None)
+        tools = getattr(cls, "tools", None)
+        if domain_name and tools is not None:
+            DomainToolsNode._tools_registry[domain_name] = cls.resolved_tools()
 
     @classmethod
     def tool_specs(cls) -> dict[str, DomainTool]:
@@ -108,11 +95,7 @@ class ToolPlanDomainNode(DomainNode):
 
     @classmethod
     def resolved_tools(cls) -> list[str]:
-        """Shared tools first, then domain tools (order preserved, duplicates dropped).
-
-        Tools whose provider is not currently registered (e.g. disabled MCP server)
-        are excluded so the planner cannot select them.
-        """
+        """Shared tools first, then domain tools (order preserved, duplicates dropped)."""
         seen: set[str] = set()
         out: list[str] = []
         for entry in [*cls.shared_tools, *cls.tools]:
@@ -170,6 +153,138 @@ class ToolPlanDomainNode(DomainNode):
             )
         raise ValueError(f"Unsupported input kind: {kind!r}")
 
+    def build_shared_runtime_args(
+        self,
+        s: GraphStateModel,
+        _ctx: LocationContext,
+    ) -> dict[str, dict[str, Any]]:
+        return {}
+
+
+class AgenticDomainNode(DomainToolsNode):
+    """Domain node that iterates with the LLM until tools produce a final answer.
+
+    Unlike :class:`ToolPlanDomainNode`, this does **not** ask the LLM once for a
+    full execution plan. The model calls tools one round at a time (Bedrock
+    Converse tool-use loop) until it returns a final message or a user-input pause.
+    """
+
+    max_tool_rounds: ClassVar[int] = 8
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._agent = DomainToolAgent(max_rounds=self.max_tool_rounds)
+
+    def build_system_prompt(self, s: GraphStateModel, ctx: LocationContext) -> str:
+        return get_domain_agent_prompt(
+            domain=self.domain_name,
+            allowed_tools=self.resolved_tools(),
+        )
+
+    @abstractmethod
+    def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]: ...
+
+    async def execute(self, s: GraphStateModel) -> GraphState:
+        ctx = LocationContext.from_state(s)
+        runtime_args = {
+            **self.build_shared_runtime_args(s, ctx),
+            **self.build_runtime_args(ctx),
+        }
+        try:
+            run = await self._agent.run(
+                domain=self.domain_name,
+                allowed_tools=self.resolved_tools(),
+                system_prompt=self.build_system_prompt(s, ctx),
+                runtime_args_by_tool=runtime_args,
+                execution_context={
+                    "query": s.query,
+                    "domain": self.domain_name,
+                    "resolved_location": ctx.resolved,
+                },
+            )
+        except Exception as exc:
+            return wrap_domain_result(
+                self.domain_name,
+                self._error_result(ctx, exc),
+            )
+
+        if run.paused and run.needs_input:
+            return self._pause_for_user_inputs(s, ctx, run)
+        return wrap_domain_result(
+            self.domain_name,
+            self._success_result(ctx, run),
+        )
+
+    def _pause_for_user_inputs(
+        self,
+        s: GraphStateModel,
+        ctx: LocationContext,
+        run: DomainAgentRunResult,
+    ) -> GraphState:
+        needs_input = dict(run.needs_input or {})
+        s.needs_input = needs_input
+        s.stopped_for_user_input = True
+        s.final_answer = run.message or "Additional input required."
+        s.answer_source = "domain_tools"
+        out = dump_state(s)
+        out["domain_results"] = {
+            self.domain_name: {
+                "status": "paused",
+                "resolved_location": ctx.resolved,
+                "message": run.message,
+                "tool_calls": [
+                    call.model_dump(mode="python") for call in run.tool_calls
+                ],
+                "error": False,
+            }
+        }
+        return out
+
+    def _error_result(self, ctx: LocationContext, exc: Exception) -> dict[str, Any]:
+        return {
+            "status": "error",
+            "resolved_location": ctx.resolved,
+            "message": f"Agentic domain execution failed: {exc}",
+            "error": True,
+        }
+
+    def _success_result(
+        self,
+        ctx: LocationContext,
+        run: DomainAgentRunResult,
+    ) -> dict[str, Any]:
+        last_call = run.tool_calls[-1] if run.tool_calls else None
+        return {
+            "status": "done" if not run.error else "error",
+            "resolved_location": ctx.resolved,
+            "message": run.message,
+            "tool": last_call.tool_name if last_call else None,
+            "result": (
+                last_call.result.model_dump(mode="python")
+                if last_call and last_call.result
+                else {}
+            ),
+            "tool_calls": [call.model_dump(mode="python") for call in run.tool_calls],
+            "error": run.error,
+        }
+
+
+class ToolPlanDomainNode(DomainToolsNode):
+    """Domain node that plans and executes MCP tools via Bedrock LLM.
+
+    ``shared_tools`` are available to every domain; ``tools`` are domain-specific.
+    The planner/executor always see ``shared_tools + tools`` (deduped).
+    Entries in ``tools`` may be plain tool names or ``DomainTool`` specs that
+    declare ``required_user_inputs``.
+    """
+
+    def __init__(
+        self,
+        planner: ToolPlanner | None = None,
+    ) -> None:
+        super().__init__()
+        self._executor = ToolExecutor()
+
     def missing_user_inputs(
         self,
         plan: ToolPlan,
@@ -193,13 +308,6 @@ class ToolPlanDomainNode(DomainNode):
 
     @abstractmethod
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]: ...
-
-    def build_shared_runtime_args(
-        self,
-        s: GraphStateModel,
-        _ctx: LocationContext,
-    ) -> dict[str, dict[str, Any]]:
-        return {}
 
     async def select_tool_plan(self, query: str) -> ToolPlan:
         return await ToolPlanner(
@@ -253,7 +361,6 @@ class ToolPlanDomainNode(DomainNode):
 
     async def execute(self, s: GraphStateModel) -> GraphState:
         ctx = LocationContext.from_state(s)
-        # Only pass known location fields; omit gaps so the arg-resolver LLM can fill them.
         runtime_args = {
             **self.build_shared_runtime_args(s, ctx),
             **self.build_runtime_args(ctx),
