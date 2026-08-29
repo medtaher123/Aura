@@ -77,7 +77,6 @@ async def test_domain_tool_agent_final_answer_after_tool_use():
         mock_router = router_cls.return_value
         mock_router.call_converse = AsyncMock(side_effect=converse_responses)
         result = await agent.run(
-            query="assets in Paris",
             domain="agentic_test",
             allowed_tools=["stub_tool"],
             system_prompt="You are a test agent.",
@@ -142,7 +141,6 @@ async def test_domain_tool_agent_pauses_on_user_input_tool():
             )
         )
         result = await agent.run(
-            query="flood damage here",
             domain="flood_damage",
             allowed_tools=["request_bounding_box_user_input"],
             system_prompt="test",

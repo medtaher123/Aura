@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
-from eo_llm.graph.nodes.location_gate_node import location_gate_node
+from eo_llm.graph.nodes.location_gate_node import LocationGateNode, location_gate_node
+from eo_llm.graph.tests.conftest import simulate_hitl_resume
 
 
 def test_country_candidates_skip_confirmation(monkeypatch) -> None:
@@ -38,9 +40,6 @@ def test_country_candidates_skip_confirmation(monkeypatch) -> None:
     out = asyncio.run(
         location_gate_node({"query": "What is flood risk in France?", "place_hint": "France"})
     )
-    assert out.get("location_phase") == "router"
-    assert out.get("stopped_for_user_input") is False
-    assert not out.get("needs_input")
     resolved = out.get("resolved_location") or {}
     assert resolved.get("lat") is not None
     assert resolved.get("lon") is not None
@@ -48,7 +47,6 @@ def test_country_candidates_skip_confirmation(monkeypatch) -> None:
 
 def test_single_candidate_skip_confirmation(monkeypatch) -> None:
     async def fake_search(_place_query: str, *, limit: int = 8):
-        assert limit == 8
         return [
             {
                 "display_name": "Tunis, Tunisia",
@@ -68,49 +66,52 @@ def test_single_candidate_skip_confirmation(monkeypatch) -> None:
     out = asyncio.run(
         location_gate_node({"query": "Flood risk in Tunis?", "place_hint": "Tunis"})
     )
-    assert out.get("location_phase") == "router"
-    assert out.get("stopped_for_user_input") is False
-    assert not out.get("needs_input")
     resolved = out.get("resolved_location") or {}
     assert resolved.get("display_name") == "Tunis, Tunisia"
 
 
-def test_ambiguous_non_country_requires_confirmation(monkeypatch) -> None:
+def test_ambiguous_non_country_requests_hitl(monkeypatch) -> None:
     async def fake_search(_place_query: str, *, limit: int = 8):
-        assert limit == 8
         return [
             {
                 "display_name": "Paris, France",
                 "name": "Paris",
                 "lat": 48.8566,
                 "lon": 2.3522,
-                "class": "place",
-                "type": "city",
-                "addresstype": "city",
             },
             {
                 "display_name": "Paris, Texas, USA",
                 "name": "Paris",
                 "lat": 33.6609,
                 "lon": -95.5555,
-                "class": "place",
-                "type": "city",
-                "addresstype": "city",
             },
         ]
+
+    async def fake_pause(self, s, client_payload, *, blob=None):
+        payload_blob = blob if blob is not None else self.serialize_hitl_blob(s)
+        return await simulate_hitl_resume(
+            self,
+            s,
+            [
+                {
+                    "type": "location",
+                    "name": "Paris, France",
+                    "coordinates": [48.8566, 2.3522],
+                }
+            ],
+            blob=payload_blob,
+        )
 
     monkeypatch.setattr(
         "eo_llm.graph.nodes.location_gate_node.search_location_candidates", fake_search
     )
+    monkeypatch.setattr(LocationGateNode, "pause_for_hitl", fake_pause)
 
     out = asyncio.run(
         location_gate_node({"query": "Flood risk in Paris?", "place_hint": "Paris"})
     )
-    assert out.get("location_phase") == "pause"
-    assert out.get("stopped_for_user_input") is True
-    needs_input = out.get("needs_input") or {}
-    assert "location" in needs_input
-    assert len((needs_input.get("location") or {}).get("candidates") or []) == 2
+    resolved = out.get("resolved_location") or {}
+    assert resolved.get("display_name") == "Paris, France"
     assert len(out.get("location_candidates") or []) == 2
 
 
@@ -128,9 +129,6 @@ def test_feature_suffix_retry_when_full_query_misses(monkeypatch) -> None:
                     "name": "Fontainebleau",
                     "lat": 48.4049,
                     "lon": 2.7016,
-                    "class": "boundary",
-                    "type": "administrative",
-                    "addresstype": "town",
                 }
             ]
         return []
@@ -148,8 +146,6 @@ def test_feature_suffix_retry_when_full_query_misses(monkeypatch) -> None:
         )
     )
     assert calls == ["Fontainebleau forests", "Fontainebleau"]
-    assert out.get("location_phase") == "router"
-    assert out.get("stopped_for_user_input") is False
     assert out.get("location_query") == "Fontainebleau"
     resolved = out.get("resolved_location") or {}
     assert resolved.get("lat") == 48.4049

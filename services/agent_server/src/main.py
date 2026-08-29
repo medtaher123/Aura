@@ -63,7 +63,12 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database")
     await init_db()
     logger.info("Database initialized")
-    
+
+    from src.services.graph_runner.checkpointer import init_checkpointer
+
+    await init_checkpointer()
+    logger.info("Graph checkpointer initialized")
+
     logger.info(f"Starting {config.name} v{config.version}")
     logger.info(f"MCP Server URL: {config.mcp_server_url}")
 
@@ -74,6 +79,9 @@ async def lifespan(app: FastAPI):
     yield
 
     await platform.shutdown()
+    from src.services.graph_runner.checkpointer import shutdown_checkpointer
+
+    await shutdown_checkpointer()
     logger.info("Shutting down Agent Server")
 
 

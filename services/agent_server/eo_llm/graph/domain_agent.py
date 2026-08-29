@@ -40,6 +40,7 @@ class DomainToolAgent:
         system_prompt: str,
         runtime_args_by_tool: dict[str, dict[str, Any]] | None = None,
         execution_context: dict[str, Any] | None = None,
+        tool_call_records: list[AgentToolCallRecord] | None = None,
     ) -> DomainAgentRunResult:
         runtime_args_by_tool = runtime_args_by_tool or {}
         execution_context = execution_context or {}
@@ -54,28 +55,28 @@ class DomainToolAgent:
                 error=True,
             )
 
-        tool_call_records: list[AgentToolCallRecord] = []
+        records: list[AgentToolCallRecord] = list(tool_call_records or [])
 
         for turn_index in range(self._max_rounds):
             turn = await LLMModelRouter().call_converse(
                 system_prompt=system_prompt,
                 chat_history=get_chat_history(),
                 tools=tools,
-                tool_call_records=tool_call_records,
+                tool_call_records=records,
             )
 
             if turn.stop_reason != "tool_use":
                 return DomainAgentRunResult(
                     domain=domain,
                     message=turn.text or "Done.",
-                    tool_calls=tool_call_records,
+                    tool_calls=records,
                 )
 
             if not turn.tool_calls:
                 return DomainAgentRunResult(
                     domain=domain,
                     message=turn.text or "No tool calls produced.",
-                    tool_calls=tool_call_records,
+                    tool_calls=records,
                     error=True,
                 )
 
@@ -89,12 +90,12 @@ class DomainToolAgent:
                     domain=domain,
                     execution_context=execution_context,
                 )
-                tool_call_records.append(record)
+                records.append(record)
                 if record.result and self._pause_needs(record.result):
                     return DomainAgentRunResult(
                         domain=domain,
                         message=record.result.message or "Additional input required.",
-                        tool_calls=tool_call_records,
+                        tool_calls=records,
                         paused=True,
                         needs_input=dict(record.result.data.get("needs_input") or {}),
                     )
@@ -104,7 +105,7 @@ class DomainToolAgent:
             message=(
                 f"Stopped after {self._max_rounds} tool rounds without a final answer."
             ),
-            tool_calls=tool_call_records,
+            tool_calls=records,
             error=True,
         )
 

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from eo_llm.graph.nodes.domain_base import DomainTool, ToolPlanDomainNode
+from eo_llm.graph.tests.conftest import simulate_hitl_resume
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 from eo_llm.graph.tool_plan import (
     ToolExecutionResult,
@@ -18,7 +19,6 @@ from eo_llm.graph.tool_plan import (
     OnFailurePolicy,
     StopPolicy,
 )
-from eo_llm.graph.transitions.domain_transitions import choose_after_domain
 from src.schemas.spatial import BoundingBox
 
 
@@ -214,13 +214,50 @@ async def test_tool_plan_domain_error_envelope() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_plan_domain_pauses_for_missing_bbox() -> None:
+async def test_tool_plan_domain_pauses_for_missing_bbox(monkeypatch) -> None:
     class PauseNode(_FloodLikeDomainNode):
         async def select_tool_plan(self, query: str) -> ToolPlan:
             return _damage_plan()
 
         async def execute_tool_plan(self, **kwargs):
-            raise AssertionError("should not execute while bbox is missing")
+            step = ToolStepExecution(
+                step_id="s1",
+                tool_name="get_terrazard_flood_damage_tool",
+                status="done",
+                attempts=1,
+                latency_ms=1,
+                input_arguments={"bbox": [48.0, 49.0, 2.0, 3.0]},
+                result={
+                    "tool_name": "get_terrazard_flood_damage_tool",
+                    "message": "ok",
+                },
+            )
+            return ToolExecutionResult(
+                domain="flood_like",
+                steps=[step],
+                summary=ToolExecutionSummary(successful_steps=1),
+            )
+
+    async def fake_pause(self, s, client_payload, *, blob=None):
+        return await simulate_hitl_resume(
+            self,
+            s,
+            [
+                {
+                    "type": "bounding_box",
+                    "area": {
+                        "kind": "bounding_box",
+                        "min_lat": 48.0,
+                        "max_lat": 49.0,
+                        "min_lon": 2.0,
+                        "max_lon": 3.0,
+                    },
+                }
+            ],
+            blob=blob,
+        )
+
+    monkeypatch.setattr(PauseNode, "pause_for_hitl", fake_pause)
 
     node = PauseNode()
     out = await node(
@@ -229,10 +266,8 @@ async def test_tool_plan_domain_pauses_for_missing_bbox() -> None:
             selected_domains=["flood_like"],
         )
     )
-    assert out["stopped_for_user_input"] is True
-    assert "bounding_box" in (out.get("needs_input") or {})
-    assert out["domain_results"]["flood_like"]["status"] == "paused"
-    assert choose_after_domain(out) == "end"
+    result = out["domain_results"]["flood_like"]
+    assert result["status"] == "done"
 
 
 @pytest.mark.asyncio
@@ -277,18 +312,11 @@ async def test_tool_plan_domain_executes_when_bbox_present() -> None:
             },
         )
     )
-    assert out.get("stopped_for_user_input") is not True
-    assert choose_after_domain(out) == "aggregator"
     result = out["domain_results"]["flood_like"]
     assert result["status"] == "done"
     runtime = executed["runtime_args_by_tool"]["get_terrazard_flood_damage_tool"]
     assert runtime["bbox"] == [48.0, 49.0, 2.0, 3.0]
 
-
-def test_choose_after_domain_routes() -> None:
-    assert choose_after_domain({"stopped_for_user_input": True}) == "end"
-    assert choose_after_domain({}) == "aggregator"
-    assert choose_after_domain({"stopped_for_user_input": False}) == "aggregator"
 
 
 def test_location_context_exposes_bbox() -> None:

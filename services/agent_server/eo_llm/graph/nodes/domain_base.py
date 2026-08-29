@@ -6,10 +6,11 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
 from eo_llm.graph.domain_agent import DomainAgentRunResult, DomainToolAgent
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.nodes.helpers import LocationContext, wrap_domain_result
-from eo_llm.graph.state import GraphState, GraphStateModel, dump_state
+from eo_llm.graph.state import GraphState, GraphStateModel
 from eo_llm.graph.tool_plan import (
     ToolExecutionResult,
     ToolExecutor,
@@ -86,7 +87,6 @@ class DomainToolsNode(DomainNode):
 
     @classmethod
     def tool_specs(cls) -> dict[str, DomainTool]:
-        """Map tool name → ``DomainTool`` for this domain (domain tools only)."""
         specs: dict[str, DomainTool] = {}
         for entry in cls.tools:
             spec = _as_domain_tool(entry)
@@ -95,7 +95,6 @@ class DomainToolsNode(DomainNode):
 
     @classmethod
     def resolved_tools(cls) -> list[str]:
-        """Shared tools first, then domain tools (order preserved, duplicates dropped)."""
         seen: set[str] = set()
         out: list[str] = []
         for entry in [*cls.shared_tools, *cls.tools]:
@@ -162,12 +161,7 @@ class DomainToolsNode(DomainNode):
 
 
 class AgenticDomainNode(DomainToolsNode):
-    """Domain node that iterates with the LLM until tools produce a final answer.
-
-    Unlike :class:`ToolPlanDomainNode`, this does **not** ask the LLM once for a
-    full execution plan. The model calls tools one round at a time (Bedrock
-    Converse tool-use loop) until it returns a final message or a user-input pause.
-    """
+    """Domain node that iterates with the LLM until tools produce a final answer."""
 
     max_tool_rounds: ClassVar[int] = 8
 
@@ -184,61 +178,79 @@ class AgenticDomainNode(DomainToolsNode):
     @abstractmethod
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]: ...
 
-    async def execute(self, s: GraphStateModel) -> GraphState:
-        ctx = LocationContext.from_state(s)
-        runtime_args = {
-            **self.build_shared_runtime_args(s, ctx),
-            **self.build_runtime_args(ctx),
-        }
-        try:
-            run = await self._agent.run(
-                domain=self.domain_name,
-                allowed_tools=self.resolved_tools(),
-                system_prompt=self.build_system_prompt(s, ctx),
-                runtime_args_by_tool=runtime_args,
-                execution_context={
-                    "query": s.query,
-                    "domain": self.domain_name,
-                    "resolved_location": ctx.resolved,
-                },
-            )
-        except Exception as exc:
-            return wrap_domain_result(
-                self.domain_name,
-                self._error_result(ctx, exc),
-            )
-
-        if run.paused and run.needs_input:
-            return self._pause_for_user_inputs(s, ctx, run)
-        return wrap_domain_result(
-            self.domain_name,
-            self._success_result(ctx, run),
-        )
-
-    def _pause_for_user_inputs(
+    def serialize_hitl_blob(
         self,
         s: GraphStateModel,
-        ctx: LocationContext,
-        run: DomainAgentRunResult,
-    ) -> GraphState:
-        needs_input = dict(run.needs_input or {})
-        s.needs_input = needs_input
-        s.stopped_for_user_input = True
-        s.final_answer = run.message or "Additional input required."
-        s.answer_source = "domain_tools"
-        out = dump_state(s)
-        out["domain_results"] = {
-            self.domain_name: {
-                "status": "paused",
-                "resolved_location": ctx.resolved,
-                "message": run.message,
-                "tool_calls": [
-                    call.model_dump(mode="python") for call in run.tool_calls
-                ],
-                "error": False,
-            }
+        *,
+        tool_call_records: list[AgentToolCallRecord] | None = None,
+    ) -> dict[str, Any]:
+        records = tool_call_records or []
+        return {
+            "tool_call_records": [
+                record.model_dump(mode="python") for record in records
+            ],
         }
+
+    @staticmethod
+    def _records_from_blob(blob: dict[str, Any]) -> list[AgentToolCallRecord]:
+        raw = blob.get("tool_call_records")
+        if not isinstance(raw, list):
+            return []
+        out: list[AgentToolCallRecord] = []
+        for item in raw:
+            if isinstance(item, dict):
+                out.append(AgentToolCallRecord.model_validate(item))
         return out
+
+    async def execute(self, s: GraphStateModel) -> GraphState:
+        blob = self.load_hitl_blob()
+        tool_call_records = self._records_from_blob(blob) if blob else []
+
+        while True:
+            ctx = LocationContext.from_state(s)
+            runtime_args = {
+                **self.build_shared_runtime_args(s, ctx),
+                **self.build_runtime_args(ctx),
+            }
+            try:
+                run = await self._agent.run(
+                    domain=self.domain_name,
+                    allowed_tools=self.resolved_tools(),
+                    system_prompt=self.build_system_prompt(s, ctx),
+                    runtime_args_by_tool=runtime_args,
+                    execution_context={
+                        "query": s.query,
+                        "domain": self.domain_name,
+                        "resolved_location": ctx.resolved,
+                    },
+                    tool_call_records=tool_call_records,
+                )
+            except Exception as exc:
+                return wrap_domain_result(
+                    self.domain_name,
+                    self._error_result(ctx, exc),
+                )
+
+            if not run.paused or not run.needs_input:
+                return wrap_domain_result(
+                    self.domain_name,
+                    self._success_result(ctx, run),
+                )
+
+            needs_input = UserInputRouter.requests_to_dict(
+                UserInputRouter.requests_from_dict(run.needs_input)
+            )
+            s = await self.pause_for_hitl(
+                s,
+                {
+                    "data": {"needs_input": needs_input},
+                    "prompt": run.message or "Additional input required.",
+                },
+                blob=self.serialize_hitl_blob(
+                    s, tool_call_records=run.tool_calls
+                ),
+            )
+            tool_call_records = list(run.tool_calls)
 
     def _error_result(self, ctx: LocationContext, exc: Exception) -> dict[str, Any]:
         return {
@@ -270,13 +282,7 @@ class AgenticDomainNode(DomainToolsNode):
 
 
 class ToolPlanDomainNode(DomainToolsNode):
-    """Domain node that plans and executes MCP tools via Bedrock LLM.
-
-    ``shared_tools`` are available to every domain; ``tools`` are domain-specific.
-    The planner/executor always see ``shared_tools + tools`` (deduped).
-    Entries in ``tools`` may be plain tool names or ``DomainTool`` specs that
-    declare ``required_user_inputs``.
-    """
+    """Domain node that plans and executes MCP tools via Bedrock LLM."""
 
     def __init__(
         self,
@@ -285,13 +291,29 @@ class ToolPlanDomainNode(DomainToolsNode):
         super().__init__()
         self._executor = ToolExecutor()
 
+    def serialize_hitl_blob(
+        self,
+        s: GraphStateModel,
+        *,
+        plan: ToolPlan | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "plan": plan.model_dump(mode="python") if plan is not None else None,
+        }
+
+    @staticmethod
+    def _plan_from_blob(blob: dict[str, Any]) -> ToolPlan | None:
+        raw = blob.get("plan")
+        if isinstance(raw, dict) and raw:
+            return ToolPlan.model_validate(raw)
+        return None
+
     def missing_user_inputs(
         self,
         plan: ToolPlan,
         s: GraphStateModel,
         ctx: LocationContext,
     ) -> dict[InputKind, UserInputRequest]:
-        """Required user inputs for tools in ``plan`` that are not yet on state."""
         specs = self.tool_specs()
         missing: dict[InputKind, UserInputRequest] = {}
         for step in plan.tool_steps:
@@ -327,49 +349,47 @@ class ToolPlanDomainNode(DomainToolsNode):
             execution_context=execution_context,
         )
 
-    def _pause_for_user_inputs(
-        self,
-        s: GraphStateModel,
-        ctx: LocationContext,
-        plan: ToolPlan,
-        missing: dict[InputKind, UserInputRequest],
-    ) -> GraphState:
-        needs_input = UserInputRouter.requests_to_dict(missing)
-        prompt_parts = [
-            str(req.prompt)
-            for req in missing.values()
-            if getattr(req, "prompt", None)
-        ]
-        prompt = " ".join(prompt_parts) if prompt_parts else (
-            "Please provide the requested input to continue."
-        )
-        s.needs_input = needs_input
-        s.stopped_for_user_input = True
-        s.final_answer = prompt
-        s.answer_source = "domain_tools"
-        out = dump_state(s)
-        out["domain_results"] = {
-            self.domain_name: {
-                "status": "paused",
-                "resolved_location": ctx.resolved,
-                "plan": plan.model_dump(mode="python"),
-                "message": prompt,
-                "error": False,
-            }
-        }
-        return out
-
     async def execute(self, s: GraphStateModel) -> GraphState:
+        blob = self.load_hitl_blob()
         ctx = LocationContext.from_state(s)
         runtime_args = {
             **self.build_shared_runtime_args(s, ctx),
             **self.build_runtime_args(ctx),
         }
+
         try:
-            plan = await self.select_tool_plan(s.query)
+            plan = self._plan_from_blob(blob) if blob else None
+            if plan is None:
+                plan = await self.select_tool_plan(s.query)
+
             missing = self.missing_user_inputs(plan, s, ctx)
             if missing:
-                return self._pause_for_user_inputs(s, ctx, plan, missing)
+                needs_input = UserInputRouter.requests_to_dict(missing)
+                prompt_parts = [
+                    str(req.prompt)
+                    for req in missing.values()
+                    if getattr(req, "prompt", None)
+                ]
+                prompt = " ".join(prompt_parts) if prompt_parts else (
+                    "Please provide the requested input to continue."
+                )
+                s = await self.pause_for_hitl(
+                    s,
+                    {
+                        "data": {"needs_input": needs_input},
+                        "prompt": prompt,
+                    },
+                    blob=self.serialize_hitl_blob(s, plan=plan),
+                )
+                ctx = LocationContext.from_state(s)
+                runtime_args = {
+                    **self.build_shared_runtime_args(s, ctx),
+                    **self.build_runtime_args(ctx),
+                }
+                missing = self.missing_user_inputs(plan, s, ctx)
+                if missing:
+                    raise RuntimeError("Required user inputs still missing after HITL resume")
+
             execution = await self.execute_tool_plan(
                 plan=plan,
                 runtime_args_by_tool=runtime_args,

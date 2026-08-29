@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from eo_llm.graph.hitl import client_payload_needs_input
 from eo_llm.graph.state import DomainResultModel, GraphStateModel, validate_state
-from src.user_inputs import LocationRequest, UserInputRouter
 from src.tools.contracts import ToolArtifacts, ToolCoordinates
 
 from .artifacts import ArtifactAggregator
 from .models import ArtifactBundle, GraphTurnResult
-
-
-def _json_safe(value: Any) -> Any:
-    """Make a graph state JSON-serializable for round-tripping through the client."""
-    return json.loads(json.dumps(value, default=str))
 
 
 class GraphTurnResultFactory:
@@ -24,36 +18,34 @@ class GraphTurnResultFactory:
 
     def from_state(self, state: GraphStateModel | dict[str, Any]) -> GraphTurnResult:
         model = state if isinstance(state, GraphStateModel) else validate_state(state)
-        if model.stopped_for_user_input and model.needs_input:
-            return self.from_paused_state(model)
         return self.from_completed_state(model)
 
     @staticmethod
-    def from_paused_state(state: GraphStateModel) -> GraphTurnResult:
-        graph_state = _json_safe(state.model_dump(mode="python"))
-        requests = UserInputRouter.requests_from_dict(state.needs_input)
-        if not requests and state.location_candidates:
-            requests = {
-                "location": LocationRequest.from_candidates(
-                    state.location_candidates,
-                    prompt="Several places match your query. Please choose a location.",
-                    location_query=state.location_query or None,
-                )
-            }
-        needs_input = UserInputRouter.requests_to_dict(requests)
-        prompt = "Please provide the requested input to continue."
-        location_req = requests.get("location")
-        if isinstance(location_req, LocationRequest) and location_req.prompt:
-            prompt = location_req.prompt
-        bbox_req = requests.get("bounding_box")
-        if bbox_req is not None and getattr(bbox_req, "prompt", None):
-            prompt = str(bbox_req.prompt)
+    def from_interrupt(
+        interrupt_payload: dict[str, Any],
+        state: dict[str, Any] | None,
+        *,
+        checkpoint_thread_id: str,
+        hitl_blobs: dict[str, dict[str, Any]] | None = None,
+    ) -> GraphTurnResult:
+        needs_input = client_payload_needs_input(interrupt_payload)
+        prompt = interrupt_payload.get("prompt") or "Please provide the requested input to continue."
+        if not interrupt_payload.get("prompt"):
+            for value in needs_input.values():
+                if isinstance(value, dict):
+                    nested = value.get("prompt")
+                    if isinstance(nested, str) and nested.strip():
+                        prompt = nested.strip()
+                        break
         return GraphTurnResult(
             message=prompt,
             error=False,
             data={
+                "interrupted": True,
                 "needs_input": needs_input,
-                "pause": {"graph_state": graph_state},
+                "checkpoint_thread_id": checkpoint_thread_id,
+                "hitl_blobs": dict(hitl_blobs or {}),
+                "interrupt_payload": dict(interrupt_payload),
             },
         )
 

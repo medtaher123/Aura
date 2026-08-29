@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from eo_llm.graph.state import GraphState, dump_state, validate_state
+from eo_llm.graph.nodes.base import GraphNode
+from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
 
 
-def gateway_node(state: GraphState) -> GraphState:
-    s = validate_state(state)
-    return dump_state(s)
+class GatewayNode(GraphNode):
+    node_name = "gateway"
+
+    async def run(self, s: GraphStateModel) -> GraphState:
+        return dump_state(s)
+
+
+gateway_node = GatewayNode()

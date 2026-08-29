@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
 from eo_llm.graph.state import GraphState
 from eo_llm.graph.nodes.gateway_node import gateway_node
 from eo_llm.graph.nodes.orchestrator_node import orchestrator_node
 from eo_llm.graph.nodes.location_gate_node import location_gate_node
-from eo_llm.graph.nodes.location_response_node import location_response_node
 from eo_llm.graph.nodes.router_node import router_node
 from eo_llm.graph.nodes.domains.agentic_test_node import agentic_test_node
 from eo_llm.graph.nodes.domains.flood_damage_node import flood_damage_node
@@ -25,18 +27,15 @@ from eo_llm.graph.transitions.orchestrator_transitions import (
     choose_after_orchestrator,
 )
 from eo_llm.graph.transitions.router_transitions import choose_after_router
-from eo_llm.graph.transitions.location_transitions import choose_after_location_gate
 from eo_llm.graph.transitions.aggregator_transitions import choose_after_aggregator
-from eo_llm.graph.transitions.domain_transitions import choose_after_domain
 
 
-def build_graph():
+def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> Any:
     graph = StateGraph(GraphState)
 
     graph.add_node("gateway", gateway_node)
     graph.add_node("orchestrator", orchestrator_node)
     graph.add_node("location_gate", location_gate_node)
-    graph.add_node("location_response", location_response_node)
     graph.add_node("router", router_node)
     graph.add_node("agentic_test", agentic_test_node)
     graph.add_node("flood_damage", flood_damage_node)
@@ -59,13 +58,7 @@ def build_graph():
         {"route": "location_gate", "finalize_direct": "finalizer"},
     )
 
-    graph.add_conditional_edges(
-        "location_gate",
-        choose_after_location_gate,
-        {"router": "router", "location_response": "location_response"},
-    )
-
-    graph.add_edge("location_response", END)
+    graph.add_edge("location_gate", "router")
 
     graph.add_conditional_edges(
         "router",
@@ -83,9 +76,6 @@ def build_graph():
         },
     )
 
-    # Tool-plan domains may pause for user input; otherwise continue to aggregator.
-    # tools_info returns a formatted catalog and skips aggregation/LLM compose.
-    _domain_pause_targets = {"aggregator": "aggregator", "end": END}
     for _domain in (
         "agentic_test",
         "flood_damage",
@@ -95,11 +85,7 @@ def build_graph():
         "infrastructure",
         "stac",
     ):
-        graph.add_conditional_edges(
-            _domain,
-            choose_after_domain,
-            _domain_pause_targets,
-        )
+        graph.add_edge(_domain, "aggregator")
     graph.add_edge("tools_info", "finalizer")
 
     graph.add_edge("web_search", "aggregator")
@@ -111,4 +97,6 @@ def build_graph():
     )
 
     graph.add_edge("finalizer", END)
+    if checkpointer is not None:
+        return graph.compile(checkpointer=checkpointer)
     return graph.compile()

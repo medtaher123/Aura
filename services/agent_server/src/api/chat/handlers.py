@@ -10,8 +10,6 @@ from __future__ import annotations
 import asyncio
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, ClassVar
 
 from src.api.chat.language import to_english
@@ -88,7 +86,9 @@ class ChatTurn(ABC):
         self.conn.begin_streaming_response()
         with stream_bridge(self.conn) as emitter:
             request = self.graph_request.with_stream_emitter(emitter)
-            return await _run_graph_in_thread(lambda: self.graph_runner.execute(request))
+            # Must await on the FastAPI loop — AsyncPostgresSaver locks are
+            # bound to the loop that called init_checkpointer().
+            return await self.graph_runner.execute(request)
 
     async def after_graph(self, result: GraphTurnResult) -> None:
         if self.conn.is_closed or self.conversation_id is None:
@@ -239,7 +239,10 @@ class NewChat(ChatTurn):
         self.needs_title = context.created
         self.messages_to_save = [self.user_message]
         self.status_text = "Processing your request..."
+        turn_id = str(uuid.uuid4())
+        thread_id = f"{self.conversation_id}:{turn_id}"
         self.graph_request = GraphTurnRequest(
+            thread_id=thread_id,
             message=self.user_message,
             user_id=str(self.user.id),
             session_id=str(self.conversation_id),
@@ -291,10 +294,17 @@ class ResumeChat(ChatTurn):
         self.user_message_already_saved = pause.user_message_persisted
         self.messages_to_save = [leftover] if leftover else []
         self.messages_to_save.append(self.input_message)
+        if not pause.checkpoint_thread_id:
+            await self.conn.send_error(
+                "No checkpoint thread to resume for this conversation.",
+                recoverable=True,
+            )
+            return False
         self.graph_request = GraphResumeRequest(
-            graph_state=dict(pause.graph_state),
+            thread_id=pause.checkpoint_thread_id,
             message=self.input_message,
             chat_history=list(found.messages),
+            hitl_blobs=dict(pause.hitl_blobs),
         )
         return True
 
@@ -312,13 +322,13 @@ class ResumeChat(ChatTurn):
                 recoverable=True,
             )
             return None
-        if not pause.graph_state:
+        if not pause.checkpoint_thread_id:
             logger.warning(
-                "Resume requested but no graph_state for conversation %s",
+                "Resume requested but no checkpoint_thread_id for conversation %s",
                 self.conversation_id,
             )
             await self.conn.send_error(
-                "No paused graph state to resume for this conversation.",
+                "No paused request to resume for this conversation.",
                 recoverable=True,
             )
             return None
@@ -359,9 +369,3 @@ async def handle_chat_resume(
         input_message,
         conversation_id=conversation_id,
     ).run()
-
-
-async def _run_graph_in_thread(fn: Callable[[], GraphTurnResult]) -> GraphTurnResult:
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return await loop.run_in_executor(pool, fn)

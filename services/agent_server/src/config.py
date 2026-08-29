@@ -91,6 +91,13 @@ class AgentServerConfig(BaseSettings):
         default=10,
         description="Maximum overflow connections beyond the pool size",
     )
+    checkpointer_backend: str = Field(
+        default="",
+        description=(
+            "LangGraph checkpointer backend: memory, postgres, or empty to auto-detect "
+            "from database_url."
+        ),
+    )
 
     # WebSocket settings
     ws_heartbeat_interval: int = Field(

@@ -1,20 +1,12 @@
-"""Graph runner service.
-
-Drives the ported EO_LLM LangGraph pipeline (`eo_llm.graph`) from the agent
-server and adapts it to the existing WebSocket contract:
-
-- Streams per-node status events and per-tool start/done events so the UI
-  can follow the graph turn in real time.
-- Maps the final `GraphState` into a `GraphTurnResult` (including artifact
-  merging and the user-input pause payload).
-"""
+"""Graph runner service."""
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from src.core.event_emitter import EventEmitter
-from src.db.models.message import Message, UserMessage
+from src.db.models.message import InputResponseMessage, Message, UserMessage
 
 from .models import (
     GraphResumeRequest,
@@ -35,18 +27,21 @@ def get_graph_runner_service() -> GraphRunnerService:
     return _default_service
 
 
-def run_graph_turn(
+async def run_graph_turn(
     *,
     message: UserMessage,
     user_id: str,
     session_id: str,
+    thread_id: str | None = None,
     document_ref: dict[str, Any] | None = None,
     place_hint: str | None = None,
     chat_history: list[Message] | None = None,
     stream_emitter: EventEmitter | None = None,
 ) -> GraphTurnResult:
     """Run one graph turn and return a GraphTurnResult for the websocket layer."""
+    resolved_thread = thread_id or f"{session_id}:{uuid.uuid4()}"
     request = GraphTurnRequest(
+        thread_id=resolved_thread,
         message=message,
         user_id=user_id,
         session_id=session_id,
@@ -55,24 +50,24 @@ def run_graph_turn(
         chat_history=list(chat_history or []),
         stream_emitter=stream_emitter,
     )
-    return get_graph_runner_service().execute(request)
+    return await get_graph_runner_service().execute(request)
 
 
-def resume_graph_turn(
+async def resume_graph_turn(
     *,
-    graph_state: dict[str, Any],
-    message: Message,
+    thread_id: str,
+    message: InputResponseMessage,
     chat_history: list[Message] | None = None,
     stream_emitter: EventEmitter | None = None,
 ) -> GraphTurnResult:
     """Resume a paused graph after the user provided required inputs."""
     request = GraphResumeRequest(
-        graph_state=graph_state,
+        thread_id=thread_id,
         message=message,
         chat_history=list(chat_history or []),
         stream_emitter=stream_emitter,
     )
-    return get_graph_runner_service().execute(request)
+    return await get_graph_runner_service().execute(request)
 
 
 __all__ = [

@@ -5,13 +5,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Self
 
+from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
+from eo_llm.graph.hitl import state_update_from_attachments
 from eo_llm.graph.state import GraphState
 from src.core.event_emitter import EventEmitter
-from src.db.models.message import Message, UserMessage
-from src.db.models.message_attachments import apply_attachments
-from src.user_inputs import UserInputRouter
+from src.db.models.message import InputResponseMessage, Message, UserMessage
+from src.db.models.message_attachments import apply_attachments, dump_attachments
 from src.tools.contracts import ToolArtifacts, ToolCoordinates
 
 
@@ -26,10 +27,7 @@ class ArtifactBundle(BaseModel):
 
 
 class GraphTurnResult(BaseModel):
-    """Outcome of one graph turn for the websocket / persistence layer.
-
-    Distinct from ``ToolResponse``, which is the return type of a single MCP/tool call.
-    """
+    """Outcome of one graph turn for the websocket / persistence layer."""
 
     message: str
     artifacts: ToolArtifacts = Field(default_factory=ToolArtifacts)
@@ -39,13 +37,9 @@ class GraphTurnResult(BaseModel):
     coordinates: ToolCoordinates | None = None
 
     def pending_input_requests(self) -> dict[str, Any]:
-        """Typed ``needs_input`` requests when the turn paused for user input."""
-        return UserInputRouter.requests_from_dict(self.data.get("needs_input"))
-
-    def pause_payload(self) -> dict[str, Any]:
-        """``data.pause`` snapshot (includes ``graph_state``) for server-side resume."""
-        pause = self.data.get("pause")
-        return dict(pause) if isinstance(pause, dict) else {}
+        """``needs_input`` map when the turn paused for user input."""
+        raw = self.data.get("needs_input")
+        return dict(raw) if isinstance(raw, dict) else {}
 
     def assistant_metadata(self) -> dict[str, Any]:
         """Metadata stored on the persisted assistant message."""
@@ -60,6 +54,7 @@ class GraphRunnerRequest(BaseModel, ABC):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    thread_id: str
     message: Message
     chat_history: list[Message] = Field(default_factory=list)
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
@@ -68,16 +63,9 @@ class GraphRunnerRequest(BaseModel, ABC):
         """Prior conversation plus this turn's incoming user message."""
         return [*self.chat_history, self.message]
 
-    def apply_incoming_attachments(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Apply this turn's attachments onto graph state (new chat and resume)."""
-        attachments = self.message.attachments
-        UserInputRouter.apply_resume_attachments(attachments, state)
-        apply_attachments(attachments, state)
-        return state
-
     @abstractmethod
-    def to_state_dict(self) -> GraphState:
-        """LangGraph input state for this execution."""
+    def to_graph_input(self) -> dict[str, Any] | Command:
+        """LangGraph input for this execution."""
 
     @abstractmethod
     def start_log_message(self) -> str:
@@ -98,17 +86,15 @@ class GraphTurnRequest(GraphRunnerRequest):
 
     @property
     def english_query(self) -> str:
-        """Free-text user query; attachments are applied separately."""
         return self.message.content
 
     def start_log_message(self) -> str:
         return (
-            f"Graph turn starting - session_id: {self.session_id}, "
+            f"Graph turn starting - thread_id: {self.thread_id}, "
             f"query length: {len(self.english_query)}"
         )
 
-    def to_state_dict(self) -> GraphState:
-        # History stays on the request / LLM contextvar — not flattened into ``query``.
+    def to_graph_input(self) -> GraphState:
         q = (self.english_query or "").strip()
         state: dict[str, Any] = {
             "query": q,
@@ -119,20 +105,29 @@ class GraphTurnRequest(GraphRunnerRequest):
         }
         if self.place_hint and self.place_hint.strip():
             state["place_hint"] = self.place_hint.strip()
-        self.apply_incoming_attachments(state)
+        apply_attachments(self.message.attachments, state)
         return state  # type: ignore[return-value]
 
 
 class GraphResumeRequest(GraphRunnerRequest):
     """Input for resuming a graph paused for user input."""
 
-    graph_state: dict[str, Any]
+    message: InputResponseMessage
+    hitl_blobs: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def start_log_message(self) -> str:
         types = [getattr(a, "type", type(a).__name__) for a in self.message.attachments]
-        return f"Graph resume starting - attachment_types: {types}"
+        return (
+            f"Graph resume starting - thread_id: {self.thread_id}, "
+            f"attachment_types: {types}, hitl_nodes: {list(self.hitl_blobs)}"
+        )
 
-    def to_state_dict(self) -> GraphState:
-        merged: dict[str, Any] = {**self.graph_state}
-        self.apply_incoming_attachments(merged)
-        return merged  # type: ignore[return-value]
+    def to_graph_input(self) -> Command:
+        state_patch = state_update_from_attachments(
+            self.message.attachments,
+            self.hitl_blobs,
+        )
+        return Command(
+            update=state_patch or None,
+            resume={"data": {"attachments": dump_attachments(self.message.attachments)}},
+        )

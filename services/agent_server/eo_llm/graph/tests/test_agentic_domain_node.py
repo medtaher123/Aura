@@ -9,7 +9,7 @@ import pytest
 from eo_llm.graph.nodes.domains.agentic_test_node import AgenticTestNode
 from eo_llm.graph.nodes.domain_base import AgenticDomainNode
 from eo_llm.graph.state import validate_state
-from eo_llm.graph.transitions.domain_transitions import choose_after_domain
+from eo_llm.graph.tests.conftest import simulate_hitl_resume
 
 
 def test_agentic_test_node_extends_agentic_domain_node():
@@ -57,7 +57,7 @@ async def test_agentic_test_node_execute_success():
 
 
 @pytest.mark.asyncio
-async def test_agentic_test_node_pauses_for_user_input():
+async def test_agentic_test_node_pauses_for_user_input(monkeypatch):
     node = AgenticTestNode()
     run_result = MagicMock()
     run_result.paused = True
@@ -65,6 +65,34 @@ async def test_agentic_test_node_pauses_for_user_input():
     run_result.error = False
     run_result.message = "Draw a box"
     run_result.tool_calls = []
+
+    async def fake_pause(self, s, client_payload, *, blob=None):
+        return await simulate_hitl_resume(
+            self,
+            s,
+            [
+                {
+                    "type": "bounding_box",
+                    "area": {
+                        "kind": "bounding_box",
+                        "min_lat": 1.0,
+                        "max_lat": 2.0,
+                        "min_lon": 3.0,
+                        "max_lon": 4.0,
+                    },
+                }
+            ],
+            blob=blob,
+        )
+
+    monkeypatch.setattr(AgenticDomainNode, "pause_for_hitl", fake_pause)
+
+    success = MagicMock()
+    success.paused = False
+    success.needs_input = None
+    success.error = False
+    success.message = "Done after resume."
+    success.tool_calls = run_result.tool_calls
 
     state = validate_state(
         {
@@ -74,12 +102,75 @@ async def test_agentic_test_node_pauses_for_user_input():
         }
     )
 
-    with patch.object(node._agent, "run", new=AsyncMock(return_value=run_result)):
+    with patch.object(
+        node._agent,
+        "run",
+        new=AsyncMock(side_effect=[run_result, success]),
+    ):
         out = await node.execute(state)
 
-    assert out["stopped_for_user_input"] is True
-    assert out["domain_results"]["agentic_test"]["status"] == "paused"
-    assert choose_after_domain(out) == "end"
+    assert out["domain_results"]["agentic_test"]["status"] == "done"
+    assert out["domain_results"]["agentic_test"]["message"] == "Done after resume."
+
+
+@pytest.mark.asyncio
+async def test_agentic_test_node_resumes_tool_records_from_hitl_blob(monkeypatch):
+    from eo_llm.graph import hitl as hitl_store
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+
+    node = AgenticTestNode()
+    records = [
+        AgentToolCallRecord(
+            tool_use_id="t1",
+            turn_index=0,
+            tool_name="request_bounding_box_user_input",
+            arguments={},
+            status="done",
+        )
+    ]
+    run_result = MagicMock()
+    run_result.paused = False
+    run_result.needs_input = None
+    run_result.error = False
+    run_result.message = "Done after resume."
+    run_result.tool_calls = records
+
+    state = validate_state(
+        {
+            "query": "test",
+            "user_query": "test",
+            "selected_domains": ["agentic_test"],
+            "resolved_area": {
+                "kind": "bounding_box",
+                "min_lat": 1.0,
+                "max_lat": 2.0,
+                "min_lon": 3.0,
+                "max_lon": 4.0,
+            },
+        }
+    )
+
+    captured: dict[str, object] = {}
+
+    async def capture_run(**kwargs):
+        captured["tool_call_records"] = kwargs.get("tool_call_records")
+        return run_result
+
+    thread_id = "agentic-resume-test"
+    monkeypatch.setattr(hitl_store, "current_thread_id", lambda: thread_id)
+    with hitl_store.hitl_resume_context(
+        {
+            "agentic_test": {
+                "tool_call_records": [r.model_dump(mode="python") for r in records]
+            }
+        },
+        thread_id=thread_id,
+    ):
+        with patch.object(node._agent, "run", new=AsyncMock(side_effect=capture_run)):
+            out = await node.execute(state)
+
+    assert captured["tool_call_records"] == records
+    assert out["domain_results"]["agentic_test"]["status"] == "done"
 
 
 @pytest.mark.asyncio

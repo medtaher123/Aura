@@ -22,7 +22,8 @@ class AgenticTestNode(AgenticDomainNode):
         "request_location_user_input", # type: ignore
         "request_bounding_box_user_input", # type: ignore
         "reverse_geocode", # type: ignore
-        "lookup", # type: ignore
+        "search_address", # type: ignore
+        #"lookup", # type: ignore
         # DomainTool(   
         #     "request_location_user_input",
         #     required_user_inputs=("location",),

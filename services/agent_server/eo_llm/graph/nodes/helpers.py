@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from eo_llm.graph.state import GraphState, GraphStateModel
+from eo_llm.graph.state import GraphState, GraphStateModel, ResolvedLocationModel
 from src.schemas.spatial import BoundingBox
 
 
@@ -57,6 +57,21 @@ class LocationContext:
         if self.lon is not None:
             out["lon"] = float(self.lon)
         return out
+
+
+def resolved_location_from_candidate(c: dict[str, Any]) -> ResolvedLocationModel:
+    lat, lon = c.get("lat"), c.get("lon")
+    lat_f = float(lat) if lat is not None else None
+    lon_f = float(lon) if lon is not None else None
+    out: dict[str, Any] = {
+        "display_name": str(c.get("display_name") or c.get("name") or ""),
+        "lat": lat_f,
+        "lon": lon_f,
+    }
+    bbox = c.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4:
+        out["bbox"] = [float(x) for x in bbox]
+    return ResolvedLocationModel.model_validate(out)
 
 
 def omit_none(values: dict[str, Any]) -> dict[str, Any]:

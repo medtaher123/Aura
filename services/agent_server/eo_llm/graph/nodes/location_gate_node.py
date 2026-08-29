@@ -9,6 +9,7 @@ from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.graph.geocode import search_location_candidates
 from eo_llm.graph.nodes.base import GraphNode
+from eo_llm.graph.nodes.helpers import resolved_location_from_candidate
 from eo_llm.graph.state import (
     GraphState,
     ResolvedLocationModel,
@@ -18,8 +19,6 @@ from eo_llm.graph.state import (
 from eo_llm.prompts import get_query_location_prompt
 from src.user_inputs import LocationRequest, UserInputRouter
 
-# Trailing feature words that often make Nominatim return zero hits
-# (e.g. "Fontainebleau forests" → retry as "Fontainebleau").
 _PLACE_FEATURE_SUFFIXES = frozenset(
     {
         "forest",
@@ -44,7 +43,6 @@ _PLACE_FEATURE_SUFFIXES = frozenset(
 
 
 def _simplify_place_query(place: str) -> str:
-    """Drop a trailing geographic feature word for a Nominatim retry."""
     parts = [p for p in (place or "").strip().split() if p]
     if len(parts) < 2:
         return ""
@@ -52,22 +50,6 @@ def _simplify_place_query(place: str) -> str:
     if last not in _PLACE_FEATURE_SUFFIXES:
         return ""
     return " ".join(parts[:-1]).strip(" ,")
-
-
-def _candidate_to_resolved(c: dict[str, Any]) -> ResolvedLocationModel:
-    lat, lon = c.get("lat"), c.get("lon")
-    lat_f = float(lat) if lat is not None else None
-    lon_f = float(lon) if lon is not None else None
-
-    out: dict[str, Any] = {
-        "display_name": str(c.get("display_name") or c.get("name") or ""),
-        "lat": lat_f,
-        "lon": lon_f,
-    }
-    bbox = c.get("bbox")
-    if isinstance(bbox, list) and len(bbox) == 4:
-        out["bbox"] = [float(x) for x in bbox]
-    return ResolvedLocationModel.model_validate(out)
 
 
 def _is_country_candidate(c: dict[str, Any]) -> bool:
@@ -78,25 +60,9 @@ def _is_country_candidate(c: dict[str, Any]) -> bool:
         return True
     if place_type == "country":
         return True
-    # Nominatim often represents countries as administrative boundaries.
     if class_name == "boundary" and place_type == "administrative" and addresstype == "country":
         return True
     return False
-
-
-def _location_candidates_from_needs_input(s: GraphStateModel) -> list[dict[str, Any]]:
-    payload = s.needs_input.get("location")
-    if isinstance(payload, dict):
-        candidates = payload.get("candidates")
-        if isinstance(candidates, list) and candidates:
-            return [c for c in candidates if isinstance(c, dict)]
-    return list(s.location_candidates)
-
-
-def _clear_user_input_pause(s: GraphStateModel) -> None:
-    s.needs_input = {}
-    s.stopped_for_user_input = False
-    s.confirmed_location_index = None
 
 
 class LocationGateNode(GraphNode):
@@ -104,32 +70,30 @@ class LocationGateNode(GraphNode):
     status_stage = "planning"
     status_message = "Resolving location..."
 
+    def serialize_hitl_blob(self, s: GraphStateModel) -> dict[str, Any]:
+        return {
+            "location_query": s.location_query,
+            "location_candidates": list(s.location_candidates or []),
+        }
+
+    def apply_hitl_blob(
+        self,
+        s: GraphStateModel,
+        blob: dict[str, Any],
+    ) -> GraphStateModel:
+        s.location_query = str(blob.get("location_query") or s.location_query or "")
+        candidates = blob.get("location_candidates")
+        if isinstance(candidates, list):
+            s.location_candidates = [c for c in candidates if isinstance(c, dict)]
+        return s
+
     async def run(self, s: GraphStateModel) -> GraphState:
-        # Resume: user picked a candidate index (same session state returned by the client).
-        idx = s.confirmed_location_index
-        candidates = _location_candidates_from_needs_input(s)
-        resuming = bool(s.needs_input.get("location"))
-        if (
-            resuming
-            and isinstance(idx, int)
-            and idx >= 0
-            and candidates
-            and idx < len(candidates)
-        ):
-            s.resolved_location = _candidate_to_resolved(candidates[idx])
-            s.location_candidates = candidates
-            _clear_user_input_pause(s)
-            s.location_phase = "router"
+        blob = self.load_hitl_blob()
+        if blob:
+            s = self.apply_hitl_blob(s, blob)
+        if s.has_resolved_location:
             return dump_state(s)
 
-        # Already resolved earlier in the same run (should not re-geocode).
-        if s.has_resolved_location and not s.needs_input:
-            s.location_phase = "router"
-            s.stopped_for_user_input = False
-            return dump_state(s)
-
-        # Location source priority:
-        # explicit place hint -> existing location query -> LLM-extracted place from query.
         place = (s.place_hint or s.location_query).strip()
         if not place:
             place = await self._extract_location_hint()
@@ -138,8 +102,6 @@ class LocationGateNode(GraphNode):
         if not place:
             s.resolved_location = ResolvedLocationModel()
             s.location_candidates = []
-            _clear_user_input_pause(s)
-            s.location_phase = "router"
             return dump_state(s)
 
         found = await search_location_candidates(place, limit=8)
@@ -153,24 +115,16 @@ class LocationGateNode(GraphNode):
         if not found:
             s.resolved_location = ResolvedLocationModel()
             s.location_candidates = []
-            _clear_user_input_pause(s)
-            s.location_phase = "router"
             return dump_state(s)
 
-        # Skip confirmation when geocoding is unambiguous (single hit).
         if len(found) == 1:
             s.location_candidates = found
-            s.resolved_location = _candidate_to_resolved(found[0])
-            _clear_user_input_pause(s)
-            s.location_phase = "router"
+            s.resolved_location = resolved_location_from_candidate(found[0])
             return dump_state(s)
 
-        # Country-level matches should not block user flow with confirmation.
         if all(_is_country_candidate(c) for c in found):
             s.location_candidates = found
-            s.resolved_location = _candidate_to_resolved(found[0])
-            _clear_user_input_pause(s)
-            s.location_phase = "router"
+            s.resolved_location = resolved_location_from_candidate(found[0])
             return dump_state(s)
 
         s.location_candidates = found
@@ -180,13 +134,18 @@ class LocationGateNode(GraphNode):
             prompt="Several places match your query. Please choose a location.",
             location_query=place,
         )
-        s.needs_input = UserInputRouter.requests_to_dict({"location": location_request})
-        s.location_phase = "pause"
-        s.stopped_for_user_input = True
+        needs_input = UserInputRouter.requests_to_dict({"location": location_request})
+        s = await self.pause_for_hitl(
+            s,
+            {
+                "data": {"needs_input": needs_input},
+                "prompt": location_request.prompt,
+            },
+            blob=self.serialize_hitl_blob(s),
+        )
         return dump_state(s)
 
     async def _extract_location_hint(self) -> str:
-        """Extract a geocodable place from the current conversation."""
         response = await LLMModelRouter().call_structured(
             system_prompt=get_query_location_prompt(),
             response_model=LocationHint,
