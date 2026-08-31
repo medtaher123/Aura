@@ -60,4 +60,4 @@ class GeospatialModule(BaseModule):
             bdtopo_visualize_tool,
             infrastructure_query_tool,
         ):
-            mcp.add_tool(fn)
+            self.add_tool(mcp, fn)

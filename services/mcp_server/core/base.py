@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,10 @@ if TYPE_CHECKING:
 
     from core.context import SharedContext
     from core.requirements import Requirement
+
+# Keys written into MCP tool ``meta`` / ``_meta`` for agent_server discovery.
+MODULE_META_KEY = "module"
+MODULE_VERSION_META_KEY = "module_version"
 
 
 class HealthStatus:
@@ -100,6 +105,20 @@ class BaseModule(ABC):
                 overall = False
 
         return HealthStatus(healthy=overall, details=details, requirements=probed)
+
+    def add_tool(
+        self,
+        mcp: MCPServer,
+        fn: Callable[..., Any],
+        *,
+        meta: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Register ``fn`` and stamp Metaplanet module identity into MCP ``meta``."""
+        payload = dict(meta or {})
+        payload.setdefault(MODULE_META_KEY, self.name)
+        payload.setdefault(MODULE_VERSION_META_KEY, self.version)
+        mcp.add_tool(fn, meta=payload, **kwargs)
 
     @abstractmethod
     def register_tools(self, mcp: MCPServer, context: SharedContext) -> None:

@@ -53,4 +53,4 @@ class WeatherModule(BaseModule):
         from modules.weather.weather import weather_tool
 
         for fn in (weather_tool, nasa_power_hourly_tool, nasa_power_daily_tool):
-            mcp.add_tool(fn)
+            self.add_tool(mcp, fn)

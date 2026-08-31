@@ -31,4 +31,4 @@ class ImageryModule(BaseModule):
         from modules.imagery.tools_stac import query_stac_catalog
 
         for fn in (query_stac_catalog, maxar_open_data_imagery_tool):
-            mcp.add_tool(fn)
+            self.add_tool(mcp, fn)

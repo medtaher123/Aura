@@ -73,8 +73,8 @@ class FloodModule(BaseModule):
         from modules.flood.water_ingress import estimate_surface_water_ingress_tool
 
         for fn in (
-            get_terrazard_available_dates_tool,
-            get_terrazard_hazard_map_tool,
+            #get_terrazard_available_dates_tool,
+            #get_terrazard_hazard_map_tool,
             get_terrazard_flood_briefing_tool,
             get_terrazard_flood_damage_tool,
             geoserver_risk_mask_tool,
@@ -84,4 +84,4 @@ class FloodModule(BaseModule):
             streamflow_forecast_tool,
             drought_flood_risk_tool,
         ):
-            mcp.add_tool(fn)
+            self.add_tool(mcp, fn)

@@ -43,4 +43,4 @@ class HazardsModule(BaseModule):
             clms_burnt_area_impact_tool,
             clms_land_cover_exposure_tool,
         ):
-            mcp.add_tool(fn)
+            self.add_tool(mcp, fn)

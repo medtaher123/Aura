@@ -33,4 +33,4 @@ class UtilityModule(BaseModule):
             geo_info_tool,
             get_route_info,
         ):
-            mcp.add_tool(fn)
+            self.add_tool(mcp, fn)
