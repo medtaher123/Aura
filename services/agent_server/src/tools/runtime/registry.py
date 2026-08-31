@@ -76,6 +76,7 @@ class ToolRegistry:
         *,
         provider_id: str | None = None,
         source: str | None = None,
+        module: str | None = None,
         enabled_only: bool = True,
     ) -> list[ToolDescriptor]:
         out: list[ToolDescriptor] = []
@@ -85,6 +86,8 @@ class ToolRegistry:
             if provider_id is not None and descriptor.provider_id != provider_id:
                 continue
             if source is not None and descriptor.source != source:
+                continue
+            if module is not None and descriptor.module != module:
                 continue
             out.append(descriptor)
         return sorted(out, key=lambda d: d.name)

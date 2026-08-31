@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import ModuleTools, ToolPlanDomainNode
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
@@ -12,9 +12,14 @@ class DisasterDetectionNode(ToolPlanDomainNode):
     domain_name = "disaster_detection"
     status_message = "Querying disaster events..."
     tools = [
-        "query_disaster_events_tool",
-        "clms_land_cover_exposure_tool",
-        "cems_rapid_mapping_events_tool",
+        ModuleTools(
+            "hazards",
+            include=(
+                "query_disaster_events_tool",
+                "clms_land_cover_exposure_tool",
+                "cems_rapid_mapping_events_tool",
+            ),
+        ),
     ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:

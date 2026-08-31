@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
 from eo_llm.graph.domain_agent import DomainAgentRunResult, DomainToolAgent
@@ -14,7 +14,6 @@ from eo_llm.graph.state import GraphState, GraphStateModel
 from eo_llm.graph.tool_plan import (
     ToolExecutionResult,
     ToolExecutor,
-    ToolName,
     ToolPlan,
     ToolPlanner,
 )
@@ -23,6 +22,7 @@ from src.tools.filtering.agent_filter import (
     get_cached_agent_profile,
     resolve_allowed_tools,
 )
+from src.tools.runtime.registry import ToolRegistry
 from src.user_inputs import (
     BoundingBoxRequest,
     InputKind,
@@ -34,16 +34,83 @@ from src.user_inputs import (
 
 @dataclass(frozen=True)
 class DomainTool:
-    """One MCP tool available to a domain, with optional required user inputs."""
+    """One tool available to a domain, with optional required user inputs."""
 
-    name: ToolName
+    name: str
     required_user_inputs: tuple[InputKind, ...] = ()
 
 
-def _as_domain_tool(entry: ToolName | DomainTool) -> DomainTool:
+@dataclass(frozen=True)
+class ProviderTools:
+    """Select tools from an MCP/native provider by id."""
+
+    provider_id: str
+    include: tuple[str, ...] | Literal["*"] = "*"
+    exclude: tuple[str, ...] = ()
+
+    def tool_names(self, registry: ToolRegistry) -> list[str]:
+        names = [
+            descriptor.name
+            for descriptor in registry.list_descriptors(provider_id=self.provider_id)
+        ]
+        return _filter_tool_names(names, include=self.include, exclude=self.exclude)
+
+
+@dataclass(frozen=True)
+class ModuleTools:
+    """Select tools stamped with an MCP module name (Metaplanet ``meta.module``)."""
+
+    module: str
+    provider_id: str | None = None
+    include: tuple[str, ...] | Literal["*"] = "*"
+    exclude: tuple[str, ...] = ()
+
+    def tool_names(self, registry: ToolRegistry) -> list[str]:
+        names = [
+            descriptor.name
+            for descriptor in registry.list_descriptors(
+                provider_id=self.provider_id,
+                module=self.module,
+            )
+        ]
+        return _filter_tool_names(names, include=self.include, exclude=self.exclude)
+
+
+DomainToolEntry = str | DomainTool | ProviderTools | ModuleTools
+
+
+def _filter_tool_names(
+    names: list[str],
+    *,
+    include: tuple[str, ...] | Literal["*"],
+    exclude: tuple[str, ...],
+) -> list[str]:
+    if include != "*":
+        allowed = set(include)
+        names = [name for name in names if name in allowed]
+    if exclude:
+        banned = set(exclude)
+        names = [name for name in names if name not in banned]
+    return names
+
+
+def _as_domain_tool(entry: str | DomainTool) -> DomainTool:
     if isinstance(entry, DomainTool):
         return entry
     return DomainTool(name=entry)
+
+
+def _expandable_tool_entry(entry: object) -> bool:
+    return isinstance(entry, (ProviderTools, ModuleTools))
+
+
+def _tool_gateway_registry() -> ToolRegistry | None:
+    try:
+        from src.tools.runtime.gateway import get_tool_gateway
+
+        return get_tool_gateway().registry
+    except Exception:
+        return None
 
 
 class DomainNode(GraphNode):
@@ -74,50 +141,61 @@ class DomainNode(GraphNode):
 class DomainToolsNode(DomainNode):
     """Domain node with a shared tool catalog (used by plan-based and agentic nodes)."""
 
-    shared_tools: ClassVar[list[ToolName]] = ["web_search_tool"]
-    tools: ClassVar[list[ToolName | DomainTool]]
-    _tools_registry: ClassVar[dict[str, list[str]]] = {}
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        domain_name = getattr(cls, "domain_name", None)
-        tools = getattr(cls, "tools", None)
-        if domain_name and tools is not None:
-            DomainToolsNode._tools_registry[domain_name] = cls.resolved_tools()
+    shared_tools: ClassVar[list[str]] = ["web_search_tool"]
+    tools: ClassVar[list[DomainToolEntry]]
 
     @classmethod
     def tool_specs(cls) -> dict[str, DomainTool]:
         specs: dict[str, DomainTool] = {}
         for entry in cls.tools:
+            if _expandable_tool_entry(entry):
+                continue
             spec = _as_domain_tool(entry)
             specs[spec.name] = spec
         return specs
 
     @classmethod
-    def resolved_tools(cls) -> list[str]:
+    def _catalog_tool_names(cls, registry: ToolRegistry | None) -> list[str]:
         seen: set[str] = set()
         out: list[str] = []
         for entry in [*cls.shared_tools, *cls.tools]:
-            name = entry if isinstance(entry, str) else entry.name
-            if name in seen:
-                continue
-            seen.add(name)
-            out.append(name)
-        allowed = resolve_allowed_tools(out, get_cached_agent_profile())
-        try:
-            from src.tools.runtime.gateway import get_tool_gateway
+            if isinstance(entry, (ProviderTools, ModuleTools)):
+                if registry is None:
+                    continue
+                names = entry.tool_names(registry)
+            elif isinstance(entry, DomainTool):
+                names = [entry.name]
+            else:
+                names = [entry]
+            for name in names:
+                if name in seen:
+                    continue
+                seen.add(name)
+                out.append(name)
+        return out
 
-            registry = get_tool_gateway().registry
-            available = {d.name for d in registry.list_descriptors()}
-            if available:
-                allowed = [name for name in allowed if name in available]
-        except Exception:
-            pass
+    @classmethod
+    def resolved_tools(cls) -> list[str]:
+        registry = _tool_gateway_registry()
+        names = cls._catalog_tool_names(registry)
+        allowed = resolve_allowed_tools(names, get_cached_agent_profile())
+        if registry is None:
+            return allowed
+        available = {d.name for d in registry.list_descriptors()}
+        if available:
+            allowed = [name for name in allowed if name in available]
         return allowed
 
     @classmethod
     def tools_for(cls, domain: str) -> list[str]:
-        return list(cls._tools_registry.get(domain, []))
+        node_cls = GraphNode._registry.get(domain)
+        if (
+            node_cls is None
+            or not issubclass(node_cls, DomainToolsNode)
+            or getattr(node_cls, "tools", None) is None
+        ):
+            return []
+        return node_cls.resolved_tools()
 
     def user_input_satisfied(self, kind: InputKind, s: GraphStateModel) -> bool:
         if kind == "bounding_box":

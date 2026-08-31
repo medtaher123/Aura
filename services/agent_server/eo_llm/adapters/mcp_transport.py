@@ -43,17 +43,52 @@ def tool_input_schema(tool: Any) -> dict[str, Any]:
     return {}
 
 
+def tool_meta_dict(tool: Any) -> dict[str, Any]:
+    """Read MCP tool ``meta`` / ``_meta`` from an SDK object or plain namespace."""
+    for attr in ("meta", "_meta"):
+        value = getattr(tool, attr, None)
+        if isinstance(value, dict):
+            return value
+    dump = getattr(tool, "model_dump", None)
+    if callable(dump):
+        data = dump(by_alias=True)
+        if isinstance(data, dict):
+            for key in ("_meta", "meta"):
+                nested = data.get(key)
+                if isinstance(nested, dict):
+                    return nested
+    return {}
+
+
+def tool_module_from_mcp_tool(tool: Any) -> str | None:
+    """Extract Metaplanet module name from MCP tool metadata, if present."""
+    meta = tool_meta_dict(tool)
+    module = meta.get("module")
+    if isinstance(module, str) and module.strip():
+        return module.strip()
+    nested = meta.get("metaplanet")
+    if isinstance(nested, dict):
+        module = nested.get("module")
+        if isinstance(module, str) and module.strip():
+            return module.strip()
+    return None
+
+
 def tool_metadata_from_mcp_tool(tool: Any) -> dict[str, Any]:
     """Normalize list_tools entries into planner-friendly metadata."""
     schema = tool_input_schema(tool)
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     required = schema.get("required", []) if isinstance(schema, dict) else []
-    return {
+    out: dict[str, Any] = {
         "all_params": [str(k) for k in properties.keys()] if isinstance(properties, dict) else [],
         "required_params": [str(k) for k in required] if isinstance(required, list) else [],
         "docstring": str(getattr(tool, "description", "") or ""),
         "input_schema": schema,
     }
+    module = tool_module_from_mcp_tool(tool)
+    if module is not None:
+        out["module"] = module
+    return out
 
 
 def extract_tool_payload(tool_name: str, result: Any) -> Any:

@@ -145,6 +145,7 @@ class ToolDefinitionRepository(BaseRepository[ToolDefinition]):
         description: str,
         input_schema: dict[str, Any],
         mcp_server_id: Optional[uuid.UUID] = None,
+        module: Optional[str] = None,
     ) -> ToolDefinition:
         existing = await self.get_by_name(name)
         now = datetime.now(timezone.utc)
@@ -154,6 +155,7 @@ class ToolDefinitionRepository(BaseRepository[ToolDefinition]):
             existing.description = description
             existing.input_schema = input_schema
             existing.mcp_server_id = mcp_server_id
+            existing.module = module
             existing.enabled = True
             existing.discovered_at = existing.discovered_at or now
             existing.updated_at = now
@@ -169,6 +171,7 @@ class ToolDefinitionRepository(BaseRepository[ToolDefinition]):
             description=description,
             input_schema=input_schema,
             mcp_server_id=mcp_server_id,
+            module=module,
             enabled=True,
             discovered_at=now,
             updated_at=now,

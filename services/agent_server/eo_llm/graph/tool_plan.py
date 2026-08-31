@@ -25,38 +25,6 @@ from src.core.singleton_meta import SingletonMeta
 from src.tools.contracts import ToolArtifacts, ToolResponse
 
 
-DomainName = Literal[
-    "flood_damage",
-    "fire_detection",
-    "disaster_detection",
-    "infrastructure",
-    "stac",
-]
-ToolName = Literal[
-    "get_terrazard_available_dates_tool",
-    "get_terrazard_hazard_map_tool",
-    "get_terrazard_flood_briefing_tool",
-    "get_terrazard_flood_damage_tool",
-    "geoserver_risk_mask_tool",
-    "flood_damage_city_tool",
-    "flood_depth_damage_tool",
-    "streamflow_forecast_tool",
-    "estimate_surface_water_ingress_tool",
-    "bdtopo_visualize_tool",
-    "detect_fire_tool",
-    "clms_burnt_area_impact_tool",
-    "query_disaster_events_tool",
-    "clms_land_cover_exposure_tool",
-    "cems_rapid_mapping_events_tool",
-    "infrastructure_query_tool",
-    "get_route_info",
-    "query_stac_catalog",
-    "maxar_open_data_imagery_tool",
-    "web_search_tool",
-    "bdtopo_query_tool",
-    "bdtopo_intersection_tool",
-    "bdtopo_thematic_explain_tool",
-]
 BackoffMode = Literal["none", "fixed", "exponential_jitter"]
 FailureAction = Literal["continue", "fallback_to_step", "abort_domain"]
 StopMode = Literal["run_all", "stop_on_first_success", "stop_on_confidence"]
@@ -102,7 +70,7 @@ class ToolStepPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
-    tool_name: ToolName
+    tool_name: str
     priority: int = Field()
     required_inputs: list[str] = Field(default_factory=list)
     parallel_group: str | None = None
@@ -129,7 +97,7 @@ class ToolStepExecution(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
-    tool_name: ToolName
+    tool_name: str
     status: Literal["done", "error", "skipped"]
     attempts: int = Field(ge=0)
     latency_ms: int = Field(ge=0)

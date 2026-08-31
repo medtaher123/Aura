@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from eo_llm.graph.nodes.domains.agentic_test_node import AgenticTestNode
-from eo_llm.graph.nodes.domain_base import AgenticDomainNode
+from eo_llm.graph.nodes.domain_base import AgenticDomainNode, ProviderTools
 from eo_llm.graph.state import validate_state
 from eo_llm.graph.tests.conftest import simulate_hitl_resume
 
@@ -19,15 +19,15 @@ def test_agentic_test_node_extends_agentic_domain_node():
 
 
 def test_agentic_test_node_tool_catalog():
-    tool_names = [entry.name if hasattr(entry, "name") else entry for entry in AgenticTestNode.tools]
-    assert "calculator" in tool_names
-    assert "request_location_user_input" in tool_names
-    assert "request_bounding_box_user_input" in tool_names
+    assert AgenticTestNode.tools == [
+        ProviderTools("native"),
+        ProviderTools("nominatim"),
+    ]
 
 
 def test_agentic_test_node_registers_tools():
     tools = AgenticTestNode.resolved_tools()
-    assert "calculator" in tools
+    assert "web_search_tool" in tools
     assert AgenticTestNode.tools_for("agentic_test") == tools
 
 

@@ -51,9 +51,6 @@ def test_websocket_chat_request():
         websocket.send_json({
             "type": "chat_request",
             "message": "Hello, agent!",
-            "chat_history": [],
-            "confirmed_locations": {},
-            "document_context": None,
         })
 
         # Should receive status update

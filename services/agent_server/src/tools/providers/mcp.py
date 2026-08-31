@@ -154,6 +154,7 @@ class McpToolProvider(ToolProvider):
                 continue
             meta = tool_metadata_from_mcp_tool(tool)
             self._metadata_cache[name] = meta
+            module = meta.get("module")
             descriptors.append(
                 ToolDescriptor(
                     id=self._db_tool_ids.get(name),
@@ -164,6 +165,7 @@ class McpToolProvider(ToolProvider):
                     input_schema=dict(meta.get("input_schema") or {}),
                     enabled=True,
                     mcp_server_id=self.mcp_server_id,
+                    module=str(module) if isinstance(module, str) and module else None,
                 )
             )
         return descriptors

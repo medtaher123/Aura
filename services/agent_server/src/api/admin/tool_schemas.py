@@ -38,6 +38,7 @@ class ToolDefinitionRead(BaseModel):
     source: Literal["native", "mcp"]
     provider_slug: str
     mcp_server_id: Optional[uuid.UUID] = None
+    module: Optional[str] = None
     description: str
     enabled: bool
     discovered_at: Optional[datetime] = None

@@ -25,6 +25,7 @@ class ToolDescriptor:
     input_schema: dict[str, Any]
     enabled: bool = True
     mcp_server_id: UUID | None = None
+    module: str | None = None
 
 
 @dataclass

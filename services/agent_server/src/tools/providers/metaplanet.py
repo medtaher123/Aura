@@ -8,13 +8,14 @@ primary provider, and it exposes Metaplanet-specific management APIs
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
 import httpx
 
 from src.tools.providers.mcp import McpToolProvider
-from src.tools.providers.base import ProviderHealth
+from src.tools.providers.base import ProviderHealth, ToolDescriptor
 
 METAPLANET_MCP_SLUG = "metaplanet"
 METAPLANET_MCP_DISPLAY_NAME = "Metaplanet MCP"
@@ -43,6 +44,47 @@ class MetaplanetMcpProvider(McpToolProvider):
             mcp_server_id=mcp_server_id,
             db_tool_ids=db_tool_ids,
         )
+
+    async def discover_tools(self) -> list[ToolDescriptor]:
+        """Discover tools and attach module names from meta and/or management API."""
+        descriptors = await super().discover_tools()
+        module_by_tool = await self._module_by_tool_name()
+        if not module_by_tool:
+            return descriptors
+
+        enriched: list[ToolDescriptor] = []
+        for descriptor in descriptors:
+            module = descriptor.module or module_by_tool.get(descriptor.name)
+            if module and module != descriptor.module:
+                if self._metadata_cache is not None and descriptor.name in self._metadata_cache:
+                    self._metadata_cache[descriptor.name]["module"] = module
+                enriched.append(replace(descriptor, module=module))
+            else:
+                enriched.append(descriptor)
+        return enriched
+
+    async def _module_by_tool_name(self) -> dict[str, str]:
+        """Map tool name → module using ``/api/dashboard/modules`` registered_tools."""
+        payload = await self.fetch_management_modules()
+        if not isinstance(payload, dict):
+            return {}
+        modules = payload.get("modules")
+        if not isinstance(modules, list):
+            return {}
+        mapping: dict[str, str] = {}
+        for entry in modules:
+            if not isinstance(entry, dict):
+                continue
+            module_name = entry.get("name")
+            tools = entry.get("registered_tools")
+            if not isinstance(module_name, str) or not module_name.strip():
+                continue
+            if not isinstance(tools, list):
+                continue
+            for tool_name in tools:
+                if isinstance(tool_name, str) and tool_name.strip():
+                    mapping[tool_name] = module_name.strip()
+        return mapping
 
     async def health(self) -> ProviderHealth:
         """Use Metaplanet's HTTP ``/health`` endpoint when available."""

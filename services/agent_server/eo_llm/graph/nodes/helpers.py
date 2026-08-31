@@ -49,6 +49,13 @@ class LocationContext:
             return None
         return self.resolved_area.as_list()
 
+    @property
+    def bbox_args(self) -> dict[str, float] | None:
+        """Structured bbox for tools that take named min/max lat/lon fields."""
+        if self.resolved_area is None:
+            return None
+        return self.resolved_area.as_tool_args()
+
     def known_coords(self) -> dict[str, float]:
         """Lat/lon only when resolved — omit keys so the arg-resolver LLM can fill gaps."""
         out: dict[str, float] = {}

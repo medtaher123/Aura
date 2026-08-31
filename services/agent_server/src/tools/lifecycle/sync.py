@@ -61,6 +61,7 @@ class ToolCatalogSyncService:
                 description=descriptor.description,
                 input_schema=descriptor.input_schema,
                 mcp_server_id=None,
+                module=None,
             )
             count += 1
         return count
@@ -117,6 +118,7 @@ class ToolCatalogSyncService:
                 description=descriptor.description,
                 input_schema=descriptor.input_schema,
                 mcp_server_id=server.id,
+                module=descriptor.module,
             )
             active_names.append(descriptor.name)
 

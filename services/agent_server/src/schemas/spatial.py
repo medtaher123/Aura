@@ -46,6 +46,15 @@ class BoundingBox(Area):
     def as_list(self) -> list[float]:
         return [self.min_lat, self.max_lat, self.min_lon, self.max_lon]
 
+    def as_tool_args(self) -> dict[str, float]:
+        """Named fields for MCP tools that expect a structured bbox object."""
+        return {
+            "min_lat": self.min_lat,
+            "max_lat": self.max_lat,
+            "min_lon": self.min_lon,
+            "max_lon": self.max_lon,
+        }
+
     def centroid(self) -> tuple[float, float]:
         return (
             (self.min_lat + self.max_lat) / 2.0,

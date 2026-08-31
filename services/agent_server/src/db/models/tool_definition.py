@@ -36,6 +36,7 @@ class ToolDefinition(BaseModel):
         nullable=True,
     )
     provider_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    module: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     description: Mapped[str] = mapped_column(Text(), nullable=False, default="")
     input_schema: Mapped[dict[str, Any]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"),

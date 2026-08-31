@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import ModuleTools, ToolPlanDomainNode
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
@@ -12,8 +12,10 @@ class FireDetectionNode(ToolPlanDomainNode):
     domain_name = "fire_detection"
     status_message = "Detecting fires..."
     tools = [
-        "detect_fire_tool",
-        "clms_burnt_area_impact_tool",
+        ModuleTools(
+            "hazards",
+            include=("detect_fire_tool", "clms_burnt_area_impact_tool"),
+        ),
     ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
