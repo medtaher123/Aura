@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 from core.logger import get_logger
 from modules.flood.terrazard.errors import TerrazardDataError
 from utils.bbox_service import get_city_bbox, reverse_geocode
@@ -102,23 +104,32 @@ def resolve_spatial_context(
         "Please specify a bbox, location, or lat/lon coordinates."
     )
 
-def normalize_terrazard_date(value: str | None, *, field_name: str = "date") -> str:
-    """Normalize YYYYMMDD or YYYY-MM-DD to compact YYYYMMDD."""
+def parse_terrazard_date(value: str | None, *, field_name: str = "date") -> date:
+    """Parse YYYYMMDD or YYYY-MM-DD into a calendar ``date``."""
     if not value:
         raise TerrazardDataError(f"Please specify a {field_name} (YYYYMMDD).")
 
     raw = str(value).strip()
-    if len(raw) == 8 and raw.isdigit():
-        return raw
-
-    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
-        compact = raw.replace("-", "")
-        if len(compact) == 8 and compact.isdigit():
-            return compact
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
 
     raise TerrazardDataError(
         f"{field_name} must be YYYYMMDD or YYYY-MM-DD format."
     )
+
+
+def format_terrazard_date(value: date) -> str:
+    """Format a calendar date as TerraZard compact YYYYMMDD."""
+    return value.strftime("%Y%m%d")
+
+
+def normalize_terrazard_date(value: str | None, *, field_name: str = "date") -> str:
+    """Normalize YYYYMMDD or YYYY-MM-DD to compact YYYYMMDD."""
+    return format_terrazard_date(parse_terrazard_date(value, field_name=field_name))
+
 
 def validate_dates(start_date: str | None, end_date: str | None) -> tuple[str, str]:
     """Ensure both date bounds are present and return normalized YYYYMMDD values."""
@@ -130,6 +141,7 @@ def validate_dates(start_date: str | None, end_date: str | None) -> tuple[str, s
         normalize_terrazard_date(start_date, field_name="start_date"),
         normalize_terrazard_date(end_date, field_name="end_date"),
     )
+
 
 def validate_observation_date(observation_date: str | None) -> str:
     """Ensure a single observation date is present and return normalized YYYYMMDD."""

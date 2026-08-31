@@ -2,20 +2,42 @@
 
 from __future__ import annotations
 
+from geopy.distance import geodesic
+
 from core.logger import get_logger
 from modules.flood.terrazard.damage_service import FloodDamageService
 from modules.flood.terrazard.map_artifact_builder import build_damage_exposure_map_artifact
 from modules.flood.terrazard.repository import HazardMaskRepository
 from modules.flood.terrazard.spatial import (
     handle_terrazard_error,
-    normalize_terrazard_date,
+    parse_terrazard_date,
     resolve_from_bbox,
 )
-from utils.contracts import ToolArtifacts, ToolResponse
+from utils.contracts import BoundingBox, ToolArtifacts, ToolResponse
 
 logger = get_logger(__name__)
 
 TOOL_NAME = "get_terrazard_flood_damage_tool"
+BBOX_MAX_SIDE_KM = 1000.0
+
+
+def _bbox_side_lengths_km(bbox: list[float]) -> tuple[float, float]:
+    """Return ``(width_km, height_km)`` for ``[min_lat, max_lat, min_lon, max_lon]``."""
+    min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+    mid_lat = (min_lat + max_lat) / 2.0
+    mid_lon = (min_lon + max_lon) / 2.0
+    height_km = geodesic((min_lat, mid_lon), (max_lat, mid_lon)).kilometers
+    width_km = geodesic((mid_lat, min_lon), (mid_lat, max_lon)).kilometers
+    return width_km, height_km
+
+
+def is_bbox_within_limit(
+    bbox: list[float], *, max_side_km: float = BBOX_MAX_SIDE_KM
+) -> bool:
+    """True when both bbox sides are at most ``max_side_km`` (default 1000 km)."""
+    width_km, height_km = _bbox_side_lengths_km(bbox)
+    return width_km <= max_side_km and height_km <= max_side_km
+
 
 def _build_exposure_artifacts(
     *,
@@ -52,39 +74,68 @@ def _build_exposure_artifacts(
         logger.warning("Could not build flood damage exposure map: %s", exc)
         return ToolArtifacts()
 
+
 def get_terrazard_flood_damage_tool(
     observation_date: str,
-    bbox: list[float],
-    model_id: str | None = None,
+    bbox: BoundingBox,
+    # model_id: str | None = None,
     country: str = "France",
-    year: int | None = None,
+    # year: int | None = None,
     continent: str = "Europe",
 ) -> ToolResponse:
-    """
+    f"""
     Estimate flood damage from TerraZard observed flood polygons and BDTOPO land use.
 
     TerraZard hazard polygons are nested by minimum depth (e.g. >=0 m, >=0.25 m).
     This tool derives exclusive depth bands, clips BDTOPO buildings and agricultural
     land onto each band, and applies JRC depth-damage curves by land type.
 
-    Requires an explicit ``bbox`` ``[min_lat, max_lat, min_lon, max_lon]`` for the
+    Requires an explicit ``bbox`` object with named fields
+    ``min_lat``, ``max_lat``, ``min_lon``, ``max_lon`` (WGS84 degrees) for the
     analysis area (typically a user-drawn map selection).
+    The bounding box can be retrieved by using the bounding box input.
+    If the bounding box is not available, call the bounding box input to get the bounding box.
 
     On success, also returns a light vector-tile map artifact stacking TerraZard
     flood tiles with BDTOPO buildings and vegetation (tile URLs only).
+
+    this tool is only available for France.
+    The calculation is heavy and takes time, the bouding box should not be larger than {BBOX_MAX_SIDE_KM:.0f}km x {BBOX_MAX_SIDE_KM:.0f}km.
+    the smaller the better
     """
+
+    if country.lower() != "france":
+        return ToolResponse(
+            tool_name=TOOL_NAME,
+            message=f"This tool is only available for France. Got {country}.",
+            error=True,
+        )
+
+    bbox_list = bbox.as_list()
+    if not is_bbox_within_limit(bbox_list):
+        width_km, height_km = _bbox_side_lengths_km(bbox_list)
+        return ToolResponse(
+            tool_name=TOOL_NAME,
+            message=(
+                f"The bounding box should not be larger than "
+                f"{BBOX_MAX_SIDE_KM:.0f}km x {BBOX_MAX_SIDE_KM:.0f}km. "
+                f"Got {width_km:.1f}km x {height_km:.1f}km."
+            ),
+            error=True,
+        )
+
     try:
-        normalized_date = normalize_terrazard_date(
+        obs_date = parse_terrazard_date(
             observation_date, field_name="observation_date"
         )
-        coords, resolved_bbox, resolved_name = resolve_from_bbox(bbox)
+        coords, resolved_bbox, resolved_name = resolve_from_bbox(bbox_list)
         estimate = FloodDamageService().estimate(
-            observation_date=normalized_date,
+            observation_date=obs_date,
             bbox=resolved_bbox,
             location_name=resolved_name,
-            model_id=model_id,
+            # model_id=model_id,
             country=country,
-            year=year,
+            # year=year,
             continent=continent,
         )
 

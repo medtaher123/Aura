@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from modules.geospatial.bdtopo_common import resolve_database_url
@@ -16,6 +17,7 @@ from modules.flood.terrazard.depth_bands import DepthBand, fetch_hazard_depth_po
 from modules.flood.terrazard.depth_raster import build_depth_raster
 from modules.flood.terrazard.errors import TerrazardDataError
 from modules.flood.terrazard.repository import HazardMaskRepository
+from modules.flood.terrazard.spatial import format_terrazard_date
 from modules.flood.terrazard.tile_url_builder import HazardLayerTileBuilder
 
 @dataclass(frozen=True)
@@ -60,32 +62,34 @@ class FloodDamageService:
     def estimate(
         self,
         *,
-        observation_date: str,
+        observation_date: date,
         bbox: list[float],
         location_name: str,
-        model_id: str | None = None,
+        #model_id: str | None = None,
         country: str = "France",
-        year: int | None = None,
+        #year: int | None = None,
         continent: str = "Europe",
     ) -> FloodDamageEstimate:
-        resolved_model = HazardLayerTileBuilder.validate_model_id(
-            model_id or "flood80"
-        )
+        #resolved_model = HazardLayerTileBuilder.validate_model_id(
+        #    model_id or "flood80"
+        #)
+        resolved_model = "flood80"
         if not resolve_database_url():
             raise TerrazardDataError(
                 "BDTOPO database is not configured. Set BDTOPO_DATABASE_URL."
             )
 
+        date_key = format_terrazard_date(observation_date)
         map_stats = self._repository.get_map_stats(
-            observation_date, resolved_model, bbox
+            date_key, resolved_model, bbox
         )
         if map_stats.water_count <= 0:
             raise TerrazardDataError(
-                f"No TerraZard flood polygons found for {location_name} on {observation_date}."
+                f"No TerraZard flood polygons found for {location_name} on {date_key}."
             )
 
         hazard_polygons = fetch_hazard_depth_polygons(
-            observation_date=observation_date,
+            observation_date=date_key,
             model_id=resolved_model,
             bbox=bbox,
         )
@@ -106,7 +110,7 @@ class FloodDamageService:
         zonal = collect_bdtopo_exposure(depth_raster, bdtopo_features)
         exposure_slices = zonal.exposure_slices
 
-        resolved_year = _resolve_year(year)
+        resolved_year = observation_date.year
         breakdown_rows = self._damage_breakdown(
             exposure_slices,
             country=country,
@@ -153,13 +157,13 @@ class FloodDamageService:
             )
 
         message = (
-            f"Estimated TerraZard flood damage for {location_name} on {observation_date}: "
+            f"Estimated TerraZard flood damage for {location_name} on {date_key}: "
             f"€{total_damage:,.0f} across {total_exposed_area:,.0f} m² of exposed BDTOPO "
             f"footprint ({building_count} buildings) in {len(depth_bands)} depth bands."
         )
 
         return FloodDamageEstimate(
-            observation_date=observation_date,
+            observation_date=date_key,
             model_id=resolved_model,
             location_name=location_name,
             country=country,

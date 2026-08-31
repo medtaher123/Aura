@@ -7,7 +7,7 @@ Shared utilities for MCP tools to maintain consistent response format.
 from __future__ import annotations
 from typing_extensions import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ToolArtifacts(BaseModel):
@@ -16,6 +16,47 @@ class ToolArtifacts(BaseModel):
     maps: List[Any] = []
     thumbnails: List[str] = []
     urls: List[str] = []
+
+
+class BoundingBox(BaseModel):
+    """Axis-aligned WGS84 bounding box with named corners (order-safe for tool calls)."""
+
+    min_lat: float = Field(
+        ...,
+        ge=-90.0,
+        le=90.0,
+        description="Southern latitude bound (degrees)",
+    )
+    max_lat: float = Field(
+        ...,
+        ge=-90.0,
+        le=90.0,
+        description="Northern latitude bound (degrees)",
+    )
+    min_lon: float = Field(
+        ...,
+        ge=-180.0,
+        le=180.0,
+        description="Western longitude bound (degrees)",
+    )
+    max_lon: float = Field(
+        ...,
+        ge=-180.0,
+        le=180.0,
+        description="Eastern longitude bound (degrees)",
+    )
+
+    @model_validator(mode="after")
+    def validate_order(self) -> BoundingBox:
+        if self.min_lat > self.max_lat:
+            raise ValueError("min_lat must be <= max_lat")
+        if self.min_lon > self.max_lon:
+            raise ValueError("min_lon must be <= max_lon")
+        return self
+
+    def as_list(self) -> list[float]:
+        """Legacy list form ``[min_lat, max_lat, min_lon, max_lon]`` for internal APIs."""
+        return [self.min_lat, self.max_lat, self.min_lon, self.max_lon]
 
 
 class ToolCoordinates(BaseModel):
