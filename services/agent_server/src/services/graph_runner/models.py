@@ -8,7 +8,6 @@ from typing import Any, Self
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
-from eo_llm.graph.hitl import state_update_from_attachments
 from eo_llm.graph.state import GraphState
 from src.core.event_emitter import EventEmitter
 from src.db.models.message import InputResponseMessage, Message, UserMessage
@@ -129,11 +128,8 @@ class GraphResumeRequest(GraphRunnerRequest):
         )
 
     def to_graph_input(self) -> Command:
-        state_patch = state_update_from_attachments(
-            self.message.attachments,
-            self.hitl_blobs,
-        )
+        # Attachment effects are applied in-node via hitl_resume_context + hydrate.
+        # Command(update=...) races with dump_state and raises InvalidUpdateError.
         return Command(
-            update=state_patch or None,
             resume={"data": {"attachments": dump_attachments(self.message.attachments)}},
         )

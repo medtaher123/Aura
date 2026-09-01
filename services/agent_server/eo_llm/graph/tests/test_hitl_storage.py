@@ -32,12 +32,17 @@ def test_resume_context_exposes_blobs() -> None:
     thread_id = "test-resume"
     with hitl_store.hitl_resume_context(
         {"agentic_test": {"tool_call_records": [{"tool_name": "x"}]}},
+        attachments=[{"type": "location", "name": "Paris", "coordinates": [1.0, 2.0]}],
         thread_id=thread_id,
     ):
         assert hitl_store.get_resume_blob("agentic_test", thread_id=thread_id) == {
             "tool_call_records": [{"tool_name": "x"}]
         }
+        assert hitl_store.get_resume_attachments(thread_id=thread_id) == [
+            {"type": "location", "name": "Paris", "coordinates": [1.0, 2.0]}
+        ]
     assert hitl_store.get_resume_blob("agentic_test", thread_id=thread_id) is None
+    assert hitl_store.get_resume_attachments(thread_id=thread_id) == []
 
 
 def test_state_update_from_location_attachment_and_blob() -> None:

@@ -18,13 +18,13 @@ class FloodDamageNode(AgenticDomainNode):
     status_message = "Analyzing floods..."
     tools = [
         ModuleTools("flood"),
-        ModuleTools("geospatial", include=("bdtopo_visualize_tool",)),
+        #ModuleTools("geospatial", include=("bdtopo_visualize_tool",)),
         DomainTool(
             "get_terrazard_flood_damage_tool",
             required_user_inputs=("bounding_box",),
         ),
         ProviderTools("native"),
-        ProviderTools("nominatim"),
+        #ProviderTools("nominatim"),
     ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
@@ -43,11 +43,11 @@ class FloodDamageNode(AgenticDomainNode):
             #         **coords,
             #     }
             # ),
-            "get_terrazard_flood_damage_tool": omit_none(
-                {
-                    "bbox": ctx.bbox_args,
-                }
-            ),
+            # "get_terrazard_flood_damage_tool": omit_none(
+            #     {
+            #         "bbox": ctx.bbox_args,
+            #     }
+            # ),
             "geoserver_risk_mask_tool": omit_none(
                 {
                     "risk_type": "flood",

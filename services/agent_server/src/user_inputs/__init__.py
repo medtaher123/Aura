@@ -7,11 +7,22 @@ from src.user_inputs.location import (
     LocationRequest,
     LocationUserInput,
 )
+from src.user_inputs.multiple_choice import (
+    MultipleChoiceOption,
+    MultipleChoiceRequest,
+    MultipleChoiceUserInput,
+)
 from src.user_inputs.router import UserInputRouter
-from src.user_inputs.types import InputKind, OSMPrefixType, OSMType, get_osm_type_prefix
+from src.user_inputs.types import (
+    InputKind,
+    OTHER_OPTION_ID,
+    OSMPrefixType,
+    OSMType,
+    get_osm_type_prefix,
+)
 
 # Import concrete kinds so ``UserInput.__init_subclass__`` registers them.
-_ = (LocationUserInput, BoundingBoxUserInput)
+_ = (LocationUserInput, BoundingBoxUserInput, MultipleChoiceUserInput)
 
 __all__ = [
     "BoundingBoxRequest",
@@ -20,6 +31,10 @@ __all__ = [
     "LocationCandidate",
     "LocationRequest",
     "LocationUserInput",
+    "MultipleChoiceOption",
+    "MultipleChoiceRequest",
+    "MultipleChoiceUserInput",
+    "OTHER_OPTION_ID",
     "OSMPrefixType",
     "OSMType",
     "UserInput",

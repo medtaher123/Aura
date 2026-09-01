@@ -29,7 +29,7 @@ class DomainAgentRunResult(BaseModel):
 class DomainToolAgent:
     """Run an LLM ↔ tool loop until a final answer or a user-input pause."""
 
-    def __init__(self, *, max_rounds: int = 8) -> None:
+    def __init__(self, *, max_rounds: int = 10) -> None:
         self._max_rounds = max(1, int(max_rounds))
 
     async def run(

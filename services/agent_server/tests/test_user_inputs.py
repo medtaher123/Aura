@@ -37,6 +37,9 @@ def test_bounding_box_helpers():
 def test_user_input_registry():
     assert UserInput.for_kind("location") is LocationUserInput
     assert UserInput.for_kind("bounding_box") is BoundingBoxUserInput
+    from src.user_inputs import MultipleChoiceUserInput
+
+    assert UserInput.for_kind("multiple_choice") is MultipleChoiceUserInput
     with pytest.raises(ValueError):
         UserInput.for_kind("unknown")
 

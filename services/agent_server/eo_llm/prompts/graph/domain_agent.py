@@ -5,7 +5,7 @@ from __future__ import annotations
 from eo_llm.prompts.builder import PromptSpec, render_system
 from eo_llm.prompts.shared.grounding import GROUNDING_RULES
 from eo_llm.prompts.shared.user_experience import USER_EXPERIENCE_RULES
-from eo_llm.prompts.graph.tool_planner_rules import DOMAIN_TOOL_RULES
+from eo_llm.prompts.graph.tool_planner_rules import DOMAIN_TOOL_EXAMPLES, DOMAIN_TOOL_RULES
 
 _AGENT_RULES: tuple[str, ...] = (
     *GROUNDING_RULES,
@@ -15,7 +15,9 @@ _AGENT_RULES: tuple[str, ...] = (
     "Call one or more tools when needed; read tool results before deciding next steps.",
     "When you have enough information, reply with a concise final answer in plain language.",
     "Do not invent tool outputs or geospatial facts.",
-    "Prefer domain-specific tools first; use web_search_tool only for recent context gaps.",
+    "Use user input tools to get user input when needed",
+    "User input tools like request_location_user_input and request_bbox_user_input are available to you to get user input when needed",
+    "Prefer user input tools over asking the user through text message"
     "If a tool requests user input (location, bounding box), call it and stop — do not guess.",
     "When geocoding or place lookup returns multiple locations that match the same string, "
     "call request_location_user_input so the user can confirm which place they mean. "
@@ -25,17 +27,17 @@ _AGENT_RULES: tuple[str, ...] = (
 )
 
 
-def get_domain_agent_prompt(*, domain: str, allowed_tools: list[str]) -> str:
+def get_domain_agent_prompt(*, domain: str) -> str:
     domain_rules = DOMAIN_TOOL_RULES.get(domain, ())
+    
     spec = PromptSpec(
         role="You are AURA's domain analyst.",
         task=f"Answer the user query for the {domain} domain using available tools.",
         rules=(*_AGENT_RULES, *domain_rules),
-        examples=(),
+        examples=DOMAIN_TOOL_EXAMPLES.get(domain, ()),
         include_schema_rules=False,
     )
     return render_system(
         spec,
         domain=domain,
-        allowed_tools=", ".join(allowed_tools),
     )

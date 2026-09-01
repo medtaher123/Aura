@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
 from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+from eo_llm.graph import hitl as hitl_store
 from eo_llm.graph.domain_agent import DomainAgentRunResult, DomainToolAgent
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.nodes.helpers import LocationContext, wrap_domain_result
@@ -27,6 +28,7 @@ from src.user_inputs import (
     BoundingBoxRequest,
     InputKind,
     LocationRequest,
+    UserInput,
     UserInputRequest,
     UserInputRouter,
 )
@@ -250,7 +252,6 @@ class AgenticDomainNode(DomainToolsNode):
     def build_system_prompt(self, s: GraphStateModel, ctx: LocationContext) -> str:
         return get_domain_agent_prompt(
             domain=self.domain_name,
-            allowed_tools=self.resolved_tools(),
         )
 
     @abstractmethod
@@ -283,6 +284,10 @@ class AgenticDomainNode(DomainToolsNode):
     async def execute(self, s: GraphStateModel) -> GraphState:
         blob = self.load_hitl_blob()
         tool_call_records = self._records_from_blob(blob) if blob else []
+        tool_call_records = self._with_user_input_answers(
+            tool_call_records,
+            hitl_store.get_resume_attachments(),
+        )
 
         while True:
             ctx = LocationContext.from_state(s)
@@ -318,7 +323,7 @@ class AgenticDomainNode(DomainToolsNode):
             needs_input = UserInputRouter.requests_to_dict(
                 UserInputRouter.requests_from_dict(run.needs_input)
             )
-            s = await self.pause_for_hitl(
+            await self.pause_for_hitl(
                 s,
                 {
                     "data": {"needs_input": needs_input},
@@ -328,7 +333,8 @@ class AgenticDomainNode(DomainToolsNode):
                     s, tool_call_records=run.tool_calls
                 ),
             )
-            tool_call_records = list(run.tool_calls)
+            # interrupt() suspends; on resume this node restarts from the top.
+            raise RuntimeError("HITL pause returned; resume must restart the node")
 
     def _error_result(self, ctx: LocationContext, exc: Exception) -> dict[str, Any]:
         return {
@@ -337,6 +343,56 @@ class AgenticDomainNode(DomainToolsNode):
             "message": f"Agentic domain execution failed: {exc}",
             "error": True,
         }
+
+    @staticmethod
+    def _with_user_input_answers(
+        records: list[AgentToolCallRecord],
+        attachments: list[dict[str, Any]],
+    ) -> list[AgentToolCallRecord]:
+        """Fill paused user-input tool results from resume attachments on state.
+
+        Match by ``result.data["input_kind"]`` (set by ``UserInputNativeTool``) to
+        ``attachment.type`` — no tool-name parsing.
+        """
+        from src.db.models.message_attachments import parse_attachments
+        from src.tools.contracts import ToolResponse
+
+        parsed = parse_attachments(attachments)
+        if not records or not parsed:
+            return list(records)
+
+        by_type = {str(attachment.type): attachment for attachment in parsed}
+        patched: list[AgentToolCallRecord] = []
+        for record in records:
+            data = (record.result.data if record.result is not None else {}) or {}
+            if not data.get("stopped_for_user_input"):
+                patched.append(record)
+                continue
+            kind = data.get("input_kind")
+            attachment = by_type.get(str(kind)) if kind else None
+            if attachment is None:
+                patched.append(record)
+                continue
+
+            input_cls = UserInput.for_kind(str(kind))
+            message, result_data = input_cls.enrich_resumed_tool_result(
+                data, attachment
+            )
+            patched.append(
+                record.model_copy(
+                    update={
+                        "status": "done",
+                        "error_message": None,
+                        "result": ToolResponse(
+                            tool_name=record.tool_name,
+                            message=message,
+                            data=result_data,
+                            error=False,
+                        ),
+                    }
+                )
+            )
+        return patched
 
     def _success_result(
         self,

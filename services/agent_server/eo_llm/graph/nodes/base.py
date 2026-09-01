@@ -25,7 +25,15 @@ class GraphNode(ABC):
             GraphNode._registry[cls.node_name] = cls
 
     async def __call__(self, state: GraphState) -> GraphState:
-        return await self.run(validate_state(state))
+        s = hitl_store.hydrate_state_from_resume(validate_state(state))
+        result = await self.run(s)
+        # Persist attachment-derived fields via this node's update only.
+        # Never use Command(update=...) on resume — it races with dump_state.
+        patch = hitl_store.resume_state_patch()
+        if not patch:
+            return result
+        out = dict(result) if isinstance(result, dict) else {}
+        return {**patch, **out}
 
     @classmethod
     def status_for(cls, node_name: str) -> tuple[GraphStatusStage, str] | None:

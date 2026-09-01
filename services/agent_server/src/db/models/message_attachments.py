@@ -6,9 +6,9 @@ from abc import ABC, abstractmethod
 from typing import Annotated, Any, Literal, Optional, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 
-AttachmentType = Literal["location", "file", "bounding_box"]
+AttachmentType = Literal["location", "file", "bounding_box", "multiple_choice"]
 OSMType = Literal["relation", "way", "node"]
 OSMPrefixType = Literal["R", "W", "N"]
 
@@ -107,8 +107,91 @@ class FileAttachment(MessageAttachment):
         return f"Attached file: {label}."
 
 
+class MultipleChoiceAttachment(MessageAttachment):
+    """User answer to a multiple-choice prompt."""
+
+    type: Literal["multiple_choice"] = "multiple_choice"
+    option_id: str = Field(..., description="Selected option id or reserved other id")
+    label: str = Field(..., description="Resolved label shown to the agent")
+    custom_text: Optional[str] = Field(
+        default=None,
+        description="Custom answer when the user picked Other",
+    )
+    prompt: Optional[str] = Field(
+        default=None,
+        description="Question text shown to the user (echoed for agent context)",
+    )
+    offered_options: Optional[list[dict[str, str]]] = Field(
+        default=None,
+        description="Options presented to the user as [{id, label}, ...]",
+    )
+    allow_other: bool = Field(
+        default=True,
+        description="Whether an Other/custom option was offered",
+    )
+    other_label: str = Field(
+        default="Other",
+        description="Label used for the Other option when offered",
+    )
+
+    def llm_text(self) -> str:
+        from src.user_inputs.types import OTHER_OPTION_ID
+
+        if self.option_id == OTHER_OPTION_ID and self.custom_text:
+            return (
+                "User answered your multiple-choice question with a custom response: "
+                f"{self.custom_text.strip()}."
+            )
+        return (
+            "User answered your multiple-choice question by selecting "
+            f"{self.label!r} (option_id={self.option_id!r})."
+        )
+
+    def answer_summary(self) -> str:
+        """One-line answer for tool results and chat history."""
+        from src.user_inputs.types import OTHER_OPTION_ID
+
+        if self.option_id == OTHER_OPTION_ID and self.custom_text:
+            return f"Custom answer: {self.custom_text.strip()}"
+        return f"Selected option: {self.label} (id={self.option_id})"
+
+    @field_validator("option_id")
+    @classmethod
+    def validate_option_id(cls, value: str) -> str:
+        option_id = str(value).strip()
+        if not option_id:
+            raise ValueError("option_id must be non-empty")
+        return option_id
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, value: str) -> str:
+        label = str(value).strip()
+        if not label:
+            raise ValueError("label must be non-empty")
+        return label
+
+    @model_validator(mode="after")
+    def validate_other_answer(self) -> MultipleChoiceAttachment:
+        from src.user_inputs.types import OTHER_OPTION_ID
+
+        if self.option_id == OTHER_OPTION_ID:
+            text = (self.custom_text or "").strip()
+            if not text:
+                raise ValueError("custom_text is required when option_id is other")
+            self.custom_text = text
+        elif self.custom_text:
+            raise ValueError("custom_text is only allowed when option_id is other")
+        return self
+
+
 AnyMessageAttachment = Annotated[
-    Union[LocationAttachment, BoundingBoxAttachment, FileAttachment],
+    Union[
+        LocationAttachment,
+        BoundingBoxAttachment,
+        FileAttachment,
+        MultipleChoiceAttachment,
+    ],
     Field(discriminator="type"),
 ]
 

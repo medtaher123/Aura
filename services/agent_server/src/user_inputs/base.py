@@ -82,3 +82,21 @@ class UserInput(ABC, Generic[TRequest, TResultAttachment]):
         needs_user_input.pop(cls.kind, None)
         state["needs_input"] = needs_user_input
         return state
+
+    @classmethod
+    def enrich_resumed_tool_result(
+        cls,
+        prior_data: dict[str, Any],
+        attachment: MessageAttachment,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build tool-result message + data after the user answers on resume.
+
+        Subclasses override to add kind-specific context (e.g. the options that
+        were offered). ``prior_data`` is the paused ``ToolResponse.data`` dict.
+        """
+        data = dict(prior_data)
+        data.pop("stopped_for_user_input", None)
+        data.pop("needs_input", None)
+        data["user_answer"] = attachment.model_dump(mode="python")
+        data["stopped_for_user_input"] = False
+        return attachment.llm_text(), data

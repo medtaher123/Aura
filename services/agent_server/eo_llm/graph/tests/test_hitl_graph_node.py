@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command
 
-from eo_llm.graph.hitl import state_update_from_attachments
+from eo_llm.graph import hitl as hitl_store
 from eo_llm.graph.nodes.base import GraphNode
 from eo_llm.graph.state import GraphState, GraphStateModel, dump_state
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
 
 
 class _EchoHitlNode(GraphNode):
@@ -57,17 +57,18 @@ def test_graph_node_hitl_interrupt_and_resume() -> None:
                 "coordinates": [1.0, 2.0],
             }
         ]
-        update = state_update_from_attachments(attachments, {})
-        async for chunk in compiled.astream(
-            Command(
-                update=update,
-                resume={"data": {"attachments": attachments}},
-            ),
-            config=config,
-            stream_mode="values",
+        with hitl_store.hitl_resume_context(
+            {},
+            attachments=attachments,
+            thread_id=thread_id,
         ):
-            if isinstance(chunk, dict):
-                final = {k: v for k, v in chunk.items() if k != "__interrupt__"}
+            async for chunk in compiled.astream(
+                Command(resume={"data": {"attachments": attachments}}),
+                config=config,
+                stream_mode="values",
+            ):
+                if isinstance(chunk, dict):
+                    final = {k: v for k, v in chunk.items() if k != "__interrupt__"}
         return final
 
     final = asyncio.run(_run())

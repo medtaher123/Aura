@@ -393,6 +393,7 @@ def test_discover_native_tools_scans_package():
         "get_time",
         "request_bounding_box_user_input",
         "request_location_user_input",
+        "request_multiple_choice_user_input",
     ]
 
 
@@ -409,6 +410,7 @@ async def test_build_default_native_provider_registers_discovered_tools():
         "get_time",
         "request_bounding_box_user_input",
         "request_location_user_input",
+        "request_multiple_choice_user_input",
     }
 
     result = await provider.invoke("calculator", {"expression": "2+3"})

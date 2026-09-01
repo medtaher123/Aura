@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-InputKind = Literal["location", "bounding_box"]
+InputKind = Literal["location", "bounding_box", "multiple_choice"]
+
+OTHER_OPTION_ID = "__other__"
 
 OSMType = Literal["relation", "way", "node"]
 OSMPrefixType = Literal["R", "W", "N"]

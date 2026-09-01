@@ -29,6 +29,9 @@ _pending_pause_blobs: dict[str, dict[str, dict[str, Any]]] = {}
 # thread_id -> {node_name -> blob} installed for a resume turn.
 _resume_blobs: dict[str, dict[str, dict[str, Any]]] = {}
 
+# thread_id -> attachment dumps for the current resume turn.
+_resume_attachments: dict[str, list[dict[str, Any]]] = {}
+
 
 def current_thread_id() -> str:
     """LangGraph ``thread_id`` for the running node, or a test default."""
@@ -80,21 +83,67 @@ def get_resume_blob(
 def hitl_resume_context(
     blobs: dict[str, dict[str, Any]],
     *,
+    attachments: list[dict[str, Any]] | None = None,
     thread_id: str | None = None,
 ) -> Iterator[None]:
-    """Install execution blobs for one resume graph run (keyed by thread_id)."""
+    """Install execution blobs (and optional resume attachments) for one graph run."""
     key = thread_id or current_thread_id()
-    previous = _resume_blobs.get(key)
+    previous_blobs = _resume_blobs.get(key)
+    previous_attachments = _resume_attachments.get(key)
     _resume_blobs[key] = {
         name: dict(blob) for name, blob in blobs.items() if isinstance(blob, dict)
     }
+    _resume_attachments[key] = [
+        dict(item) for item in (attachments or []) if isinstance(item, dict)
+    ]
     try:
         yield
     finally:
-        if previous is None:
+        if previous_blobs is None:
             _resume_blobs.pop(key, None)
         else:
-            _resume_blobs[key] = previous
+            _resume_blobs[key] = previous_blobs
+        if previous_attachments is None:
+            _resume_attachments.pop(key, None)
+        else:
+            _resume_attachments[key] = previous_attachments
+
+
+def get_resume_attachments(*, thread_id: str | None = None) -> list[dict[str, Any]]:
+    """Attachment dumps for the current resume turn (empty when not resuming)."""
+    key = thread_id or current_thread_id()
+    return list(_resume_attachments.get(key) or [])
+
+
+def get_resume_blobs(*, thread_id: str | None = None) -> dict[str, dict[str, Any]]:
+    """All node blobs installed for the current resume turn."""
+    key = thread_id or current_thread_id()
+    return {
+        name: dict(blob)
+        for name, blob in (_resume_blobs.get(key) or {}).items()
+        if isinstance(blob, dict)
+    }
+
+
+def resume_state_patch(*, thread_id: str | None = None) -> dict[str, Any]:
+    """Graph-state fields derived from resume attachments (not applied via Command)."""
+    attachments = get_resume_attachments(thread_id=thread_id)
+    if not attachments:
+        return {}
+    return state_update_from_attachments(
+        attachments,
+        get_resume_blobs(thread_id=thread_id),
+    )
+
+
+def hydrate_state_from_resume(s: Any) -> Any:
+    """Merge resume attachment effects into a state model (in-node only)."""
+    from eo_llm.graph.state import dump_state, validate_state
+
+    patch = resume_state_patch()
+    if not patch:
+        return s
+    return validate_state({**dump_state(s), **patch})
 
 
 def resume_attachments(resume: dict[str, Any]) -> list[Any]:
@@ -123,7 +172,12 @@ def state_update_from_attachments(
     attachments: list[MessageAttachment] | list[dict[str, Any]] | None,
     hitl_blobs: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build a partial graph-state patch for ``Command(update=...)`` on resume."""
+    """Build a partial state patch from resume attachments + optional HITL blobs.
+
+    Applied inside nodes via ``hydrate_state_from_resume`` / ``GraphNode.__call__``.
+    Do not pass this through ``Command(update=...)`` — that races with ``dump_state``
+    returns and raises ``InvalidUpdateError``.
+    """
     from eo_llm.graph.nodes.helpers import resolved_location_from_candidate
 
     parsed = parse_attachments(attachments)  # type: ignore[arg-type]

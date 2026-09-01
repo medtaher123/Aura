@@ -26,6 +26,7 @@ from src.core.event_emitter import (
     set_stream_emitter,
 )
 from src.files.catalog import FileCatalog
+from src.db.models.message_attachments import dump_attachments
 from src.services.graph_runner.checkpointer import get_checkpointer
 
 from ...core.logger import get_logger
@@ -56,6 +57,7 @@ class GraphRunnerService:
         resume_ctx = (
             hitl_store.hitl_resume_context(
                 request.hitl_blobs,
+                attachments=dump_attachments(request.message.attachments),
                 thread_id=request.thread_id,
             )
             if isinstance(request, GraphResumeRequest)

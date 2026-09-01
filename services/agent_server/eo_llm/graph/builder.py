@@ -55,7 +55,8 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> Any:
     graph.add_conditional_edges(
         "orchestrator",
         choose_after_orchestrator,
-        {"route": "location_gate", "finalize_direct": "finalizer"},
+        #{"route": "location_gate", "finalize_direct": "finalizer"},
+        {"route": "router", "finalize_direct": "finalizer"},
     )
 
     graph.add_edge("location_gate", "router")

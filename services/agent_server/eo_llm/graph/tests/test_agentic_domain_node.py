@@ -100,41 +100,41 @@ async def test_agentic_test_node_success_emits_tool_messages():
 
 @pytest.mark.asyncio
 async def test_agentic_test_node_pauses_for_user_input(monkeypatch):
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+    from src.tools.contracts import ToolResponse
+
     node = AgenticTestNode()
+    paused_record = AgentToolCallRecord(
+        tool_use_id="bbox-1",
+        turn_index=0,
+        tool_name="request_bounding_box_user_input",
+        arguments={},
+        status="done",
+        result=ToolResponse(
+            tool_name="request_bounding_box_user_input",
+            message="Draw a box",
+            data={
+                "needs_input": {"bounding_box": {"prompt": "Draw an area"}},
+                "stopped_for_user_input": True,
+                "input_kind": "bounding_box",
+            },
+        ),
+    )
     run_result = MagicMock()
     run_result.paused = True
     run_result.needs_input = {"bounding_box": {"prompt": "Draw an area"}}
     run_result.error = False
     run_result.message = "Draw a box"
-    run_result.tool_calls = []
+    run_result.tool_calls = [paused_record]
+
+    captured: dict[str, object] = {}
 
     async def fake_pause(self, s, client_payload, *, blob=None):
-        return await simulate_hitl_resume(
-            self,
-            s,
-            [
-                {
-                    "type": "bounding_box",
-                    "area": {
-                        "kind": "bounding_box",
-                        "min_lat": 1.0,
-                        "max_lat": 2.0,
-                        "min_lon": 3.0,
-                        "max_lon": 4.0,
-                    },
-                }
-            ],
-            blob=blob,
-        )
+        captured["blob"] = blob
+        captured["payload"] = client_payload
+        raise RuntimeError("simulated interrupt")
 
     monkeypatch.setattr(AgenticDomainNode, "pause_for_hitl", fake_pause)
-
-    success = MagicMock()
-    success.paused = False
-    success.needs_input = None
-    success.error = False
-    success.message = "Done after resume."
-    success.tool_calls = run_result.tool_calls
 
     state = validate_state(
         {
@@ -144,15 +144,158 @@ async def test_agentic_test_node_pauses_for_user_input(monkeypatch):
         }
     )
 
-    with patch.object(
-        node._agent,
-        "run",
-        new=AsyncMock(side_effect=[run_result, success]),
+    with patch.object(node._agent, "run", new=AsyncMock(return_value=run_result)):
+        with pytest.raises(RuntimeError, match="simulated interrupt"):
+            await node.execute(state)
+
+    assert captured["blob"] is not None
+    assert "tool_call_records" in captured["blob"]  # type: ignore[operator]
+    assert captured["payload"]["data"]["needs_input"]["bounding_box"]["prompt"] == (
+        "Draw an area"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agentic_test_node_patches_user_input_on_resume(monkeypatch):
+    from eo_llm.graph import hitl as hitl_store
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+    from src.tools.contracts import ToolResponse
+
+    node = AgenticTestNode()
+    paused_record = AgentToolCallRecord(
+        tool_use_id="bbox-1",
+        turn_index=0,
+        tool_name="request_bounding_box_user_input",
+        arguments={},
+        status="done",
+        result=ToolResponse(
+            tool_name="request_bounding_box_user_input",
+            message="Draw a box",
+            data={
+                "needs_input": {"bounding_box": {"prompt": "Draw an area"}},
+                "stopped_for_user_input": True,
+                "input_kind": "bounding_box",
+            },
+        ),
+    )
+    attachments = [
+        {
+            "type": "bounding_box",
+            "area": {
+                "kind": "bounding_box",
+                "min_lat": 1.0,
+                "max_lat": 2.0,
+                "min_lon": 3.0,
+                "max_lon": 4.0,
+            },
+        }
+    ]
+    blob = {
+        "tool_call_records": [paused_record.model_dump(mode="python")],
+    }
+    state = await simulate_hitl_resume(
+        node,
+        validate_state(
+            {
+                "query": "test",
+                "user_query": "test",
+                "selected_domains": ["agentic_test"],
+            }
+        ),
+        attachments,
+        blob=blob,
+    )
+
+    success = MagicMock()
+    success.paused = False
+    success.needs_input = None
+    success.error = False
+    success.message = "Done after resume."
+    success.tool_calls = []
+
+    captured: dict[str, object] = {}
+
+    async def fake_run(**kwargs):
+        captured["tool_call_records"] = kwargs.get("tool_call_records")
+        success.tool_calls = list(kwargs.get("tool_call_records") or [])
+        return success
+
+    thread_id = "agentic-patch-resume-test"
+    monkeypatch.setattr(hitl_store, "current_thread_id", lambda: thread_id)
+    with hitl_store.hitl_resume_context(
+        {"agentic_test": blob},
+        attachments=attachments,
+        thread_id=thread_id,
     ):
-        out = await node.execute(state)
+        with patch.object(node._agent, "run", new=AsyncMock(side_effect=fake_run)):
+            out = await node.execute(state)
 
     assert out["domain_results"]["agentic_test"]["status"] == "done"
     assert out["domain_results"]["agentic_test"]["message"] == "Done after resume."
+    records = captured["tool_call_records"]
+    assert isinstance(records, list) and len(records) == 1
+    patched = records[0]
+    assert patched.tool_name == "request_bounding_box_user_input"
+    assert patched.result is not None
+    assert patched.result.data.get("stopped_for_user_input") is False
+    assert patched.result.data.get("user_answer", {}).get("type") == "bounding_box"
+    assert "Selected area" in patched.result.message
+
+
+def test_with_user_input_answers_matches_input_kind():
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+    from src.tools.contracts import ToolResponse
+
+    record = AgentToolCallRecord(
+        tool_use_id="loc-1",
+        tool_name="request_location_user_input",
+        arguments={"location_query": "Paris"},
+        result=ToolResponse(
+            tool_name="request_location_user_input",
+            message="Pick a place",
+            data={
+                "needs_input": {"location": {"candidates": []}},
+                "stopped_for_user_input": True,
+                "input_kind": "location",
+            },
+        ),
+    )
+    patched = AgenticDomainNode._with_user_input_answers(
+        [record],
+        [
+            {
+                "type": "location",
+                "name": "Paris, France",
+                "coordinates": [48.85, 2.35],
+            }
+        ],
+    )
+    assert len(patched) == 1
+    assert patched[0].result is not None
+    assert patched[0].result.data["stopped_for_user_input"] is False
+    assert patched[0].result.data["user_answer"]["name"] == "Paris, France"
+    assert "Confirmed location" in patched[0].result.message
+
+
+def test_with_user_input_answers_skips_without_input_kind():
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+    from src.tools.contracts import ToolResponse
+
+    record = AgentToolCallRecord(
+        tool_use_id="loc-1",
+        tool_name="request_location_user_input",
+        result=ToolResponse(
+            tool_name="request_location_user_input",
+            message="Pick a place",
+            data={"stopped_for_user_input": True},
+        ),
+    )
+    patched = AgenticDomainNode._with_user_input_answers(
+        [record],
+        [{"type": "location", "name": "Paris", "coordinates": [48.85, 2.35]}],
+    )
+    assert patched[0].result is not None
+    assert patched[0].result.data.get("stopped_for_user_input") is True
 
 
 @pytest.mark.asyncio
