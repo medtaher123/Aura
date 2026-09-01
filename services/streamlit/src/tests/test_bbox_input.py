@@ -9,7 +9,7 @@ assert _SPEC and _SPEC.loader
 _bbox_input = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_bbox_input)
 geojson_feature_to_bbox = _bbox_input.geojson_feature_to_bbox
-bounding_box_result_payload = _bbox_input.bounding_box_result_payload
+bounding_box_attachment = _bbox_input.bounding_box_attachment
 bbox_from_folium_draw_output = _bbox_input.bbox_from_folium_draw_output
 
 
@@ -31,7 +31,8 @@ def test_geojson_feature_to_bbox():
     }
     bbox = geojson_feature_to_bbox(feature)
     assert bbox == [48.0, 49.0, 2.0, 3.0]
-    payload = bounding_box_result_payload(bbox)
+    payload = bounding_box_attachment(bbox)
+    assert payload["type"] == "bounding_box"
     assert payload["area"]["min_lat"] == 48.0
     assert payload["area"]["kind"] == "bounding_box"
 

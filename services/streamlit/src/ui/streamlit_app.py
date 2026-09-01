@@ -12,9 +12,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
-from typing_extensions import TypedDict
 
 import base64
 import numpy as np
@@ -35,13 +34,33 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.ui.bbox_input import (  # noqa: E402
-    bounding_box_result_payload,
+    bounding_box_attachment,
     bbox_from_folium_draw_output,
 )
+from src.ui.conversation_history import (  # noqa: E402
+    AssistantMessage,
+    Message,
+    ToolCallRecord,
+    ToolRunStatus,
+    UserMessage,
+    conversation_messages_to_chat_state as _conversation_messages_to_chat_state,
+    pending_from_conversation_messages as _pending_from_conversation_messages,
+)
+from src.ui.file_input import (  # noqa: E402
+    FileUploadError,
+    file_attachment,
+    upload_file_to_agent,
+)
 from src.ui.location_input import (  # noqa: E402
-    location_result_payload,
+    location_attachment,
     search_location_candidates,
 )
+from src.ui.multiple_choice_input import (  # noqa: E402
+    OTHER_OPTION_ID,
+    multiple_choice_attachment,
+    offered_options_from_payload,
+)
+from src.ui.multiple_choice_ui import render_multiple_choice_ui  # noqa: E402
 
 # Load local env vars (e.g., MAPTILER_API_KEY) from repo `.env`.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
@@ -159,51 +178,21 @@ from src.services import detect_and_translate_to_english, translate_from_english
 logger.info("Streamlit app starting...")
 
 
-# Type definitions for chat messages
-ToolRunStatus = Literal["running", "success", "error", "skipped"]
-
-
-class UserMessage(TypedDict):
-    """User message in chat history."""
-
-    role: Literal["user"]
-    content: str
-
-
-class ToolCallRecord(TypedDict, total=False):
-    """Persisted tool execution row for chat history."""
-
-    tool_name: str
-    status: ToolRunStatus
-    step_id: str | None
-    domain: str | None
-    execution_time_seconds: float | None
-    detail: str | None
-
-
-class AssistantMessage(TypedDict, total=False):
-    """Assistant message in chat history."""
-
-    role: Literal["assistant"]
-    content: str
-    artifacts: ToolArtifacts
-    error: bool
-    tool_calls: list[ToolCallRecord]
-    thinking_lines: list[str]
-
-
-# Union type for all message types
-Message = UserMessage | AssistantMessage
+# Type definitions for chat messages live in ``conversation_history``.
 
 
 def _confirmed_location_from_cache(display: str, token: Optional[str]) -> dict:
-    """Build a confirmed-location payload from a cached disambiguation token.
+    """Build a location attachment from a cached disambiguation token.
 
     Tokens look like ``@osm_id:R4479752`` or ``@place_id:397136633``. Parsing the
     identifier lets the backend match it against the fresh candidate list when
     auto-confirming a previously chosen location.
     """
-    loc: dict = {"name": display or "", "coordinates": [0, 0]}
+    loc: dict = {
+        "type": "location",
+        "name": display or "",
+        "coordinates": [0, 0],
+    }
     if not isinstance(token, str):
         return loc
     if token.startswith("@osm_id:") and len(token) > len("@osm_id:"):
@@ -219,6 +208,18 @@ def _confirmed_location_from_cache(display: str, token: Optional[str]) -> dict:
         if digits.isdigit():
             loc["place_id"] = int(digits)
     return loc
+
+
+def _location_attachment_from_option(choice: "LocationOption") -> dict:
+    return {
+        "type": "location",
+        "name": choice.name,
+        "coordinates": choice.coordinates,
+        "place_id": choice.place_id,
+        "osm_id": choice.osm_id,
+        "osm_type": choice.osm_type,
+        "osm_type_prefix": choice.osm_type_prefix,
+    }
 
 
 def _pending_from_agent_result(result: AgentResponse) -> dict | None:
@@ -243,28 +244,17 @@ def _location_query_from_needs_input(needs_input: dict) -> Optional[str]:
 def _invoke_agent_unified(
     executor,
     english_query: str,
-    chat_history=None,
     resume=None,
-    confirmed_location=None,
-    user_inputs=None,
+    attachments=None,
     conversation_id=None,
     stream_callback=None,
     language=None,
-    document_context=None,
 ) -> AgentResponse:
-    """
-    Invoke the remote agent via WebSocket.
-
-    Returns AgentResponse with: message, artifacts, error, needs_input,
-    pause_state, raw_data
-    """
+    """Invoke the remote agent via WebSocket."""
     return executor.invoke(
         message=english_query,
-        chat_history=chat_history,
-        document_context=document_context,
         resume=resume,
-        confirmed_location=confirmed_location,
-        user_inputs=user_inputs,
+        attachments=attachments,
         conversation_id=conversation_id,
         stream_callback=stream_callback,
         language=language,
@@ -281,13 +271,10 @@ def _invoke_agent_with_streaming_display(
     trace_callback: Callable[[dict], None] | None = None,
     thinking_callback: Callable[[dict], None] | None = None,
     english_query: str = "",
-    chat_history=None,
     resume=None,
-    confirmed_location=None,
-    user_inputs=None,
+    attachments=None,
     conversation_id=None,
     language=None,
-    document_context=None,
 ) -> AgentResponse:
     """Run the agent on a worker thread and render stream events on the main thread."""
     event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -306,14 +293,11 @@ def _invoke_agent_with_streaming_display(
         return _invoke_agent_unified(
             executor,
             english_query,
-            chat_history=chat_history,
             resume=resume,
-            confirmed_location=confirmed_location,
-            user_inputs=user_inputs,
+            attachments=attachments,
             conversation_id=conversation_id,
             stream_callback=stream_callback,
             language=language,
-            document_context=document_context,
         )
 
     def drain_events() -> None:
@@ -408,7 +392,7 @@ def _render_pydeck_map_spec(item: dict) -> None:
 
     layers: list[pdk.Layer] = []
 
-    # Backwards-compatible shorthand: {points: [...], ...}
+    # Shorthand form: {points: [...], ...}
     points = item.get("points")
     if isinstance(points, list):
         layers.append(
@@ -819,8 +803,7 @@ def _render_artifacts_panel(artifacts: ToolArtifacts) -> None:
     maps = artifacts.maps if hasattr(artifacts, "maps") else []
     thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
     has_map = any(
-        (isinstance(x, str) and x.endswith(".html"))
-        or (isinstance(x, dict) and isinstance(x.get("view_state"), dict))
+        isinstance(x, dict) and isinstance(x.get("view_state"), dict)
         for x in maps
     )
     if not has_map and not thumbnails:
@@ -896,6 +879,8 @@ class _ToolCallState:
     execution_time_seconds: float | None = None
     started_at: float | None = None
     detail: str | None = None
+    result: dict | None = None
+    arguments: dict | None = None
     order: int = 0
 
 
@@ -979,7 +964,7 @@ def _tool_status_icon_html(status: ToolRunStatus) -> str:
 
 
 def _tool_call_to_record(tool: _ToolCallState) -> ToolCallRecord:
-    return ToolCallRecord(
+    record = ToolCallRecord(
         tool_name=tool.tool_name,
         status=tool.status,
         step_id=tool.step_id,
@@ -987,6 +972,11 @@ def _tool_call_to_record(tool: _ToolCallState) -> ToolCallRecord:
         execution_time_seconds=tool.execution_time_seconds,
         detail=tool.detail,
     )
+    if tool.result is not None:
+        record["result"] = tool.result
+    if tool.arguments is not None:
+        record["arguments"] = tool.arguments
+    return record
 
 
 def _record_to_tool_call(record: ToolCallRecord) -> _ToolCallState:
@@ -999,6 +989,8 @@ def _record_to_tool_call(record: ToolCallRecord) -> _ToolCallState:
         domain=record.get("domain"),
         execution_time_seconds=record.get("execution_time_seconds"),
         detail=record.get("detail"),
+        result=record.get("result"),
+        arguments=record.get("arguments"),
     )
 
 
@@ -1057,6 +1049,14 @@ def _render_tool_status_box(
                     f"<div style='text-align:right;font-size:0.85rem;'>{html.escape(_tool_status_meta(tool, now=display_now))}</div>",
                     unsafe_allow_html=True,
                 )
+            if tool.arguments is not None or tool.result is not None:
+                with st.expander("Tool payload", expanded=False):
+                    if tool.arguments is not None:
+                        st.caption("arguments")
+                        st.json(tool.arguments)
+                    if tool.result is not None:
+                        st.caption("result")
+                        st.json(tool.result)
 
 
 def _make_tool_status_tracker(
@@ -1160,6 +1160,12 @@ def _make_tool_status_tracker(
             tool.detail = observation.strip()
         elif tool.status == "skipped":
             tool.detail = "Missing required inputs"
+        raw_result = normalized.get("result")
+        if isinstance(raw_result, dict):
+            tool.result = dict(raw_result)
+        raw_args = normalized.get("tool_input") or normalized.get("arguments")
+        if isinstance(raw_args, dict):
+            tool.arguments = dict(raw_args)
         _render()
 
     def snapshot() -> list[ToolCallRecord]:
@@ -1221,8 +1227,7 @@ def _artifacts_need_columns(artifacts: ToolArtifacts) -> bool:
     """True when history/streaming should use the text|map two-column layout."""
     maps = artifacts.maps if hasattr(artifacts, "maps") else []
     return any(
-        (isinstance(x, str) and x.endswith(".html"))
-        or (isinstance(x, dict) and isinstance(x.get("view_state"), dict))
+        isinstance(x, dict) and isinstance(x.get("view_state"), dict)
         for x in maps
     )
 
@@ -1488,8 +1493,30 @@ def _clear_conversation_id_query_param() -> None:
 def _store_conversation_id(conversation_id: str | None) -> None:
     if not conversation_id:
         return
+    conversation_id = str(conversation_id)
     st.session_state.conversation_id = conversation_id
+    # Mark as already loaded so the next rerun does not refetch history and wipe
+    # live ``pending_user_input`` right after a pause turn.
+    st.session_state.loaded_conversation_id = conversation_id
     _set_conversation_id_query_param(conversation_id)
+
+
+def _sync_conversation_from_server() -> None:
+    """Force the next run to reload messages from the API.
+
+    Used after a completed (non-paused) turn so the UI matches what was
+    persisted before ``complete`` was sent — live session appends can miss
+    the final assistant message across the post-turn rerun.
+    """
+    st.session_state.loaded_conversation_id = None
+    st.session_state._force_history_reload = True
+
+
+def _normalize_conversation_id(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _store_conversation_title(
@@ -1502,6 +1529,39 @@ def _store_conversation_title(
         titles = {}
     titles[conversation_id] = conversation_title
     st.session_state.conversation_titles = titles
+
+
+def _attachment_caption(attachments: list | None) -> str | None:
+    """Short UI label for attached location / bbox / file."""
+    parts: list[str] = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").strip()
+        if kind == "file":
+            parts.append(f"File: {item.get('name') or 'attached'}")
+        elif kind == "location":
+            parts.append(f"Location: {item.get('name') or 'selected'}")
+        elif kind == "bounding_box":
+            area = item.get("area") or {}
+            try:
+                parts.append(
+                    "BBox: "
+                    f"[{float(area['min_lat']):.2f}, {float(area['max_lat']):.2f}, "
+                    f"{float(area['min_lon']):.2f}, {float(area['max_lon']):.2f}]"
+                )
+            except (KeyError, TypeError, ValueError):
+                parts.append("Bounding box attached")
+        elif kind == "multiple_choice":
+            label = item.get("label") or item.get("option_id") or "selected"
+            custom = item.get("custom_text")
+            if custom:
+                parts.append(f"Choice (other): {custom}")
+            else:
+                parts.append(f"Choice: {label}")
+        elif kind:
+            parts.append(kind)
+    return " · ".join(parts) if parts else None
 
 
 def _agent_server_http_base_url(agent_url: str) -> str:
@@ -1548,42 +1608,6 @@ def _get_conversation(
     return data if isinstance(data, dict) else None
 
 
-def _conversation_messages_to_chat_state(messages: list[dict]) -> tuple[list[Message], list[dict]]:
-    ui_messages: list[Message] = []
-    agent_messages: list[dict] = []
-
-    for message in messages:
-        role = message.get("role")
-        content = message.get("content") or ""
-        if role == "user":
-            ui_messages.append(UserMessage(role="user", content=content))
-            agent_messages.append({"role": "user", "content": content})
-        elif role == "assistant":
-            metadata = message.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-            artifacts_data = metadata.get("artifacts")
-            if isinstance(artifacts_data, dict):
-                artifacts = ToolArtifacts(
-                    maps=artifacts_data.get("maps", []),
-                    thumbnails=artifacts_data.get("thumbnails", []),
-                    urls=artifacts_data.get("urls", []),
-                )
-            else:
-                artifacts = ToolArtifacts()
-            ui_messages.append(
-                AssistantMessage(
-                    role="assistant",
-                    content=content,
-                    artifacts=artifacts,
-                    error=bool(metadata.get("error", False)),
-                )
-            )
-            agent_messages.append({"role": "assistant", "content": content})
-
-    return ui_messages, agent_messages
-
-
 def _load_conversation_into_session(
     agent_url: str, auth_token: str | None, conversation_id: str
 ) -> None:
@@ -1604,8 +1628,9 @@ def _load_conversation_into_session(
     ui_messages, agent_messages = _conversation_messages_to_chat_state(messages)
     st.session_state.messages = ui_messages
     st.session_state.messages_en = agent_messages
-    st.session_state.pending_user_input = None
+    st.session_state.pending_user_input = _pending_from_conversation_messages(messages)
     st.session_state.loaded_conversation_id = conversation_id
+    st.session_state.pop("_force_history_reload", None)
 
 
 # ---------------------------------------------------
@@ -1632,11 +1657,15 @@ st.session_state.ws_protocol_version = WS_PROTOCOL_VERSION
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
 
-conversation_id_from_query = _get_conversation_id_from_query_params()
+conversation_id_from_query = _normalize_conversation_id(
+    _get_conversation_id_from_query_params()
+)
 
 if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = conversation_id_from_query
-elif conversation_id_from_query != st.session_state.conversation_id:
+elif _normalize_conversation_id(
+    st.session_state.conversation_id
+) != conversation_id_from_query:
     st.session_state.conversation_id = conversation_id_from_query
     st.session_state.messages = []
     st.session_state.messages_en = []
@@ -1677,6 +1706,9 @@ if "composer_attach_bbox" not in st.session_state:
 
 if "composer_bbox_picker_key" not in st.session_state:
     st.session_state.composer_bbox_picker_key = 0
+
+if "composer_file_uploader_key" not in st.session_state:
+    st.session_state.composer_file_uploader_key = 0
 
 if "turn_thinking_lines" not in st.session_state:
     st.session_state.turn_thinking_lines = []
@@ -1854,8 +1886,8 @@ for msg in st.session_state.messages:
     if role == "assistant":
         # Type narrowing: msg is AssistantMessage here
         assistant_msg: AssistantMessage = msg  # type: ignore
-        artifacts = assistant_msg["artifacts"]
-        is_error = assistant_msg["error"]
+        artifacts = assistant_msg.get("artifacts") or ToolArtifacts()
+        is_error = bool(assistant_msg.get("error", False))
         maps = artifacts.maps if hasattr(artifacts, "maps") else []
         thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
         stored_tool_calls = assistant_msg.get("tool_calls") or []
@@ -1872,16 +1904,14 @@ for msg in st.session_state.messages:
             st.error(content or "An error occurred.")
         elif role != "assistant":
             st.write(content)
+            caption = _attachment_caption(msg.get("attachments"))
+            if caption:
+                st.caption(caption)
         else:
             # assistant + not error
-            # Show map if any item is a legacy HTML path or a spec with view_state
-            # (view_state alone is enough to show a basemap centered on the location)
+            # view_state alone is enough to show a basemap centered on the location
             has_map = any(
-                (isinstance(x, str) and x.endswith(".html"))
-                or (
-                    isinstance(x, dict)
-                    and isinstance(x.get("view_state"), dict)
-                )
+                isinstance(x, dict) and isinstance(x.get("view_state"), dict)
                 for x in maps
             )
 
@@ -1913,7 +1943,10 @@ for msg in st.session_state.messages:
                     st.markdown(f"[Open image/COG in viewer]({url})")
                     st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
 
-            if has_map:
+            if not content and not has_map and not thumbnails and stored_tool_calls:
+                # Tool-only assistant bubble (history replay of persisted tool rows).
+                pass
+            elif has_map:
                 col_text, col_map = st.columns([2, 3], vertical_alignment="top")
                 with col_text:
                     st.write(content)
@@ -1949,6 +1982,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
 
     location_payload = needs_input.get("location") if isinstance(needs_input, dict) else None
     bbox_payload = needs_input.get("bounding_box") if isinstance(needs_input, dict) else None
+    mc_payload = needs_input.get("multiple_choice") if isinstance(needs_input, dict) else None
 
     location_query = _location_query_from_needs_input(needs_input)
     norm_key = (
@@ -1956,8 +1990,6 @@ if isinstance(pending, dict) and pending.get("needs_input"):
         if isinstance(location_query, str)
         else None
     )
-
-    collected_user_inputs: dict = {}
 
     # Auto-confirm previously chosen location for the same ambiguous query.
     if isinstance(location_payload, dict):
@@ -2001,7 +2033,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         thinking_callback=thinking_callback,
                         english_query="",
                         resume=True,
-                        confirmed_location=auto_loc,
+                        attachments=[auto_loc],
                         conversation_id=st.session_state.conversation_id,
                     )
                     tool_calls = tool_snapshot()
@@ -2032,8 +2064,11 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
-                    if not pending_next:
+                    if pending_next:
+                        pass
+                    else:
                         _reset_turn_thinking()
+                        _sync_conversation_from_server()
                 except Exception as e:
                     logger.error(
                         f"Error during auto-confirm: {type(e).__name__}: {str(e)}",
@@ -2164,6 +2199,18 @@ if isinstance(pending, dict) and pending.get("needs_input"):
     else:
         submitted_bbox = False
 
+    # --- multiple choice collector ---
+    mc_choice_id: str | None = None
+    mc_choice_label: str | None = None
+    mc_custom_text: str | None = None
+    submitted_mc = False
+    if isinstance(mc_payload, dict):
+        mc_result = render_multiple_choice_ui(mc_payload)
+        mc_choice_id = mc_result.option_id
+        mc_choice_label = mc_result.option_label
+        mc_custom_text = mc_result.custom_text
+        submitted_mc = mc_result.submitted
+
     # Shared confirm for location-only (or location + bbox) flows.
     submitted_location = False
     if isinstance(location_payload, dict) and not isinstance(bbox_payload, dict):
@@ -2177,7 +2224,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
         # Bbox block already rendered Continue; reuse that click via session flag.
         submitted_location = False
 
-    submitted = bool(submitted_bbox or submitted_location)
+    submitted = bool(submitted_bbox or submitted_location or submitted_mc)
     if isinstance(bbox_payload, dict):
         drawn_bbox = st.session_state.pending_drawn_bbox
     if submitted:
@@ -2186,10 +2233,15 @@ if isinstance(pending, dict) and pending.get("needs_input"):
             missing.append("location")
         if "bounding_box" in needs_input and drawn_bbox is None:
             missing.append("bounding_box")
+        if "multiple_choice" in needs_input:
+            if not mc_choice_id:
+                missing.append("multiple_choice")
+            elif mc_choice_id == OTHER_OPTION_ID and not (mc_custom_text or "").strip():
+                missing.append("custom answer")
         if missing:
             st.warning(f"Please provide: {', '.join(missing)}")
         else:
-            user_inputs_payload: dict = {}
+            attachments_payload: list[dict] = []
             confirmed_loc = None
             if choice is not None:
                 patched_value = None
@@ -2216,19 +2268,31 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     if base_key != norm_key:
                         st.session_state.auto_confirm_attempts[base_key] = 0
 
-                confirmed_loc = {
-                    "name": choice.name,
-                    "coordinates": choice.coordinates,
-                    "place_id": choice.place_id,
-                    "osm_id": choice.osm_id,
-                    "osm_type": choice.osm_type,
-                    "osm_type_prefix": choice.osm_type_prefix,
-                }
-                user_inputs_payload["location"] = confirmed_loc
+                confirmed_loc = _location_attachment_from_option(choice)
+                attachments_payload.append(confirmed_loc)
 
             if drawn_bbox is not None:
-                user_inputs_payload["bounding_box"] = bounding_box_result_payload(
-                    drawn_bbox
+                attachments_payload.append(bounding_box_attachment(drawn_bbox))
+
+            if mc_choice_id and mc_choice_label and isinstance(mc_payload, dict):
+                attachments_payload.append(
+                    multiple_choice_attachment(
+                        option_id=mc_choice_id,
+                        label=(
+                            mc_custom_text.strip()
+                            if mc_choice_id == OTHER_OPTION_ID and mc_custom_text
+                            else mc_choice_label
+                        ),
+                        custom_text=(
+                            mc_custom_text.strip()
+                            if mc_choice_id == OTHER_OPTION_ID and mc_custom_text
+                            else None
+                        ),
+                        prompt=str(mc_payload.get("prompt") or ""),
+                        offered_options=offered_options_from_payload(mc_payload),
+                        allow_other=bool(mc_payload.get("allow_other", True)),
+                        other_label=str(mc_payload.get("other_label") or "Other"),
+                    )
                 )
 
             detected_lang = st.session_state.last_lang or "en"
@@ -2239,6 +2303,11 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     f"Confirmed bounding box: [{drawn_bbox[0]:.4f}, {drawn_bbox[1]:.4f}, "
                     f"{drawn_bbox[2]:.4f}, {drawn_bbox[3]:.4f}]"
                 )
+            elif mc_choice_id:
+                if mc_choice_id == OTHER_OPTION_ID and mc_custom_text:
+                    confirm_en = f"Confirmed answer: {mc_custom_text.strip()}"
+                else:
+                    confirm_en = f"Confirmed choice: {mc_choice_label}"
             else:
                 confirm_en = "Confirmed input"
             confirm_ui = (
@@ -2276,8 +2345,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         thinking_callback=thinking_callback,
                         english_query="",
                         resume=True,
-                        confirmed_location=confirmed_loc,
-                        user_inputs=user_inputs_payload,
+                        attachments=attachments_payload,
                         conversation_id=st.session_state.conversation_id,
                     )
                     tool_calls = tool_snapshot()
@@ -2307,8 +2375,11 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
-                    if not pending_next:
+                    if pending_next:
+                        pass
+                    else:
                         _reset_turn_thinking()
+                        _sync_conversation_from_server()
                 except Exception as e:
                     logger.error(
                         f"Error during resume: {type(e).__name__}: {str(e)}",
@@ -2354,22 +2425,17 @@ if not _pending_pause:
                     int(st.session_state.get("composer_bbox_picker_key") or 0) + 1
                 )
                 st.rerun()
+            if st.button("File", use_container_width=True, key="attach_menu_file"):
+                st.session_state.composer_attach_mode = "file"
+                st.session_state.composer_file_uploader_key = (
+                    int(st.session_state.get("composer_file_uploader_key") or 0) + 1
+                )
+                st.rerun()
     with chip_cols[1]:
         chip_parts: list[str] = []
-        if isinstance(attached.get("location"), dict):
-            chip_parts.append(
-                f"Location: {attached['location'].get('name', 'selected')}"
-            )
-        if isinstance(attached.get("bounding_box"), dict):
-            area = attached["bounding_box"].get("area") or {}
-            try:
-                chip_parts.append(
-                    "BBox: "
-                    f"[{float(area['min_lat']):.2f}, {float(area['max_lat']):.2f}, "
-                    f"{float(area['min_lon']):.2f}, {float(area['max_lon']):.2f}]"
-                )
-            except (KeyError, TypeError, ValueError):
-                chip_parts.append("Bounding box attached")
+        caption = _attachment_caption(list((attached or {}).values()))
+        if caption:
+            chip_parts.append(caption)
         if chip_parts:
             clear_cols = st.columns([5, 1])
             with clear_cols[0]:
@@ -2425,7 +2491,7 @@ if not _pending_pause:
                     ):
                         st.session_state.attached_user_inputs = {
                             **st.session_state.attached_user_inputs,
-                            "location": location_result_payload(choice),
+                            "location": location_attachment(choice),
                         }
                         st.session_state.composer_attach_mode = None
                         st.session_state.composer_location_candidates = []
@@ -2465,7 +2531,7 @@ if not _pending_pause:
                     ):
                         st.session_state.attached_user_inputs = {
                             **st.session_state.attached_user_inputs,
-                            "bounding_box": bounding_box_result_payload(drawn),
+                            "bounding_box": bounding_box_attachment(drawn),
                         }
                         st.session_state.composer_attach_mode = None
                         st.session_state.composer_attach_bbox = None
@@ -2516,6 +2582,66 @@ if not _pending_pause:
                     st.session_state.composer_attach_bbox = None
                     st.rerun()
 
+    elif mode == "file":
+        with st.container(border=True):
+            st.markdown("**Attach file**")
+            picked = st.file_uploader(
+                "Choose a file",
+                key=f"composer_file_uploader_{st.session_state.composer_file_uploader_key}",
+                accept_multiple_files=False,
+            )
+            attach_cols = st.columns(2)
+            with attach_cols[0]:
+                if st.button(
+                    "Attach",
+                    type="primary",
+                    key="composer_file_attach",
+                    disabled=picked is None,
+                    use_container_width=True,
+                ):
+                    if picked is None:
+                        st.warning("Choose a file first.")
+                    else:
+                        try:
+                            stored = upload_file_to_agent(
+                                _agent_server_http_base_url(agent_url),
+                                effective_auth_token or None,
+                                filename=picked.name or "file",
+                                data=picked.getvalue(),
+                                content_type=picked.type or "application/octet-stream",
+                                conversation_id=st.session_state.conversation_id,
+                            )
+                            st.session_state.attached_user_inputs = {
+                                **st.session_state.attached_user_inputs,
+                                "file": file_attachment(
+                                    stored["id"],
+                                    stored.get("original_filename") or picked.name or "file",
+                                ),
+                            }
+                            st.session_state.composer_attach_mode = None
+                            st.session_state.composer_file_uploader_key = (
+                                int(
+                                    st.session_state.get("composer_file_uploader_key")
+                                    or 0
+                                )
+                                + 1
+                            )
+                            st.rerun()
+                        except FileUploadError as exc:
+                            st.error(str(exc))
+            with attach_cols[1]:
+                if st.button(
+                    "Cancel",
+                    key="composer_file_cancel",
+                    use_container_width=True,
+                ):
+                    st.session_state.composer_attach_mode = None
+                    st.session_state.composer_file_uploader_key = (
+                        int(st.session_state.get("composer_file_uploader_key") or 0)
+                        + 1
+                    )
+                    st.rerun()
+
 user_input = st.chat_input(
     "Ask me anything about Earth observation or STAC...",
     disabled=_pending_pause,
@@ -2524,17 +2650,23 @@ user_input = st.chat_input(
 if user_input:
     logger.info(f"New user input received: {user_input[:100]}...")
     _reset_turn_thinking()
-    attached_for_send = dict(st.session_state.attached_user_inputs or {})
+    attached_for_send = list((st.session_state.attached_user_inputs or {}).values())
     st.session_state.attached_user_inputs = {}
     st.session_state.composer_attach_mode = None
     st.session_state.composer_location_candidates = []
     st.session_state.composer_attach_bbox = None
-    st.session_state.messages.append(UserMessage(role="user", content=user_input))
+    st.session_state.messages.append(
+        UserMessage(
+            role="user",
+            content=user_input,
+            attachments=list(attached_for_send),
+        )
+    )
     with st.chat_message("user"):
         st.write(user_input)
-        if attached_for_send:
-            kinds = ", ".join(attached_for_send.keys())
-            st.caption(f"Attached: {kinds}")
+        caption = _attachment_caption(attached_for_send)
+        if caption:
+            st.caption(caption)
 
     with st.chat_message("assistant"):
         layout = _make_streaming_turn_placeholders()
@@ -2561,7 +2693,6 @@ if user_input:
             logger.debug(
                 f"Invoking agent with query: {english_query_augmented[:100]}..."
             )
-            history_for_agent = st.session_state.messages_en[:-1]
             result = _invoke_agent_with_streaming_display(
                 agent_executor,
                 layout=layout,
@@ -2572,8 +2703,7 @@ if user_input:
                 thinking_callback=thinking_callback,
                 english_query=english_query_augmented,
                 conversation_id=st.session_state.conversation_id,
-                chat_history=history_for_agent,
-                user_inputs=attached_for_send or None,
+                attachments=attached_for_send or None,
             )
             tool_calls = tool_snapshot()
             _store_conversation_id(result.conversation_id)
@@ -2615,8 +2745,11 @@ if user_input:
                     thinking_lines=_turn_thinking_lines(thinking_snapshot),
                 )
             )
-            if not result.needs_input:
+            if result.needs_input:
+                pass
+            else:
                 _reset_turn_thinking()
+                _sync_conversation_from_server()
 
         except Exception as e:
             logger.error(
@@ -2640,6 +2773,9 @@ if user_input:
         finally:
             layout.trace_placeholder.empty()
 
-    # Avoid remounting live maps: only rerun when the location picker must appear.
-    if st.session_state.pending_user_input:
+    # Rerun after pause (show collectors) or after a completed turn that
+    # requested a one-shot server history sync.
+    if st.session_state.pending_user_input or st.session_state.pop(
+        "_force_history_reload", False
+    ):
         st.rerun()

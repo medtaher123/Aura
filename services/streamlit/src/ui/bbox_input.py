@@ -55,15 +55,16 @@ def bbox_from_folium_draw_output(map_out: dict[str, Any] | None) -> list[float] 
     return None
 
 
-def bounding_box_result_payload(bbox: list[float]) -> dict[str, Any]:
-    """Build a BoundingBoxResult-shaped dict for chat_resume.user_inputs."""
+def bounding_box_attachment(bbox: list[float]) -> dict[str, Any]:
+    """Build a ``type=bounding_box`` attachment for chat_request / chat_resume."""
     min_lat, max_lat, min_lon, max_lon = (float(x) for x in bbox)
     return {
+        "type": "bounding_box",
         "area": {
             "kind": "bounding_box",
             "min_lat": min_lat,
             "max_lat": max_lat,
             "min_lon": min_lon,
             "max_lon": max_lon,
-        }
+        },
     }

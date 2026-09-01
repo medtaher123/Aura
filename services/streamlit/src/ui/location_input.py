@@ -75,11 +75,12 @@ def search_location_candidates(
     return out
 
 
-def location_result_payload(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Build a LocationResult-shaped dict for chat_request.user_inputs."""
+def location_attachment(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``type=location`` attachment for chat_request / chat_resume."""
     osm_type = candidate.get("osm_type")
     osm_type_str = str(osm_type) if osm_type is not None else ""
     return {
+        "type": "location",
         "name": str(
             candidate.get("display_name") or candidate.get("name") or "Unknown"
         ),

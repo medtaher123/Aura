@@ -25,13 +25,14 @@ Optional:
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 import streamlit as st
@@ -222,26 +223,78 @@ def _tokens_expired(tokens: dict[str, Any]) -> bool:
 
 
 def _redirect(url: str) -> None:
-    """Best-effort top-level browser redirect from within Streamlit."""
+    """Navigate the Streamlit page itself to ``url`` in the current tab.
+
+    Component iframes cannot assign ``window.top.location`` because Streamlit
+    omits ``allow-top-navigation``. Submitting a GET form on the parent
+    document performs the navigation in the app's browsing context instead.
+    """
     safe_url = json.dumps(url)
     components.html(
         f"""
         <script>
             (function () {{
                 var target = {safe_url};
+                var doc;
                 try {{
-                    window.top.location.href = target;
+                    doc = window.parent.document;
                 }} catch (err) {{
-                    try {{
-                        window.parent.location.href = target;
-                    }} catch (err2) {{
-                        window.location.href = target;
-                    }}
+                    window.location.replace(target);
+                    return;
                 }}
+                try {{
+                    window.parent.location.replace(target);
+                    return;
+                }} catch (err) {{}}
+                var parsed = new URL(target);
+                var form = doc.createElement('form');
+                form.method = 'GET';
+                form.action = parsed.origin + parsed.pathname;
+                parsed.searchParams.forEach(function (value, name) {{
+                    var input = doc.createElement('input');
+                    input.type = 'hidden';
+                    input.name = name;
+                    input.value = value;
+                    form.appendChild(input);
+                }});
+                form.style.display = 'none';
+                doc.body.appendChild(form);
+                form.submit();
             }})();
         </script>
         """,
         height=0,
+    )
+
+
+def _same_tab_link_button(label: str, url: str) -> None:
+    """Render a primary-looking control that navigates in the current tab.
+
+    Streamlit forces ``<a>`` tags (and ``st.link_button``) to open in a new
+    tab, and DOMPurify strips ``target="_self"``. A GET form in the main
+    document is not rewritten that way.
+    """
+    parsed = urlparse(url)
+    action = html.escape(
+        urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", "")),
+        quote=True,
+    )
+    fields = "".join(
+        f'<input type="hidden" name="{html.escape(name, quote=True)}" '
+        f'value="{html.escape(value, quote=True)}">'
+        for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+    )
+    safe_label = html.escape(label)
+    st.html(
+        f'<form action="{action}" method="get">'
+        f"{fields}"
+        '<button type="submit" style="display:inline-flex;align-items:center;'
+        "justify-content:center;background-color:var(--primary-color,#ff4b4b);"
+        "color:#ffffff;padding:0.25rem 0.75rem;border:none;border-radius:0.5rem;"
+        "font-weight:400;font-size:1rem;line-height:1.6;min-height:2.5rem;"
+        'box-sizing:border-box;cursor:pointer;">'
+        f"{safe_label}</button></form>",
+        width="content",
     )
 
 
@@ -267,11 +320,11 @@ def _render_login_screen(
     if error:
         # On errors we avoid auto-redirect to prevent redirect loops.
         st.error(error)
-        st.link_button("Try signing in again", login_url, type="primary")
+        _same_tab_link_button("Try signing in again", login_url)
         return
 
     st.write("Redirecting you to the secure Cognito login page…")
-    st.link_button("Continue to sign in", login_url, type="primary")
+    _same_tab_link_button("Continue to sign in", login_url)
     st.caption("If you are not redirected automatically, use the button above.")
     _redirect(login_url)
 

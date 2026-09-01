@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 class ToolArtifacts(BaseModel):
     """Artifacts that can be rendered in UI"""
 
-    # `maps` can contain either HTML filenames (legacy) or structured map specs (e.g. Pydeck).
+    # Structured map specs (e.g. Pydeck / deck.gl).
     maps: list[Any] = Field(default=[])
     thumbnails: list[str] = Field(default=[])
     urls: list[str] = Field(default=[])

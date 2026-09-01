@@ -15,7 +15,7 @@ def sample_tool_response() -> ToolResponse:
     return ToolResponse(
         tool_name="test_tool",
         message="Test message",
-        artifacts=ToolArtifacts(maps=["test_map.html"], thumbnails=[], urls=[]),
+        artifacts=ToolArtifacts(maps=[{"title": "test", "view_state": {"latitude": 0, "longitude": 0, "zoom": 1}, "layers": []}], thumbnails=[], urls=[]),
         start_date="2024-01-01",
         end_date="2024-12-31",
         country="France",

@@ -28,7 +28,7 @@ from src.core.logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
 # Bump when the websocket client protocol changes (e.g. new message types).
-WS_PROTOCOL_VERSION = 3
+WS_PROTOCOL_VERSION = 4
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
 DEFAULT_RECONNECT_ATTEMPTS = 3
@@ -431,6 +431,17 @@ class AgentWebSocketClient:
                     needs_input = data.get("needs_input") or {}
                     pause_state = data.get("pause_state", {})
                     conversation_id = pause_state.get("conversation_id")
+                    if not accumulated_response and isinstance(needs_input, dict):
+                        for payload in needs_input.values():
+                            if isinstance(payload, dict):
+                                prompt = payload.get("prompt")
+                                if isinstance(prompt, str) and prompt.strip():
+                                    accumulated_response = prompt.strip()
+                                    break
+                        if not accumulated_response:
+                            accumulated_response = (
+                                "Please provide the requested input to continue."
+                            )
                     logger.info(
                         f"User input requested kinds={list(needs_input.keys())}"
                     )
@@ -500,11 +511,8 @@ class AgentWebSocketClient:
         self,
         message: str,
         conversation_id: Optional[str] = None,
-        chat_history: Optional[list[ChatMessage]] = None,
-        confirmed_locations: Optional[dict[str, list[float]]] = None,
-        document_context: Optional[str] = None,
         language: Optional[str] = None,
-        user_inputs: Optional[dict] = None,
+        attachments: Optional[list] = None,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
@@ -516,11 +524,8 @@ class AgentWebSocketClient:
             "type": "chat_request",
             "message": message,
             "conversation_id": conversation_id,
-            "chat_history": [m.to_dict() for m in (chat_history or [])],
-            "confirmed_locations": confirmed_locations or {},
-            "document_context": document_context,
             "language": language,
-            "user_inputs": user_inputs or {},
+            "attachments": list(attachments or []),
         }
 
         async def _do_send():
@@ -538,8 +543,7 @@ class AgentWebSocketClient:
     def resume_chat(
         self,
         conversation_id: str,
-        user_inputs: Optional[dict] = None,
-        confirmed_location: Optional[LocationOption] = None,
+        attachments: list,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
@@ -548,22 +552,14 @@ class AgentWebSocketClient:
     ) -> ChatResponse:
         """Resume chat after collecting required user inputs.
 
-        Only the ``conversation_id`` is sent; the paused agent state is retrieved
-        server-side from the conversation.
+        Only the ``conversation_id`` and ``attachments`` are sent; the paused
+        agent state is retrieved server-side from the conversation.
         """
-        inputs = dict(user_inputs or {})
-        if confirmed_location is not None and "location" not in inputs:
-            inputs["location"] = {
-                "name": confirmed_location.name,
-                "coordinates": confirmed_location.coordinates,
-                "place_id": confirmed_location.place_id,
-                "osm_id": confirmed_location.osm_id,
-                "osm_type": confirmed_location.osm_type,
-                "osm_type_prefix": confirmed_location.osm_type_prefix,
-            }
+        if not attachments:
+            raise ValueError("attachments must be non-empty")
         payload = {
             "type": "chat_resume",
-            "user_inputs": inputs,
+            "attachments": list(attachments),
             "conversation_id": conversation_id,
         }
 

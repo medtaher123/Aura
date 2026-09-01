@@ -114,34 +114,20 @@ class RemoteAgentAdapter:
     def invoke(
         self,
         message: str,
-        chat_history: Optional[list[dict]] = None,
-        document_context: Optional[str] = None,
         resume: Optional[bool] = None,
-        confirmed_location: Optional[dict] = None,
-        user_inputs: Optional[dict[str, Any]] = None,
+        attachments: Optional[list[dict[str, Any]]] = None,
         conversation_id: Optional[str] = None,
         stream_callback: Optional[Callable[[dict], None]] = None,
         language: Optional[str] = None,
     ) -> AgentResponse:
         """Invoke the remote agent via WebSocket."""
-        from src.clients.agent_ws_client import ChatMessage, LocationOption
-
         logger.info(f"Invoking agent with message length: {len(message)}")
-        logger.debug(f"Chat history length: {len(chat_history) if chat_history else 0}")
         logger.debug(
-            f"Is resume: {bool(resume)}, Has confirmed location: {bool(confirmed_location)}, "
-            f"user_inputs kinds: {list((user_inputs or {}).keys())}"
+            f"Is resume: {bool(resume)}, "
+            f"attachments: {[a.get('type') for a in (attachments or []) if isinstance(a, dict)]}"
         )
 
         client = self._get_client()
-
-        history = []
-        if chat_history:
-            for msg in chat_history:
-                if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                    history.append(
-                        ChatMessage(role=msg["role"], content=msg["content"])
-                    )
 
         def on_status(stage: str, detail: Optional[str] = None):
             if stream_callback:
@@ -183,13 +169,15 @@ class RemoteAgentAdapter:
                         "type": "data_agent_step",
                         "phase": "done",
                         "tool_name": tool_name,
-                        "observation": result.get("observation", ""),
+                        "observation": result.get("observation", "")
+                        or result.get("message", ""),
                         "error": result.get("error", False),
                         "execution_time_seconds": result.get("execution_time_seconds"),
                         "attempts": result.get("attempts"),
                         "status": result.get("status"),
                         "step_id": result.get("step_id"),
                         "domain": result.get("domain"),
+                        "result": result,
                         "artifacts": artifacts or {},
                     }
                 )
@@ -199,26 +187,15 @@ class RemoteAgentAdapter:
                 stream_callback({"type": "token", "content": content})
 
         try:
-            if resume and (user_inputs or confirmed_location):
+            if resume and attachments:
                 if not conversation_id:
                     raise ValueError(
                         "Cannot resume a paused turn without a conversation_id"
                     )
-                logger.info("Resuming agent from paused state with user inputs")
-                loc = None
-                if confirmed_location:
-                    loc = LocationOption(
-                        name=confirmed_location.get("name", ""),
-                        coordinates=confirmed_location.get("coordinates", [0, 0]),
-                        place_id=confirmed_location.get("place_id", None),
-                        osm_id=confirmed_location.get("osm_id", None),
-                        osm_type=confirmed_location.get("osm_type", None),
-                        osm_type_prefix=confirmed_location.get("osm_type_prefix", None),
-                    )
+                logger.info("Resuming agent from paused state with attachments")
                 response = client.resume_chat(
                     conversation_id=conversation_id,
-                    user_inputs=user_inputs,
-                    confirmed_location=loc,
+                    attachments=attachments,
                     on_token=on_token,
                     on_status=on_status,
                     on_thinking=on_thinking,
@@ -230,10 +207,8 @@ class RemoteAgentAdapter:
                 response = client.send_chat(
                     message=message,
                     conversation_id=conversation_id,
-                    chat_history=history,
-                    document_context=document_context,
                     language=language,
-                    user_inputs=user_inputs,
+                    attachments=attachments,
                     on_token=on_token,
                     on_status=on_status,
                     on_thinking=on_thinking,
