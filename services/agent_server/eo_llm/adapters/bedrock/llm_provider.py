@@ -51,6 +51,29 @@ class AgentToolCallRecord(BaseModel):
     result: ToolResponse | None = None
     error_message: str | None = None
 
+    def to_messages(self) -> list["Message"]:
+        """Persistable tool-call / tool-result message pair (UI-hidden)."""
+        from src.db.models.message import Message, ToolCallMessage, ToolResultMessage
+
+        call: Message = ToolCallMessage.create(
+            tool_use_id=self.tool_use_id,
+            tool_name=self.tool_name,
+            arguments=dict(self.arguments or {}),
+            turn_index=self.turn_index,
+        )
+        result_payload = (
+            self.result.model_dump(mode="python") if self.result is not None else None
+        )
+        result_msg: Message = ToolResultMessage.create(
+            tool_use_id=self.tool_use_id,
+            status=self.status,
+            result=result_payload,
+            error_message=self.error_message,
+            latency_ms=self.latency_ms,
+            turn_index=self.turn_index,
+        )
+        return [call, result_msg]
+
 
 class ConverseResponse(BaseModel):
     """Normalized result of one converse turn."""
@@ -111,6 +134,16 @@ class LLMProvider(ABC):
         *,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
+        from src.db.models.message import MessageKind, ToolCallMessage, ToolResultMessage
+
+        if isinstance(message, ToolCallMessage) or message.kind == MessageKind.TOOL_CALL.value:
+            return self._tool_call_content_blocks(message)
+        if (
+            isinstance(message, ToolResultMessage)
+            or message.kind == MessageKind.TOOL_RESULT.value
+        ):
+            return self._tool_result_content_blocks(message)
+
         blocks: list[dict[str, Any]] = []
         text = (message.content or "").strip()
         if text:
@@ -122,6 +155,49 @@ class LLMProvider(ABC):
                 )
             )
         return blocks
+
+    def _tool_call_content_blocks(self, message: "Message") -> list[dict[str, Any]]:
+        meta = dict(message.message_metadata or {})
+        tool_use_id = str(meta.get("tool_use_id") or "")
+        tool_name = str(meta.get("tool_name") or "")
+        if not tool_use_id or not tool_name:
+            return []
+        arguments = meta.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        return [
+            {
+                "toolUse": {
+                    "toolUseId": tool_use_id,
+                    "name": tool_name,
+                    "input": arguments,
+                }
+            }
+        ]
+
+    def _tool_result_content_blocks(self, message: "Message") -> list[dict[str, Any]]:
+        meta = dict(message.message_metadata or {})
+        tool_use_id = str(meta.get("tool_use_id") or "")
+        if not tool_use_id:
+            return []
+        status_raw = str(meta.get("status") or "done")
+        result_status: Literal["success", "error"] = (
+            "error" if status_raw == "error" else "success"
+        )
+        result_payload = meta.get("result")
+        if not isinstance(result_payload, dict):
+            result_payload = {
+                "message": meta.get("error_message") or "",
+                "error": True,
+            }
+            result_status = "error"
+        return [
+            self.tool_result_content_block(
+                tool_use_id=tool_use_id,
+                result=result_payload,
+                status=result_status,
+            )
+        ]
 
     def _content_blocks_for_attachment(
         self,

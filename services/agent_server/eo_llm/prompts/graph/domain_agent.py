@@ -17,6 +17,11 @@ _AGENT_RULES: tuple[str, ...] = (
     "Do not invent tool outputs or geospatial facts.",
     "Prefer domain-specific tools first; use web_search_tool only for recent context gaps.",
     "If a tool requests user input (location, bounding box), call it and stop — do not guess.",
+    "When geocoding or place lookup returns multiple locations that match the same string, "
+    "call request_location_user_input so the user can confirm which place they mean. "
+    "You may pass candidates explicitly, or only location_query and let the tool geocode. "
+    "Do not pick one yourself.",
+    "Do not ask the user to choose by text message, but by using the input tool",
 )
 
 

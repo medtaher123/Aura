@@ -14,7 +14,18 @@ import uuid
 from datetime import datetime
 from typing import Any, ClassVar, TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, func, JSON, Uuid
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+    JSON,
+    Uuid,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +57,8 @@ class MessageKind(str, enum.Enum):
     SYSTEM = "system"
     INPUT_REQUEST = "input_request"
     INPUT_RESPONSE = "input_response"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
 
 
 class Message(BaseModel):
@@ -92,6 +105,20 @@ class Message(BaseModel):
         server_default="[]",
     )
 
+    visible_to_ui: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+
+    visible_to_agent: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -124,7 +151,20 @@ class Message(BaseModel):
             metadata=dict(self.message_metadata or {}),
             timestamp=self.timestamp,
             attachments=dump_attachments(self.attachments),
+            visible_to_ui=bool(self.visible_to_ui),
+            visible_to_agent=bool(self.visible_to_agent),
         )
+
+    def dump_for_graph(self) -> dict[str, Any]:
+        """Serialize for LangGraph domain_results (no ORM / conversation id)."""
+        return {
+            "kind": self.kind,
+            "role": self.role,
+            "content": self.content or "",
+            "visible_to_ui": bool(self.visible_to_ui),
+            "visible_to_agent": bool(self.visible_to_agent),
+            "metadata": dict(self.message_metadata or {}),
+        }
 
 
 class UserMessage(Message):
@@ -143,6 +183,8 @@ class UserMessage(Message):
             role=MessageRole.USER.value,
             kind=MessageKind.USER_TEXT.value,
             content=content or "",
+            visible_to_ui=True,
+            visible_to_agent=True,
             message_metadata={},
             _attachments=dump_attachments(attachments),
         )
@@ -164,6 +206,8 @@ class AssistantMessage(Message):
             role=MessageRole.ASSISTANT.value,
             kind=MessageKind.ASSISTANT_TEXT.value,
             content=content or "",
+            visible_to_ui=True,
+            visible_to_agent=True,
             message_metadata=dict(metadata or {}),
         )
 
@@ -184,6 +228,8 @@ class InputRequestMessage(Message):
             role=MessageRole.ASSISTANT.value,
             kind=MessageKind.INPUT_REQUEST.value,
             content=content or "",
+            visible_to_ui=True,
+            visible_to_agent=False,
             message_metadata={"needs_input": dict(needs_input or {})},
         )
 
@@ -204,6 +250,8 @@ class InputRequestMessage(Message):
             timestamp=self.timestamp,
             attachments=dump_attachments(self.attachments),
             needs_input=self.needs_input,
+            visible_to_ui=bool(self.visible_to_ui),
+            visible_to_agent=bool(self.visible_to_agent),
         )
 
 
@@ -223,6 +271,101 @@ class InputResponseMessage(Message):
             role=MessageRole.USER.value,
             kind=MessageKind.INPUT_RESPONSE.value,
             content=content or "",
+            visible_to_ui=True,
+            visible_to_agent=False,
             message_metadata={},
             _attachments=dump_attachments(attachments),
         )
+
+
+class ToolCallMessage(Message):
+    """Assistant-side tool invocation (hidden from UI history)."""
+
+    __mapper_args__ = {"polymorphic_identity": MessageKind.TOOL_CALL.value}
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        tool_use_id: str,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        turn_index: int = 0,
+    ) -> ToolCallMessage:
+        return cls(
+            role=MessageRole.ASSISTANT.value,
+            kind=MessageKind.TOOL_CALL.value,
+            content="",
+            # Temporary: show tool rows in UI while debugging agent turns.
+            visible_to_ui=True,
+            visible_to_agent=True,
+            message_metadata={
+                "tool_use_id": tool_use_id or "",
+                "tool_name": tool_name,
+                "arguments": dict(arguments or {}),
+                "turn_index": int(turn_index),
+            },
+        )
+
+
+class ToolResultMessage(Message):
+    """User-role tool result paired with a prior tool call (hidden from UI)."""
+
+    __mapper_args__ = {"polymorphic_identity": MessageKind.TOOL_RESULT.value}
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        tool_use_id: str,
+        status: str = "done",
+        result: dict[str, Any] | None = None,
+        error_message: str | None = None,
+        latency_ms: int = 0,
+        turn_index: int = 0,
+    ) -> ToolResultMessage:
+        return cls(
+            role=MessageRole.USER.value,
+            kind=MessageKind.TOOL_RESULT.value,
+            content="",
+            # Temporary: show tool rows in UI while debugging agent turns.
+            visible_to_ui=True,
+            visible_to_agent=True,
+            message_metadata={
+                "tool_use_id": tool_use_id or "",
+                "status": status,
+                "result": dict(result) if isinstance(result, dict) else result,
+                "error_message": error_message,
+                "latency_ms": int(latency_ms),
+                "turn_index": int(turn_index),
+            },
+        )
+
+
+def message_from_graph_dump(data: dict[str, Any]) -> Message:
+    """Rehydrate a Message subclass from ``dump_for_graph`` output."""
+    kind = str(data.get("kind") or "")
+    role = str(data.get("role") or "")
+    content = str(data.get("content") or "")
+    visible_to_ui = bool(data.get("visible_to_ui", True))
+    metadata = dict(data.get("metadata") or {})
+
+    if kind == MessageKind.TOOL_CALL.value:
+        return ToolCallMessage(
+            role=role or MessageRole.ASSISTANT.value,
+            kind=kind,
+            content=content,
+            visible_to_ui=bool(data.get("visible_to_ui", True)),
+            visible_to_agent=bool(data.get("visible_to_agent", True)),
+            message_metadata=metadata,
+        )
+    if kind == MessageKind.TOOL_RESULT.value:
+        return ToolResultMessage(
+            role=role or MessageRole.USER.value,
+            kind=kind,
+            content=content,
+            visible_to_ui=bool(data.get("visible_to_ui", True)),
+            visible_to_agent=bool(data.get("visible_to_agent", True)),
+            message_metadata=metadata,
+        )
+    raise ValueError(f"Unsupported graph message kind: {kind!r}")

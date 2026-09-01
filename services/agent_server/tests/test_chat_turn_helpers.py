@@ -77,7 +77,16 @@ class _FixedChat(ChatTurn):
 def test_chat_turn_complete_saves_user_and_assistant(monkeypatch):
     conversation_id = uuid4()
     user_message = UserMessage.create("hello")
-    result = GraphTurnResult(message="Done.")
+    from src.db.models.message import ToolCallMessage, ToolResultMessage
+
+    tool_call = ToolCallMessage.create(
+        tool_use_id="t1", tool_name="calculator", arguments={}
+    )
+    tool_result = ToolResultMessage.create(tool_use_id="t1", status="done", result={})
+    result = GraphTurnResult(
+        message="Done.",
+        tool_messages=[tool_call, tool_result],
+    )
 
     class _Runner:
         async def execute(self, request):
@@ -119,4 +128,6 @@ def test_chat_turn_complete_saves_user_and_assistant(monkeypatch):
     conversations.append_messages.assert_awaited_once()
     persisted = conversations.append_messages.await_args.args[2]
     assert persisted[0] is user_message
-    assert persisted[1].content == "Done."
+    assert persisted[1] is tool_call
+    assert persisted[2] is tool_result
+    assert persisted[3].content == "Done."

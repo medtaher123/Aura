@@ -10,9 +10,10 @@ from src.tools.providers.native import NativeToolProvider, build_default_native_
 from src.user_inputs import UserInputRouter
 
 
-def test_location_user_input_tool_returns_needs_input():
+@pytest.mark.asyncio
+async def test_location_user_input_tool_returns_needs_input():
     tool = RequestLocationUserInputTool()
-    response = tool.invoke(
+    response = await tool.invoke(
         candidates=[
             {"display_name": "Paris, France", "lat": 48.8566, "lon": 2.3522},
             {"display_name": "Paris, TX", "lat": 33.66, "lon": -95.56},
@@ -44,8 +45,9 @@ def test_bounding_box_user_input_tool_returns_needs_input():
     assert needs["bounding_box"]["map_zoom"] == 11.0
 
 
-def test_user_input_router_round_trip_from_tool_response():
-    response = RequestLocationUserInputTool().invoke(
+@pytest.mark.asyncio
+async def test_user_input_router_round_trip_from_tool_response():
+    response = await RequestLocationUserInputTool().invoke(
         candidates=[{"display_name": "Lyon", "lat": 45.75, "lon": 4.85}],
     )
     parsed = UserInputRouter.requests_from_dict(response.data["needs_input"])
@@ -69,3 +71,88 @@ async def test_build_default_native_provider_registers_user_input_tools():
         {"prompt": "Select area"},
     )
     assert result.data["stopped_for_user_input"] is True
+
+
+@pytest.mark.asyncio
+async def test_native_provider_passes_kwargs_for_location_tool():
+    """``invoke(self, **kwargs)`` tools must receive full LLM argument dicts."""
+    provider = build_default_native_provider()
+    result = await provider.invoke(
+        "request_location_user_input",
+        {
+            "candidates": [
+                {
+                    "display_name": "Pas-de-Calais, France",
+                    "lat": 50.5144061,
+                    "lon": 2.2580078,
+                    "name": "Pas-de-Calais",
+                    "osm_id": 7394,
+                    "osm_type": "relation",
+                },
+                {
+                    "display_name": "Strait of Dover / Pas de Calais",
+                    "lat": 51.0149083,
+                    "lon": 1.5270969,
+                    "name": "Strait of Dover / Pas de Calais",
+                    "osm_id": 1180740208,
+                    "osm_type": "way",
+                },
+            ],
+            "location_query": "Pas-de-Calais, France",
+            "prompt": "Which Pas-de-Calais location do you mean?",
+        },
+    )
+    assert result.error is False, result.message
+    assert result.data["stopped_for_user_input"] is True
+    assert len(result.data["needs_input"]["location"]["candidates"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_location_tool_geocodes_when_candidates_omitted(monkeypatch):
+    async def fake_search(place_query: str, *, limit: int = 8):
+        assert place_query == "Pas-de-Calais, France"
+        return [
+            {
+                "display_name": "Pas-de-Calais, Hauts-de-France, France",
+                "lat": 50.5144061,
+                "lon": 2.2580078,
+                "name": "Pas-de-Calais",
+            },
+            {
+                "display_name": "Strait of Dover / Pas de Calais",
+                "lat": 51.0149083,
+                "lon": 1.5270969,
+                "name": "Strait of Dover / Pas de Calais",
+            },
+        ]
+
+    monkeypatch.setattr(
+        "src.tools.native.user_inputs.location.search_location_candidates",
+        fake_search,
+    )
+    provider = build_default_native_provider()
+    result = await provider.invoke(
+        "request_location_user_input",
+        {"location_query": "Pas-de-Calais, France"},
+    )
+    assert result.error is False, result.message
+    candidates = result.data["needs_input"]["location"]["candidates"]
+    assert len(candidates) == 2
+    assert result.data["needs_input"]["location"]["location_query"] == (
+        "Pas-de-Calais, France"
+    )
+
+
+@pytest.mark.asyncio
+async def test_location_tool_requires_query_when_candidates_omitted():
+    provider = build_default_native_provider()
+    result = await provider.invoke("request_location_user_input", {"prompt": "Pick one"})
+    assert result.error is True
+    assert "location_query" in result.message
+
+
+def test_location_tool_schema_makes_candidates_optional():
+    schema = RequestLocationUserInputTool.input_schema()
+    assert "candidates" not in (schema.get("required") or [])
+    assert "minItems" not in (schema.get("properties") or {}).get("candidates", {})
+    assert "candidates" in (schema.get("properties") or {})

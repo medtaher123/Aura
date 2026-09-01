@@ -82,6 +82,8 @@ class ConversationMessage(BaseModel):
     timestamp: datetime | None = None
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     needs_input: dict[str, Any] | None = None
+    visible_to_ui: bool = True
+    visible_to_agent: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready dict for HTTP responses and clients."""

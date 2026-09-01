@@ -6,6 +6,7 @@ from typing import Any
 
 from eo_llm.graph.hitl import client_payload_needs_input
 from eo_llm.graph.state import DomainResultModel, GraphStateModel, validate_state
+from src.db.models.message import Message, message_from_graph_dump
 from src.tools.contracts import ToolArtifacts, ToolCoordinates
 
 from .artifacts import ArtifactAggregator
@@ -40,6 +41,7 @@ class GraphTurnResultFactory:
         return GraphTurnResult(
             message=prompt,
             error=False,
+            tool_messages=[],
             data={
                 "interrupted": True,
                 "needs_input": needs_input,
@@ -59,11 +61,34 @@ class GraphTurnResultFactory:
             city=city,
             coordinates=coords,
             error=not message,
+            tool_messages=self._tool_messages_from_state(state),
             data={
                 "answer_source": state.answer_source,
                 "selected_domains": state.selected_domains,
             },
         )
+
+    @staticmethod
+    def _tool_messages_from_state(state: GraphStateModel) -> list[Message]:
+        out: list[Message] = []
+        for dr in state.domain_results.values():
+            if isinstance(dr, DomainResultModel):
+                domain_data = dr.model_dump(mode="python")
+            elif isinstance(dr, dict):
+                domain_data = dr
+            else:
+                continue
+            raw_messages = domain_data.get("tool_messages") or []
+            if not isinstance(raw_messages, list):
+                continue
+            for item in raw_messages:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    out.append(message_from_graph_dump(item))
+                except ValueError:
+                    continue
+        return out
 
     def _artifacts_from_state(self, state: GraphStateModel) -> ToolArtifacts:
         bundles: list[ArtifactBundle] = []

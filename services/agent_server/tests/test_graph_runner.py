@@ -216,7 +216,9 @@ def test_resume_request_carries_persisted_chat_history():
     )
     assert request.chat_history[0] is prior
     assert request.message is answer
-    assert request.llm_chat_history() == [prior, answer]
+    assert answer.visible_to_agent is False
+    # Input responses stay out of LLM history; state is updated via attachments.
+    assert request.llm_chat_history() == [prior]
     assert isinstance(request.to_graph_input(), Command)
 
 

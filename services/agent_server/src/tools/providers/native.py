@@ -85,12 +85,7 @@ class NativeToolProvider(ToolProvider):
                 error=True,
             )
         try:
-            sig = inspect.signature(handler)
-            filtered = {
-                key: value
-                for key, value in arguments.items()
-                if key in sig.parameters
-            }
+            filtered = self._filter_arguments(handler, arguments)
             result = handler(**filtered)
             if inspect.isawaitable(result):
                 result = await result
@@ -104,6 +99,24 @@ class NativeToolProvider(ToolProvider):
                 data={"arguments": arguments},
                 error=True,
             )
+
+    @staticmethod
+    def _filter_arguments(
+        handler: NativeHandler, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Keep only args the handler accepts.
+
+        Handlers with ``**kwargs`` must receive the full argument dict; matching
+        only named parameters would drop fields like ``candidates``.
+        """
+        sig = inspect.signature(handler)
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            return dict(arguments)
+        return {
+            key: value
+            for key, value in arguments.items()
+            if key in sig.parameters
+        }
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(

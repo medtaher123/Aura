@@ -53,14 +53,30 @@ class LocationCandidate(BaseModel):
 
 
 class LocationRequest(UserInputRequest):
-    """Payload the server sends when requesting a location choice."""
+    """
+    Payload the server sends when requesting a location choice.
+    The candidates are the locations that the user can choose from.
+    The prompt is the prompt that will be displayed to the user.
+    The location_query is the original ambiguous query string.
+
+    use this tool when two or more locations match a certain query.
+    """
 
     candidates: list[LocationCandidate] = Field(
-        ..., min_length=1, description="Location options for the user"
+        ...,
+        min_length=1,
+        description=(
+            "Location options for the user. On tool calls this may be omitted when "
+            "location_query is set; the server geocodes and fills candidates."
+        ),
     )
     prompt: Optional[str] = Field(default=None, description="UI prompt")
     location_query: Optional[str] = Field(
-        default=None, description="Original ambiguous query string"
+        default=None,
+        description=(
+            "Original ambiguous query string. Required when candidates are omitted "
+            "so the server can geocode automatically."
+        ),
     )
 
     @classmethod

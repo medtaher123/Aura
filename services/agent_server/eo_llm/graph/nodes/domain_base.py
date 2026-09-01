@@ -344,6 +344,10 @@ class AgenticDomainNode(DomainToolsNode):
         run: DomainAgentRunResult,
     ) -> dict[str, Any]:
         last_call = run.tool_calls[-1] if run.tool_calls else None
+        tool_messages: list[dict[str, Any]] = []
+        for call in run.tool_calls:
+            for message in call.to_messages():
+                tool_messages.append(message.dump_for_graph())
         return {
             "status": "done" if not run.error else "error",
             "resolved_location": ctx.resolved,
@@ -355,6 +359,7 @@ class AgenticDomainNode(DomainToolsNode):
                 else {}
             ),
             "tool_calls": [call.model_dump(mode="python") for call in run.tool_calls],
+            "tool_messages": tool_messages,
             "error": run.error,
         }
 

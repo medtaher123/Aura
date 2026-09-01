@@ -29,12 +29,15 @@ class ArtifactBundle(BaseModel):
 class GraphTurnResult(BaseModel):
     """Outcome of one graph turn for the websocket / persistence layer."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     message: str
     artifacts: ToolArtifacts = Field(default_factory=ToolArtifacts)
     data: dict[str, Any] = Field(default_factory=dict)
     error: bool = False
     city: str | None = None
     coordinates: ToolCoordinates | None = None
+    tool_messages: list[Message] = Field(default_factory=list)
 
     def pending_input_requests(self) -> dict[str, Any]:
         """``needs_input`` map when the turn paused for user input."""
@@ -60,8 +63,11 @@ class GraphRunnerRequest(BaseModel, ABC):
     stream_emitter: EventEmitter | None = Field(default=None, exclude=True)
 
     def llm_chat_history(self) -> list[Message]:
-        """Prior conversation plus this turn's incoming user message."""
-        return [*self.chat_history, self.message]
+        """Prior agent-visible conversation plus this turn's message when visible."""
+        history = [m for m in self.chat_history if m.visible_to_agent]
+        if self.message.visible_to_agent:
+            return [*history, self.message]
+        return history
 
     @abstractmethod
     def to_graph_input(self) -> dict[str, Any] | Command:

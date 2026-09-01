@@ -11,7 +11,10 @@ from .message import (
     Message,
     MessageKind,
     MessageRole,
+    ToolCallMessage,
+    ToolResultMessage,
     UserMessage,
+    message_from_graph_dump,
 )
 from .message_attachments import (
     FileAttachment,
@@ -41,6 +44,9 @@ __all__ = [
     "AssistantMessage",
     "InputRequestMessage",
     "InputResponseMessage",
+    "ToolCallMessage",
+    "ToolResultMessage",
+    "message_from_graph_dump",
     "MessageAttachment",
     "LocationAttachment",
     "FileAttachment",

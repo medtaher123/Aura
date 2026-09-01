@@ -57,21 +57,36 @@ class ConversationService:
         self,
         user: User,
         conversation_id: uuid.UUID,
+        *,
+        visible_to_ui: bool | None = True,
+        visible_to_agent: bool | None = None,
     ) -> Optional[ConversationWithMessagesResult]:
         conversation = await self.get_conversation(user, conversation_id)
         if conversation is None:
             return None
-        messages = await self.messages.list_for_conversation(conversation_id)
+        messages = await self.messages.list_for_conversation(
+            conversation_id,
+            visible_to_ui=visible_to_ui,
+            visible_to_agent=visible_to_agent,
+        )
         return ConversationWithMessagesResult(conversation=conversation, messages=messages)
 
     async def get_or_create_conversation_with_messages(
         self,
         user: User,
         conversation_id: Optional[uuid.UUID],
+        *,
+        visible_to_ui: bool | None = True,
+        visible_to_agent: bool | None = None,
     ) -> Optional[ConversationWithMessagesResult]:
         """Resolve a chat request to an owner-scoped conversation context."""
         if conversation_id is not None:
-            return await self.get_conversation_with_messages(user, conversation_id)
+            return await self.get_conversation_with_messages(
+                user,
+                conversation_id,
+                visible_to_ui=visible_to_ui,
+                visible_to_agent=visible_to_agent,
+            )
 
         conversation = await self.create_conversation(user, {})
         return ConversationWithMessagesResult(

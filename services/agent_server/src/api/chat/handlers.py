@@ -147,6 +147,7 @@ class ChatTurn(ABC):
             self.conversation_id,
             [
                 *self.messages_to_save,
+                *result.tool_messages,
                 AssistantMessage.create(
                     result.message, metadata=result.assistant_metadata()
                 ),
@@ -215,7 +216,10 @@ class NewChat(ChatTurn):
 
     async def start(self) -> bool:
         context = await self.conversations.get_or_create_conversation_with_messages(
-            self.user, self.incoming_conversation_id
+            self.user,
+            self.incoming_conversation_id,
+            visible_to_ui=None,
+            visible_to_agent=True,
         )
         if context is None:
             await self.conn.send_error("Conversation not found", recoverable=True)
@@ -279,7 +283,10 @@ class ResumeChat(ChatTurn):
             self.conversation_id,
         )
         found = await self.conversations.get_conversation_with_messages(
-            self.user, self.conversation_id
+            self.user,
+            self.conversation_id,
+            visible_to_ui=None,
+            visible_to_agent=True,
         )
         if found is None:
             await self.conn.send_error("Conversation not found", recoverable=True)

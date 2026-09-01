@@ -24,9 +24,16 @@ class MessageService:
         self,
         user: User,
         conversation_id: uuid.UUID,
+        *,
+        visible_to_ui: bool | None = True,
+        visible_to_agent: bool | None = None,
     ) -> Optional[list[Message]]:
         """List messages if the conversation belongs to ``user``."""
         conversation = await self.conversations.get_conversation(user, conversation_id)
         if conversation is None:
             return None
-        return await self.messages.list_for_conversation(conversation_id)
+        return await self.messages.list_for_conversation(
+            conversation_id,
+            visible_to_ui=visible_to_ui,
+            visible_to_agent=visible_to_agent,
+        )

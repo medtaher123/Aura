@@ -54,6 +54,48 @@ async def test_agentic_test_node_execute_success():
 
     assert out["domain_results"]["agentic_test"]["status"] == "done"
     assert out["domain_results"]["agentic_test"]["message"] == "Calculator returned 42."
+    assert out["domain_results"]["agentic_test"]["tool_messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_agentic_test_node_success_emits_tool_messages():
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+    from src.tools.contracts import ToolResponse
+
+    node = AgenticTestNode()
+    record = AgentToolCallRecord(
+        tool_use_id="calc-1",
+        turn_index=0,
+        tool_name="calculator",
+        arguments={"expression": "40+2"},
+        status="done",
+        result=ToolResponse(message="42", tool_name="calculator", data={"value": 42}),
+    )
+    run_result = MagicMock()
+    run_result.paused = False
+    run_result.needs_input = None
+    run_result.error = False
+    run_result.message = "Calculator returned 42."
+    run_result.tool_calls = [record]
+
+    with patch.object(node._agent, "run", new=AsyncMock(return_value=run_result)):
+        out = await node.execute(
+            validate_state(
+                {
+                    "query": "what is 40 + 2",
+                    "user_query": "what is 40 + 2",
+                    "selected_domains": ["agentic_test"],
+                }
+            )
+        )
+
+    payload = out["domain_results"]["agentic_test"]
+    assert payload["status"] == "done"
+    assert len(payload["tool_messages"]) == 2
+    assert payload["tool_messages"][0]["kind"] == "tool_call"
+    assert payload["tool_messages"][1]["kind"] == "tool_result"
+    assert payload["tool_messages"][0]["visible_to_ui"] is True
+    assert payload["tool_messages"][0]["metadata"]["tool_name"] == "calculator"
 
 
 @pytest.mark.asyncio
