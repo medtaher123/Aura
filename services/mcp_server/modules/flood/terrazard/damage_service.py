@@ -148,7 +148,8 @@ class FloodDamageService:
             "Vegetation exposure is limited to mapped agricultural land-cover classes",
             (
                 "touched_buildings lists simplified footprints of buildings "
-                "intersecting flood bands with per-building damage_eur (capped)"
+                "intersecting flood bands with per-building damage_eur and "
+                "BD TOPO cleabs when available (capped)"
             ),
         ]
         if total_exposed_area < total_flooded_area * 0.05:

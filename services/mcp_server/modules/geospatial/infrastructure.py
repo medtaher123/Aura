@@ -11,13 +11,19 @@ import os
 import math
 import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Any
 
 import boto3
+import psycopg.sql
 from botocore.exceptions import ClientError
 
 from core.logger import get_logger
 from config import get_config
+from modules.geospatial.bdtopo_common import (
+    build_map_artifacts as _build_bdtopo_map_artifacts,
+)
+from modules.geospatial.bdtopo_common import normalize_rows as _normalize_bdtopo_rows
+from modules.geospatial.bdtopo_common import run_query as _run_bdtopo_query
 from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
 from utils.map_view_service import view_state_from_bbox, view_state_from_points
 from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
@@ -145,6 +151,294 @@ def _parse_s3_bucket(s3_uri: str) -> str | None:
     remainder = s3_uri.replace("s3://", "", 1)
     bucket = remainder.split("/", 1)[0].strip()
     return bucket or None
+
+
+def _normalize_cleabs_inputs(cleabs: str | list[str] | None) -> list[str]:
+    if cleabs is None:
+        return []
+    raw_values = cleabs if isinstance(cleabs, list) else [cleabs]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        if value not in seen:
+            normalized.append(value)
+            seen.add(value)
+    return normalized
+
+
+def _get_batiment_columns() -> set[str]:
+    rows = _run_bdtopo_query(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'bdtopo_raw'
+          AND table_name = 'batiment'
+        ORDER BY ordinal_position
+        """
+    )
+    return {
+        str(row.get("column_name")).strip()
+        for row in rows
+        if row.get("column_name") is not None
+    }
+
+
+def _batiment_has_geometry_column(columns: set[str]) -> str | None:
+    for candidate in ("geometrie", "geom"):
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def _collect_lon_lat(value: Any, lons: list[float], lats: list[float]) -> None:
+    if not isinstance(value, list) or not value:
+        return
+    if all(isinstance(item, (int, float)) for item in value[:2]) and len(value) >= 2:
+        lons.append(float(value[0]))
+        lats.append(float(value[1]))
+        return
+    for item in value:
+        _collect_lon_lat(item, lons, lats)
+
+
+def _view_state_for_buildings(
+    rows: list[dict[str, Any]],
+    fallback: ToolCoordinates,
+) -> dict[str, float]:
+    """Fit the map to building footprints at street/parcel zoom."""
+    lons: list[float] = []
+    lats: list[float] = []
+    for row in rows:
+        geom = row.get("geom_geojson")
+        if isinstance(geom, str):
+            try:
+                geom = json.loads(geom)
+            except json.JSONDecodeError:
+                geom = None
+        if isinstance(geom, dict):
+            _collect_lon_lat(geom.get("coordinates"), lons, lats)
+        lat = row.get("feature_lat")
+        lon = row.get("feature_lon")
+        if lat is not None and lon is not None:
+            lats.append(float(lat))
+            lons.append(float(lon))
+
+    if lats and lons:
+        min_lat, max_lat = min(lats), max(lats)
+        min_lon, max_lon = min(lons), max(lons)
+        center_lat = (min_lat + max_lat) / 2.0
+        center_lon = (min_lon + max_lon) / 2.0
+    else:
+        center_lat, center_lon = fallback.lat, fallback.lon
+        min_lat = max_lat = center_lat
+        min_lon = max_lon = center_lon
+
+    min_span_deg = 80.0 / 111_000.0
+    lat_span = max(max_lat - min_lat, min_span_deg)
+    lon_span = max(max_lon - min_lon, min_span_deg)
+    pad = 1.8
+    lat_span *= pad
+    lon_span *= pad
+    lon_span_corrected = lon_span * max(abs(math.cos(math.radians(center_lat))), 0.2)
+    zoom = min(math.log2(180.0 / lat_span), math.log2(360.0 / lon_span_corrected))
+    zoom = max(16.0, min(18.5, zoom))
+    return {
+        "latitude": center_lat,
+        "longitude": center_lon,
+        "zoom": float(zoom),
+    }
+
+
+def bdtopo_buildings_by_cleabs_tool(
+    cleabs: str | list[str] | None,
+    limit: int | None = None,
+    include_geometry: bool = False,
+) -> ToolResponse:
+    """
+    Fetch one or more IGN BDTOPO building records by cleabs identifier.
+
+    Args:
+        cleabs: Single cleabs string or a list of cleabs values.
+        limit: Optional hard cap on returned rows. Defaults to number of requested cleabs.
+        include_geometry: When false, skip centroid/GeoJSON generation and map artifacts. When true, return map artifact with building geometries.
+    """
+    tool_name = "bdtopo_buildings_by_cleabs_tool"
+    requested_ids = _normalize_cleabs_inputs(cleabs)
+    if not requested_ids:
+        return ToolResponse(
+            tool_name=tool_name,
+            message="Provide one or more non-empty cleabs values.",
+            data={"requested_cleabs": []},
+            error=True,
+        )
+
+    try:
+        available_columns = _get_batiment_columns()
+        if "cleabs" not in available_columns:
+            return ToolResponse(
+                tool_name=tool_name,
+                message="The BDTOPO batiment table does not expose a cleabs column.",
+                data={"requested_cleabs": requested_ids},
+                error=True,
+            )
+
+        geometry_column = _batiment_has_geometry_column(available_columns)
+        selected_columns = [
+            "cleabs",
+            "identifiants_rnb",
+            "nature",
+            "usage_1",
+            "usage_2",
+            "etat_de_l_objet",
+            "detruit",
+            "construction_legere",
+            "nombre_d_etages",
+            "nombre_de_logements",
+            "hauteur",
+            "altitude_minimale_sol",
+            "altitude_maximale_sol",
+            "altitude_minimale_toit",
+            "altitude_maximale_toit",
+            "altitude_du_sol",
+            "z_min_sol",
+            "z_min_toit",
+            "z_max_toit",
+            "materiaux_des_murs",
+            "materiaux_de_la_toiture",
+            "origine_du_batiment",
+            "identifiants_sources",
+            "sources",
+            "appariement_fichiers_fonciers",
+            "precision_planimetrique",
+            "precision_altimetrique",
+            "methode_d_acquisition_planimetrique",
+            "methode_d_acquisition_altimetrique",
+            "date_d_apparition",
+            "date_de_confirmation",
+            "date_creation",
+            "date_modification",
+            "date_de_modification",
+            "date_destruction",
+            "edition_date",
+            "theme",
+        ]
+        projected_columns = [
+            column for column in selected_columns if column in available_columns
+        ]
+
+        select_parts: list[psycopg.sql.Composable] = [
+            psycopg.sql.SQL("b.{col}").format(col=psycopg.sql.Identifier(column))
+            for column in projected_columns
+        ]
+        if geometry_column and include_geometry:
+            select_parts.extend(
+                [
+                    psycopg.sql.SQL(
+                        "ST_Y(ST_PointOnSurface(b.{geom})) AS feature_lat"
+                    ).format(geom=psycopg.sql.Identifier(geometry_column)),
+                    psycopg.sql.SQL(
+                        "ST_X(ST_PointOnSurface(b.{geom})) AS feature_lon"
+                    ).format(geom=psycopg.sql.Identifier(geometry_column)),
+                    psycopg.sql.SQL(
+                        "ST_AsGeoJSON(ST_Transform(ST_Force2D(ST_MakeValid(b.{geom})), 4326)) AS geom_geojson"
+                    ).format(geom=psycopg.sql.Identifier(geometry_column)),
+                ]
+            )
+
+        safe_limit = min(
+            max(int(limit or len(requested_ids)), 1),
+            max(len(requested_ids), 100),
+        )
+        sql_query = psycopg.sql.SQL(
+            """
+            SELECT {select_list}
+            FROM bdtopo_raw.batiment b
+            WHERE b.cleabs = ANY(%s)
+            ORDER BY array_position(%s::text[], b.cleabs::text)
+            LIMIT %s
+            """
+        ).format(select_list=psycopg.sql.SQL(", ").join(select_parts))
+        rows = _normalize_bdtopo_rows(
+            _run_bdtopo_query(sql_query, (requested_ids, requested_ids, safe_limit))
+        )
+        for row in rows:
+            cleabs_value = str(row.get("cleabs") or "").strip()
+            row.setdefault("label", cleabs_value or "building")
+            row.setdefault("source_table", "bdtopo_raw.batiment")
+
+        found_ids = {
+            str(row.get("cleabs")).strip()
+            for row in rows
+            if row.get("cleabs") is not None and str(row.get("cleabs")).strip()
+        }
+        missing_ids = [value for value in requested_ids if value not in found_ids]
+
+        coords = None
+        if rows and rows[0].get("feature_lat") is not None and rows[0].get("feature_lon") is not None:
+            coords = ToolCoordinates(
+                lat=float(rows[0]["feature_lat"]),
+                lon=float(rows[0]["feature_lon"]),
+            )
+
+        message = f"Found {len(rows)} building record(s) for {len(requested_ids)} requested cleabs."
+        if missing_ids:
+            message += f" Missing: {', '.join(missing_ids)}."
+
+        artifacts = ToolArtifacts(maps=[], thumbnails=[], urls=[])
+        if include_geometry and coords:
+            artifacts = _build_bdtopo_map_artifacts(
+                title="BDTOPO buildings by cleabs",
+                coords=coords,
+                radius_m=None,
+                rows=rows,
+            )
+            if artifacts.maps:
+                artifacts.maps[0]["view_state"] = _view_state_for_buildings(
+                    rows, coords
+                )
+                artifacts.maps[0]["tooltip"] = {
+                    "text": (
+                        "CLEABS: {cleabs}\n"
+                        "RNB: {identifiants_rnb}\n"
+                        "Nature: {nature}\n"
+                        "Usage 1: {usage_1}\n"
+                        "Usage 2: {usage_2}\n"
+                        "Height: {hauteur}\n"
+                        "Floors: {nombre_d_etages}\n"
+                        "Dwellings: {nombre_de_logements}\n"
+                        "Walls: {materiaux_des_murs}\n"
+                        "Roof: {materiaux_de_la_toiture}"
+                    )
+                }
+
+        return ToolResponse(
+            tool_name=tool_name,
+            message=message,
+            coordinates=coords,
+            artifacts=artifacts,
+            data={
+                "requested_cleabs": requested_ids,
+                "found_cleabs": [value for value in requested_ids if value in found_ids],
+                "missing_cleabs": missing_ids,
+                "include_geometry": include_geometry,
+                "matches": rows,
+            },
+            error=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - tool-level guardrail
+        logger.error("bdtopo_buildings_by_cleabs_tool failed: %s", exc)
+        return ToolResponse(
+            tool_name=tool_name,
+            message=f"BDTOPO building lookup failed: {exc}",
+            data={
+                "requested_cleabs": requested_ids,
+                "include_geometry": include_geometry,
+            },
+            error=True,
+        )
 
 def _list_athena_databases(client, catalog_name: str = "AwsDataCatalog") -> list[str]:
     paginator = client.get_paginator("list_databases")

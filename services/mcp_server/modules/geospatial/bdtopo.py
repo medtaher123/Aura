@@ -9,11 +9,12 @@ from core.logger import get_logger
 from modules.geospatial.bdtopo_common import (
     build_map_artifacts,
     distance_summary as _distance_summary,
+    map_urls as _map_urls,
     normalize_rows as _normalize_rows,
     run_query as _run_query,
     top_values as _top_values,
 )
-from utils.contracts import BDTOPOQueryType, ToolCoordinates, ToolResponse
+from utils.contracts import BDTOPOQueryType, ToolArtifacts, ToolCoordinates, ToolResponse
 
 logger = get_logger(__name__)
 
@@ -49,12 +50,37 @@ def _prompt_hints(query_type: str, coords: ToolCoordinates, radius_m: int) -> li
         for template in templates
     ]
 
+
+def _geometry_select(include_geometry: bool, geom_expr: str) -> str:
+    if not include_geometry:
+        return "NULL::text AS geom_geojson"
+    return f"ST_AsGeoJSON(ST_SimplifyPreserveTopology({geom_expr}, 0.00005)) AS geom_geojson"
+
+
+def _artifacts_for_result(
+    *,
+    include_geometry: bool,
+    title: str,
+    coords: ToolCoordinates,
+    radius_m: int | None,
+    rows: list[dict[str, Any]],
+) -> ToolArtifacts:
+    if include_geometry:
+        return build_map_artifacts(
+            title=title,
+            coords=coords,
+            radius_m=radius_m,
+            rows=rows,
+        )
+    return ToolArtifacts(maps=[], thumbnails=[], urls=_map_urls(coords))
+
 def bdtopo_query_tool(
     query_type: BDTOPOQueryType,
     lat: float,
     lon: float,
     radius_m: int | None = None,
     limit: int = 5,
+    include_geometry: bool = True,
 ) -> ToolResponse:
     """
     Query BDTOPO layers through curated PostGIS views for low-latency agent access.
@@ -69,6 +95,7 @@ def bdtopo_query_tool(
         lon: Longitude in decimal degrees.
         radius_m: Radius in meters for proximity/intersection filters.
         limit: Maximum number of rows to return (1-50).
+        include_geometry: When false, skip GeoJSON generation and map layer artifacts.
     """
     config = get_config()
     safe_limit = min(max(int(limit or 5), 1), 50)
@@ -100,7 +127,7 @@ def bdtopo_query_tool(
                     ST_Area(v.geom::geography) AS area_m2,
                     ST_Y(ST_PointOnSurface(v.geom)) AS feature_lat,
                     ST_X(ST_PointOnSurface(v.geom)) AS feature_lon,
-                    ST_AsGeoJSON(ST_SimplifyPreserveTopology(v.geom, 0.00005)) AS geom_geojson
+                    {_geometry}
                 FROM bdtopo_curated.mv_admin_latest v
                 LEFT JOIN bdtopo_raw.commune c
                     ON v.source_table = 'commune'
@@ -110,7 +137,7 @@ def bdtopo_query_tool(
                     ST_SetSRID(ST_Point(%s, %s), 4326)
                 )
                 LIMIT 1
-                """,
+                """.format(_geometry=_geometry_select(include_geometry, "v.geom")),
                     (lon, lat),
                 )
             )
@@ -119,7 +146,8 @@ def bdtopo_query_tool(
                     tool_name="bdtopo_query_tool",
                     message="No administrative entity found at this location.",
                     coordinates=coords,
-                    artifacts=build_map_artifacts(
+                    artifacts=_artifacts_for_result(
+                        include_geometry=include_geometry,
                         title=f"BDTOPO {query_type}",
                         coords=coords,
                         radius_m=effective_radius,
@@ -145,7 +173,8 @@ def bdtopo_query_tool(
                 tool_name="bdtopo_query_tool",
                 message=f"Administrative match: {label}{insee_suffix}.",
                 coordinates=coords,
-                artifacts=build_map_artifacts(
+                artifacts=_artifacts_for_result(
+                    include_geometry=include_geometry,
                     title=f"BDTOPO {query_type}",
                     coords=coords,
                     radius_m=effective_radius,
@@ -200,7 +229,7 @@ def bdtopo_query_tool(
                     ) AS distance_m,
                     ST_Y(ST_PointOnSurface(v.geom)) AS feature_lat,
                     ST_X(ST_PointOnSurface(v.geom)) AS feature_lon,
-                    ST_AsGeoJSON(ST_SimplifyPreserveTopology(v.geom, 0.00005)) AS geom_geojson
+                    {_geometry}
                 FROM bdtopo_curated.mv_transport_latest v
                 LEFT JOIN bdtopo_raw.troncon_de_route t
                     ON v.source_table = 'troncon_de_route'
@@ -212,7 +241,7 @@ def bdtopo_query_tool(
                 )
                 ORDER BY distance_m
                 LIMIT %s
-                """,
+                """.format(_geometry=_geometry_select(include_geometry, "v.geom")),
                     (lon, lat, lon, lat, effective_radius, safe_limit),
                 )
             )
@@ -230,7 +259,8 @@ def bdtopo_query_tool(
                     )
                 ),
                 coordinates=coords,
-                artifacts=build_map_artifacts(
+                artifacts=_artifacts_for_result(
+                    include_geometry=include_geometry,
                     title=f"BDTOPO {query_type}",
                     coords=coords,
                     radius_m=effective_radius,
@@ -277,7 +307,7 @@ def bdtopo_query_tool(
                     ) AS distance_m,
                     ST_Y(ST_PointOnSurface(v.geom)) AS feature_lat,
                     ST_X(ST_PointOnSurface(v.geom)) AS feature_lon,
-                    ST_AsGeoJSON(ST_SimplifyPreserveTopology(v.geom, 0.00005)) AS geom_geojson
+                    {_geometry}
                 FROM bdtopo_curated.mv_regulated_latest v
                 LEFT JOIN bdtopo_raw.zone_d_activite_ou_d_interet z
                     ON v.source_table = 'zone_d_activite_ou_d_interet'
@@ -292,7 +322,7 @@ def bdtopo_query_tool(
                 )
                 ORDER BY distance_m
                 LIMIT %s
-                """,
+                """.format(_geometry=_geometry_select(include_geometry, "v.geom")),
                     (lon, lat, lon, lat, effective_radius, safe_limit),
                 )
             )
@@ -320,7 +350,7 @@ def bdtopo_query_tool(
                                 ) AS distance_m,
                                 ST_Y(ST_PointOnSurface(p.geometrie)) AS feature_lat,
                                 ST_X(ST_PointOnSurface(p.geometrie)) AS feature_lon,
-                                ST_AsGeoJSON(ST_SimplifyPreserveTopology(p.geometrie, 0.00005)) AS geom_geojson
+                                {_park_geometry}
                             FROM bdtopo_raw.parc_ou_reserve p
                             WHERE ST_DWithin(
                                 p.geometrie::geography,
@@ -344,7 +374,7 @@ def bdtopo_query_tool(
                                 ) AS distance_m,
                                 ST_Y(ST_PointOnSurface(z.geometrie)) AS feature_lat,
                                 ST_X(ST_PointOnSurface(z.geometrie)) AS feature_lon,
-                                ST_AsGeoJSON(ST_SimplifyPreserveTopology(z.geometrie, 0.00005)) AS geom_geojson
+                                {_zone_geometry}
                             FROM bdtopo_raw.zone_d_activite_ou_d_interet z
                             WHERE ST_DWithin(
                                 z.geometrie::geography,
@@ -354,7 +384,14 @@ def bdtopo_query_tool(
                         ) fallback
                         ORDER BY distance_m
                         LIMIT %s
-                        """,
+                        """.format(
+                            _park_geometry=_geometry_select(
+                                include_geometry, "p.geometrie"
+                            ),
+                            _zone_geometry=_geometry_select(
+                                include_geometry, "z.geometrie"
+                            ),
+                        ),
                         (
                             lon,
                             lat,
@@ -383,7 +420,8 @@ def bdtopo_query_tool(
                     )
                 ),
                 coordinates=coords,
-                artifacts=build_map_artifacts(
+                artifacts=_artifacts_for_result(
+                    include_geometry=include_geometry,
                     title=f"BDTOPO {query_type}",
                     coords=coords,
                     radius_m=effective_radius,
@@ -427,7 +465,7 @@ def bdtopo_query_tool(
                         ) AS distance_m,
                         ST_Y(ST_PointOnSurface(v.geom)) AS feature_lat,
                         ST_X(ST_PointOnSurface(v.geom)) AS feature_lon,
-                        ST_AsGeoJSON(ST_SimplifyPreserveTopology(v.geom, 0.00005)) AS geom_geojson
+                        {_places_geometry}
                     FROM bdtopo_curated.mv_places_latest v
                     LEFT JOIN bdtopo_raw.lieu_dit_non_habite p
                         ON v.source_table = 'lieu_dit_non_habite'
@@ -455,7 +493,7 @@ def bdtopo_query_tool(
                         ) AS distance_m,
                         ST_Y(ST_PointOnSurface(t.geometrie)) AS feature_lat,
                         ST_X(ST_PointOnSurface(t.geometrie)) AS feature_lon,
-                        ST_AsGeoJSON(ST_SimplifyPreserveTopology(t.geometrie, 0.00005)) AS geom_geojson
+                        {_toponymy_geometry}
                     FROM bdtopo_raw.toponymie t
                     WHERE ST_DWithin(
                         t.geometrie::geography,
@@ -465,7 +503,12 @@ def bdtopo_query_tool(
                 ) places
                 ORDER BY distance_m
                 LIMIT %s
-                """,
+                """.format(
+                    _places_geometry=_geometry_select(include_geometry, "v.geom"),
+                    _toponymy_geometry=_geometry_select(
+                        include_geometry, "t.geometrie"
+                    ),
+                ),
                     (
                         lon,
                         lat,
@@ -487,7 +530,8 @@ def bdtopo_query_tool(
                 tool_name="bdtopo_query_tool",
                 message=f"Found {len(rows)} named places within {effective_radius} m.",
                 coordinates=coords,
-                artifacts=build_map_artifacts(
+                artifacts=_artifacts_for_result(
+                    include_geometry=include_geometry,
                     title=f"BDTOPO {query_type}",
                     coords=coords,
                     radius_m=effective_radius,
@@ -513,6 +557,7 @@ def bdtopo_query_tool(
             data={
                 "query_type": query_type,
                 "supported_query_types": list(SUPPORTED_QUERY_TYPES),
+                "include_geometry": include_geometry,
                 "prompt_hints": _prompt_hints("admin_lookup", coords, effective_radius),
             },
             error=True,
@@ -526,6 +571,7 @@ def bdtopo_query_tool(
             data={
                 "query_type": query_type,
                 "supported_query_types": list(SUPPORTED_QUERY_TYPES),
+                "include_geometry": include_geometry,
                 "prompt_hints": _prompt_hints(
                     query_type
                     if query_type in SUPPORTED_QUERY_TYPES

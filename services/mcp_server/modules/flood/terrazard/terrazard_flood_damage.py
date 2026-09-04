@@ -18,7 +18,7 @@ from utils.contracts import BoundingBox, ToolArtifacts, ToolResponse
 logger = get_logger(__name__)
 
 TOOL_NAME = "get_terrazard_flood_damage_tool"
-BBOX_MAX_SIDE_KM = 1000.0
+BBOX_MAX_SIDE_KM = 1.0
 
 
 def _bbox_side_lengths_km(bbox: list[float]) -> tuple[float, float]:
@@ -93,8 +93,9 @@ def get_terrazard_flood_damage_tool(
     Requires an explicit ``bbox`` object with named fields
     ``min_lat``, ``max_lat``, ``min_lon``, ``max_lon`` (WGS84 degrees) for the
     analysis area (typically a user-drawn map selection).
-    The bounding box can be retrieved by using the bounding box input.
+    The bounding box can be retrieved by using the request_location_user_input tool. 
     If the bounding box is not available, call the bounding box input to get the bounding box.
+    ALWAYS call the request_location_user_input tool to get the bounding box.
 
     On success, also returns a light vector-tile map artifact stacking TerraZard
     flood tiles with BDTOPO buildings and vegetation (tile URLs only).
@@ -120,6 +121,7 @@ def get_terrazard_flood_damage_tool(
                 f"The bounding box should not be larger than "
                 f"{BBOX_MAX_SIDE_KM:.0f}km x {BBOX_MAX_SIDE_KM:.0f}km. "
                 f"Got {width_km:.1f}km x {height_km:.1f}km."
+                "reduce the bbox size to be within the limit and try again."
             ),
             error=True,
         )

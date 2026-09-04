@@ -79,6 +79,8 @@ class BdtopoFeature:
     asset_class: str
     feature_id: int
     geojson: dict[str, Any]
+    cleabs: str | None = None
+    """IGN BD TOPO object identifier when available (``cleabs``)."""
 
 @dataclass(frozen=True)
 class ExposureLayer:
@@ -162,6 +164,7 @@ class _ResolvedLayer:
     geom_col: str
     srid: int
     land_type_col: str | None
+    cleabs_col: str | None
 
 def _resolve_layer(layer: ExposureLayer) -> _ResolvedLayer | None:
     meta = _geometry_metadata(layer.table)
@@ -173,6 +176,7 @@ def _resolve_layer(layer: ExposureLayer) -> _ResolvedLayer | None:
         geom_col=geom_col,
         srid=srid,
         land_type_col=_detect_column(layer.table, layer.land_type_columns),
+        cleabs_col=_detect_column(layer.table, ("cleabs",)),
     )
 
 def _aoi_envelope_params(
@@ -257,6 +261,14 @@ def _fetch_layer_features(
         if resolved.land_type_col
         else psycopg.sql.SQL("'unknown'")
     )
+    cleabs_expr = (
+        psycopg.sql.SQL("{alias}.{col}::text").format(
+            alias=psycopg.sql.Identifier(layer.alias),
+            col=psycopg.sql.Identifier(resolved.cleabs_col),
+        )
+        if resolved.cleabs_col
+        else psycopg.sql.SQL("NULL")
+    )
     geom_ident = psycopg.sql.Identifier(resolved.geom_col)
     alias = psycopg.sql.Identifier(layer.alias)
     minx, miny, maxx, maxy, srid = _aoi_envelope_params(bbox, resolved.srid)
@@ -274,6 +286,7 @@ def _fetch_layer_features(
                 )
                 SELECT
                     {land_type}::text AS land_type,
+                    {cleabs} AS cleabs,
                     ST_AsGeoJSON(
                         ST_Transform(
                             ST_SimplifyPreserveTopology(
@@ -292,6 +305,7 @@ def _fetch_layer_features(
                 """
             ).format(
                 land_type=land_type_expr,
+                cleabs=cleabs_expr,
                 schema=psycopg.sql.Identifier(layer.schema),
                 table=psycopg.sql.Identifier(layer.table),
                 alias=alias,
@@ -311,6 +325,10 @@ def _fetch_layer_features(
         geometry = _parse_geojson(row.get("geojson"))
         if geometry is None:
             continue
+        raw_cleabs = row.get("cleabs")
+        cleabs = str(raw_cleabs).strip() if raw_cleabs is not None else None
+        if cleabs == "":
+            cleabs = None
         features.append(
             BdtopoFeature(
                 source=layer.source,
@@ -318,6 +336,7 @@ def _fetch_layer_features(
                 asset_class=asset_class,
                 feature_id=feature_id_offset + index,
                 geojson=geometry,
+                cleabs=cleabs,
             )
         )
     return features
@@ -586,20 +605,23 @@ def collect_bdtopo_exposure(
                     "area_m2": round(float(area_m2), 1),
                 }
             )
+        properties: dict[str, Any] = {
+            "source": feature.source,
+            "land_type": feature.land_type,
+            "asset_class": feature.asset_class,
+            "depth_min_m": band.depth_min_m,
+            "depth_max_m": band.depth_max_m,
+            "representative_depth_m": band.representative_depth_m,
+            "intersection_area_m2": round(total_area, 1),
+            "band_exposures": band_exposures,
+        }
+        if feature.cleabs:
+            properties["cleabs"] = feature.cleabs
         touched_features.append(
             {
                 "type": "Feature",
                 "geometry": feature.geojson,
-                "properties": {
-                    "source": feature.source,
-                    "land_type": feature.land_type,
-                    "asset_class": feature.asset_class,
-                    "depth_min_m": band.depth_min_m,
-                    "depth_max_m": band.depth_max_m,
-                    "representative_depth_m": band.representative_depth_m,
-                    "intersection_area_m2": round(total_area, 1),
-                    "band_exposures": band_exposures,
-                },
+                "properties": properties,
             }
         )
 
