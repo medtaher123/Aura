@@ -28,6 +28,27 @@ class ToolCallRecord(TypedDict, total=False):
     arguments: dict | None
 
 
+class AgentTimelineTextItem(TypedDict, total=False):
+    kind: Literal["text"]
+    domain: str | None
+    message: str
+
+
+class AgentTimelineToolItem(TypedDict, total=False):
+    kind: Literal["tool"]
+    tool_name: str
+    status: ToolRunStatus
+    step_id: str | None
+    domain: str | None
+    execution_time_seconds: float | None
+    detail: str | None
+    result: dict | None
+    arguments: dict | None
+
+
+AgentTimelineItem = AgentTimelineTextItem | AgentTimelineToolItem
+
+
 class NodeCallRecord(TypedDict, total=False):
     node_name: str
     status: ToolRunStatus
@@ -45,6 +66,7 @@ class AssistantMessage(TypedDict, total=False):
     node_calls: list[NodeCallRecord]
     node_start_lines: list[str]
     node_result_lines: list[dict[str, str]]
+    agent_timeline: list[AgentTimelineItem]
     thinking_lines: list[str]
 
 

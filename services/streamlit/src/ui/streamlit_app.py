@@ -38,6 +38,7 @@ from src.ui.bbox_input import (  # noqa: E402
     bbox_from_folium_draw_output,
 )
 from src.ui.conversation_history import (  # noqa: E402
+    AgentTimelineItem,
     AssistantMessage,
     Message,
     ToolCallRecord,
@@ -838,8 +839,8 @@ _TOOL_STATUS_CSS = """
 }
 .metaplanet-tool-spin {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   border: 2px solid #22c55e;
   border-top-color: transparent;
   border-radius: 50%;
@@ -848,24 +849,24 @@ _TOOL_STATUS_CSS = """
 }
 .metaplanet-tool-dot-success {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   background: #22c55e;
   border-radius: 50%;
   vertical-align: middle;
 }
 .metaplanet-tool-dot-error {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   background: #ef4444;
   border-radius: 50%;
   vertical-align: middle;
 }
 .metaplanet-tool-dot-skipped {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   background: #f59e0b;
   border-radius: 50%;
   vertical-align: middle;
@@ -1031,6 +1032,74 @@ def _normalize_tool_progress_event(evt: dict) -> dict | None:
     return None
 
 
+def _compact_domain_result_text(message: str) -> str:
+    """Collapse blank lines and trailing spaces for a denser domain-result block."""
+    lines = [line.rstrip() for line in str(message or "").splitlines()]
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _render_tool_row(tool: _ToolCallState, *, now: float | None = None) -> None:
+    """One compact tool row (icon / name / meta + optional payload expander)."""
+    display_now = now if now is not None else time.monotonic()
+    subtitle_parts: list[str] = []
+    if tool.domain:
+        subtitle_parts.append(tool.domain)
+    if tool.step_id and tool.step_id != "__pending__":
+        subtitle_parts.append(tool.step_id)
+    if tool.detail and tool.status in {"error", "skipped"}:
+        subtitle_parts.append(_shorten(tool.detail, max_len=80))
+    subtitle = " · ".join(subtitle_parts)
+    meta = html.escape(_tool_status_meta(tool, now=display_now))
+    subtitle_html = (
+        f"<span style='opacity:0.65;font-weight:400;'> · {html.escape(subtitle)}</span>"
+        if subtitle
+        else ""
+    )
+    st.markdown(
+        (
+            "<div style='display:flex;align-items:center;gap:0.45rem;"
+            "margin:0.1rem 0;padding:0.15rem 0;line-height:1.2;"
+            "font-size:0.88rem;'>"
+            f"<span style='flex:0 0 auto;line-height:1;'>{_tool_status_icon_html(tool.status)}</span>"
+            "<span style='flex:1 1 auto;min-width:0;overflow:hidden;"
+            "text-overflow:ellipsis;white-space:nowrap;'>"
+            f"<strong>{html.escape(tool.tool_name)}</strong>{subtitle_html}"
+            "</span>"
+            f"<span style='flex:0 0 auto;opacity:0.75;font-size:0.8rem;'>{meta}</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+    if tool.arguments is not None or tool.result is not None:
+        with st.expander("Payload", expanded=False):
+            if tool.arguments is not None:
+                st.caption("arguments")
+                st.json(tool.arguments)
+            if tool.result is not None:
+                st.caption("result")
+                st.json(tool.result)
+
+
+def _render_timeline_text_block(
+    message: str, *, domain: str | None = None, streaming: bool = False
+) -> None:
+    text = _compact_domain_result_text(message)
+    if not text:
+        return
+    suffix = " ▌" if streaming else ""
+    st.markdown(
+        (
+            "<div style='background:#f7f8fa;color:inherit;"
+            "padding:0.3rem 0.55rem;border-radius:0.3rem;"
+            "line-height:1.2;font-size:0.88rem;"
+            "white-space:pre-wrap;margin:0.15rem 0;'>"
+            f"{html.escape(text)}{suffix}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def _render_tool_status_box(
     tools: list[_ToolCallState], *, now: float | None = None
 ) -> None:
@@ -1043,34 +1112,170 @@ def _render_tool_status_box(
         st.markdown("**Tools**")
         for index, tool in enumerate(sorted(tools, key=lambda item: item.order)):
             if index > 0:
-                st.divider()
-            icon_col, body_col, meta_col = st.columns([0.06, 0.64, 0.30], gap="small")
-            with icon_col:
-                st.markdown(_tool_status_icon_html(tool.status), unsafe_allow_html=True)
-            with body_col:
-                st.markdown(f"**{tool.tool_name}**")
-                subtitle_parts: list[str] = []
-                if tool.domain:
-                    subtitle_parts.append(tool.domain)
-                if tool.step_id and tool.step_id != "__pending__":
-                    subtitle_parts.append(tool.step_id)
-                if tool.detail and tool.status in {"error", "skipped"}:
-                    subtitle_parts.append(_shorten(tool.detail, max_len=120))
-                if subtitle_parts:
-                    st.caption(" · ".join(subtitle_parts))
-            with meta_col:
                 st.markdown(
-                    f"<div style='text-align:right;font-size:0.85rem;'>{html.escape(_tool_status_meta(tool, now=display_now))}</div>",
+                    "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
                     unsafe_allow_html=True,
                 )
-            if tool.arguments is not None or tool.result is not None:
-                with st.expander("Tool payload", expanded=False):
-                    if tool.arguments is not None:
-                        st.caption("arguments")
-                        st.json(tool.arguments)
-                    if tool.result is not None:
-                        st.caption("result")
-                        st.json(tool.result)
+            _render_tool_row(tool, now=display_now)
+
+
+def _timeline_item_is_visible(item: dict) -> bool:
+    kind = item.get("kind")
+    if kind == "text":
+        return bool(str(item.get("message") or "").strip())
+    if kind == "tool":
+        return bool(str(item.get("tool_name") or "").strip())
+    return False
+
+
+def _render_agent_timeline(
+    items: list[dict],
+    *,
+    placeholder: DeltaGenerator | None = None,
+    now: float | None = None,
+) -> None:
+    """Chronological agent run: streamed text segments interleaved with tools."""
+    visible = [item for item in items if _timeline_item_is_visible(item)]
+    if not visible:
+        return
+
+    display_now = now if now is not None else time.monotonic()
+
+    def _paint() -> None:
+        with st.container(border=True):
+            st.markdown("**Agent**")
+            prev_kind: str | None = None
+            for item in visible:
+                kind = str(item.get("kind") or "")
+                if prev_kind is not None:
+                    st.markdown(
+                        "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                        unsafe_allow_html=True,
+                    )
+                if kind == "text":
+                    _render_timeline_text_block(
+                        str(item.get("message") or ""),
+                        domain=(
+                            str(item["domain"]).strip()
+                            if isinstance(item.get("domain"), str)
+                            else None
+                        ),
+                        streaming=bool(item.get("open")),
+                    )
+                    prev_kind = kind
+                    continue
+                tool = _ToolCallState(
+                    key=str(item.get("step_id") or item.get("tool_name") or "tool"),
+                    tool_name=str(item.get("tool_name") or "tool"),
+                    status=item.get("status") or "success",  # type: ignore[arg-type]
+                    step_id=item.get("step_id"),
+                    domain=item.get("domain"),
+                    execution_time_seconds=item.get("execution_time_seconds"),
+                    detail=item.get("detail"),
+                    result=item.get("result"),
+                    arguments=item.get("arguments"),
+                    started_at=item.get("started_at"),
+                )
+                _render_tool_row(tool, now=display_now)
+                prev_kind = kind
+
+    if placeholder is not None:
+        placeholder.empty()
+        with placeholder.container():
+            _paint()
+        return
+    _paint()
+
+
+def _close_open_timeline_text(items: list[dict]) -> None:
+    for item in items:
+        if item.get("kind") == "text":
+            item["open"] = False
+
+
+def _append_timeline_text_segment(
+    items: list[dict], *, domain: str | None
+) -> dict:
+    _close_open_timeline_text(items)
+    item: dict = {
+        "kind": "text",
+        "domain": domain,
+        "message": "",
+        "open": True,
+    }
+    items.append(item)
+    return item
+
+
+def _apply_timeline_stream_update(
+    items: list[dict],
+    *,
+    domain: str,
+    content: str,
+    reset: bool,
+) -> None:
+    """Mutate timeline for a node_token: reset starts a new text segment."""
+    domain = domain.strip()
+    if not domain:
+        return
+    if reset:
+        _append_timeline_text_segment(items, domain=domain)
+        if not content:
+            return
+    open_text = next(
+        (
+            item
+            for item in reversed(items)
+            if item.get("kind") == "text"
+            and item.get("open")
+            and item.get("domain") == domain
+        ),
+        None,
+    )
+    if open_text is None:
+        open_text = _append_timeline_text_segment(items, domain=domain)
+    if content:
+        open_text["message"] = str(open_text.get("message") or "") + content
+
+
+def _timeline_tool_record(item: dict) -> ToolCallRecord:
+    record = ToolCallRecord(
+        tool_name=str(item.get("tool_name") or "tool"),
+        status=item.get("status") or "success",  # type: ignore[arg-type]
+        step_id=item.get("step_id"),
+        domain=item.get("domain"),
+        execution_time_seconds=item.get("execution_time_seconds"),
+        detail=item.get("detail"),
+    )
+    if item.get("result") is not None:
+        record["result"] = item["result"]
+    if item.get("arguments") is not None:
+        record["arguments"] = item["arguments"]
+    return record
+
+
+def _timeline_snapshot_items(items: list[dict]) -> list[AgentTimelineItem]:
+    out: list[AgentTimelineItem] = []
+    for item in items:
+        if not _timeline_item_is_visible(item):
+            continue
+        if item.get("kind") == "text":
+            out.append(
+                {
+                    "kind": "text",
+                    "domain": item.get("domain"),
+                    "message": _compact_domain_result_text(
+                        str(item.get("message") or "")
+                    ),
+                }
+            )
+            continue
+        tool_item: AgentTimelineItem = {
+            "kind": "tool",
+            **_timeline_tool_record(item),
+        }
+        out.append(tool_item)
+    return out
 
 
 def _make_tool_status_tracker(
@@ -1080,6 +1285,7 @@ def _make_tool_status_tracker(
     Callable[[], list[ToolCallRecord]],
     Callable[[], None],
 ]:
+    """Backward-compatible tool-only tracker (history / fallback)."""
     tools_by_key: dict[str, _ToolCallState] = {}
     next_order = 0
 
@@ -1190,6 +1396,196 @@ def _make_tool_status_tracker(
         ]
 
     return callback, snapshot, tick
+
+
+def _make_agent_timeline_tracker(
+    timeline_placeholder: DeltaGenerator,
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[], list[ToolCallRecord]],
+    Callable[[], list[AgentTimelineItem]],
+    Callable[[], None],
+]:
+    """Track tools + domain streaming text in chronological order."""
+    items: list[dict] = []
+    tools_by_key: dict[str, dict] = {}
+    next_order = 0
+
+    def _find_running_key(tool_name: str) -> str | None:
+        for key, tool in tools_by_key.items():
+            if tool.get("tool_name") == tool_name and tool.get("status") == "running":
+                return key
+        return None
+
+    def _has_running_tools() -> bool:
+        return any(tool.get("status") == "running" for tool in tools_by_key.values())
+
+    def _repaint(*, now: float | None = None) -> None:
+        _render_agent_timeline(items, placeholder=timeline_placeholder, now=now)
+
+    def tick() -> None:
+        if _has_running_tools():
+            _repaint(now=time.monotonic())
+
+    def _apply_tool_event(normalized: dict) -> None:
+        nonlocal next_order
+        phase = normalized.get("phase")
+        tool_name = normalized.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return
+
+        step_id = _resolve_tool_step_id(normalized)
+        domain = _resolve_tool_domain(normalized)
+
+        if phase == "running":
+            if step_id == "__pending__" and tools_by_key:
+                return
+            _close_open_timeline_text(items)
+            next_order += 1
+            key = _tool_call_key(normalized, order=next_order)
+            tool_item = {
+                "kind": "tool",
+                "key": key,
+                "tool_name": tool_name,
+                "status": "running",
+                "step_id": step_id,
+                "domain": domain,
+                "started_at": time.monotonic(),
+                "order": next_order,
+                "arguments": _tool_arguments_from_event(normalized),
+                "result": None,
+                "detail": None,
+                "execution_time_seconds": None,
+            }
+            tools_by_key[key] = tool_item
+            items.append(tool_item)
+            _repaint(now=time.monotonic())
+            return
+
+        if phase != "done":
+            return
+        if step_id == "__pending__":
+            return
+
+        key = step_id or _find_running_key(tool_name) or _tool_call_key(
+            normalized, order=next_order
+        )
+        if key not in tools_by_key:
+            _close_open_timeline_text(items)
+            next_order += 1
+            key = step_id or _tool_call_key(normalized, order=next_order)
+            tool_item = {
+                "kind": "tool",
+                "key": key,
+                "tool_name": tool_name,
+                "status": "running",
+                "step_id": step_id,
+                "domain": domain,
+                "order": next_order,
+                "arguments": None,
+                "result": None,
+                "detail": None,
+                "execution_time_seconds": None,
+                "started_at": None,
+            }
+            tools_by_key[key] = tool_item
+            items.append(tool_item)
+
+        tool = tools_by_key[key]
+        if tool.get("step_id") == "__pending__":
+            # Replace pending placeholder with the real tool entry in-place.
+            try:
+                idx = items.index(tool)
+            except ValueError:
+                idx = None
+            tools_by_key.pop(key, None)
+            next_order += 1
+            key = step_id or _tool_call_key(normalized, order=next_order)
+            tool = {
+                "kind": "tool",
+                "key": key,
+                "tool_name": tool_name,
+                "order": next_order,
+                "arguments": None,
+                "result": None,
+                "detail": None,
+                "execution_time_seconds": None,
+                "started_at": None,
+            }
+            tools_by_key[key] = tool
+            if idx is None:
+                items.append(tool)
+            else:
+                items[idx] = tool
+
+        tool["tool_name"] = tool_name
+        tool["step_id"] = step_id or tool.get("step_id")
+        tool["domain"] = domain or tool.get("domain")
+        tool["status"] = _tool_status_from_event(normalized)
+        tool["execution_time_seconds"] = normalized.get("execution_time_seconds")
+        observation = normalized.get("observation")
+        if isinstance(observation, str) and observation.strip():
+            tool["detail"] = observation.strip()
+        elif tool.get("status") == "skipped":
+            tool["detail"] = "Missing required inputs"
+        raw_result = normalized.get("result")
+        if isinstance(raw_result, dict):
+            tool["result"] = dict(raw_result)
+        args = _tool_arguments_from_event(normalized)
+        if args is not None:
+            tool["arguments"] = args
+        _repaint()
+
+    def callback(evt: dict) -> None:
+        stream = _agentic_node_stream_update(evt)
+        if stream is not None:
+            domain, content, reset = stream
+            _apply_timeline_stream_update(
+                items, domain=domain, content=content, reset=reset
+            )
+            if content or reset:
+                _repaint()
+            return
+
+        entry = _agentic_node_result_entry(evt)
+        if entry is not None:
+            domain = entry["domain"]
+            message = entry["message"]
+            # Finalize the last open/same-domain text segment, or append.
+            target = next(
+                (
+                    item
+                    for item in reversed(items)
+                    if item.get("kind") == "text" and item.get("domain") == domain
+                ),
+                None,
+            )
+            if target is None:
+                target = _append_timeline_text_segment(items, domain=domain)
+            target["message"] = message
+            target["open"] = False
+            _repaint()
+            return
+
+        normalized = _normalize_tool_progress_event(evt)
+        if normalized is not None:
+            _apply_tool_event(normalized)
+
+    def tool_snapshot() -> list[ToolCallRecord]:
+        return [
+            _timeline_tool_record(tool)
+            for tool in sorted(
+                (item for item in items if item.get("kind") == "tool"),
+                key=lambda item: int(item.get("order") or 0),
+            )
+            if str(tool.get("tool_name") or "").strip()
+            and tool.get("step_id") != "__pending__"
+        ]
+
+    def timeline_snapshot() -> list[AgentTimelineItem]:
+        return _timeline_snapshot_items(items)
+
+    return callback, tool_snapshot, timeline_snapshot, tick
 
 
 def _is_node_progress_event(evt: dict) -> bool:
@@ -1331,61 +1727,6 @@ def _render_node_start_lines(
     _paint()
 
 
-def _compact_domain_result_text(message: str) -> str:
-    """Collapse blank lines and trailing spaces for a denser domain-result block."""
-    lines = [line.rstrip() for line in str(message or "").splitlines()]
-    return "\n".join(line for line in lines if line.strip())
-
-
-def _render_node_result_boxes(
-    results: list[dict[str, str]],
-    *,
-    placeholder: DeltaGenerator | None = None,
-    expanded_domains: set[str] | None = None,
-) -> None:
-    """Render domain results as grey expandable boxes."""
-    bodies = [
-        item
-        for item in results
-        if isinstance(item, dict)
-        and isinstance(item.get("domain"), str)
-        and isinstance(item.get("message"), str)
-        and item["message"].strip()
-    ]
-    if not bodies:
-        return
-    open_domains = expanded_domains or set()
-
-    def _paint() -> None:
-        for item in bodies[-8:]:
-            domain = str(item["domain"]).strip()
-            message = _compact_domain_result_text(str(item["message"]))
-            if not message:
-                continue
-            with st.expander(
-                f"Domain result · {domain}",
-                expanded=domain in open_domains,
-            ):
-                st.markdown(
-                    (
-                        "<div style='background:#f0f2f6;color:inherit;"
-                        "padding:0.45rem 0.65rem;border-radius:0.35rem;"
-                        "line-height:1.25;font-size:0.9rem;"
-                        "white-space:pre-wrap;margin:0;'>"
-                        f"{html.escape(message)}"
-                        "</div>"
-                    ),
-                    unsafe_allow_html=True,
-                )
-
-    if placeholder is not None:
-        placeholder.empty()
-        with placeholder.container():
-            _paint()
-        return
-    _paint()
-
-
 def _append_turn_node_start(line: str) -> None:
     text = (line or "").strip()
     if not text:
@@ -1444,79 +1785,60 @@ def _turn_node_result_entries(
 def _reset_turn_node_results() -> None:
     st.session_state.turn_node_start_lines = []
     st.session_state.turn_node_result_entries = []
+    st.session_state.turn_agent_timeline = []
 
 
-def _make_live_node_results_updater(
+def _append_turn_agent_timeline(items: list[AgentTimelineItem]) -> None:
+    st.session_state.turn_agent_timeline = [dict(item) for item in items]
+
+
+def _turn_agent_timeline(
+    *snapshots: Callable[[], list[AgentTimelineItem]],
+) -> list[AgentTimelineItem]:
+    merged: list[AgentTimelineItem] = list(
+        st.session_state.get("turn_agent_timeline") or []
+    )
+    for snapshot in snapshots:
+        items = snapshot()
+        if items:
+            merged = [dict(item) for item in items]
+    return merged
+
+
+def _node_results_from_timeline(
+    timeline: list[AgentTimelineItem] | list[dict],
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in timeline:
+        if not isinstance(item, dict) or item.get("kind") != "text":
+            continue
+        domain = str(item.get("domain") or "").strip()
+        message = _compact_domain_result_text(str(item.get("message") or ""))
+        if domain and message:
+            out.append({"domain": domain, "message": message})
+    return out
+
+
+def _make_live_node_start_updater(
     starts_placeholder: DeltaGenerator,
-    results_placeholder: DeltaGenerator,
-) -> tuple[
-    Callable[[dict], None],
-    Callable[[], list[str]],
-    Callable[[], list[dict[str, str]]],
-]:
+) -> tuple[Callable[[dict], None], Callable[[], list[str]]]:
+    """Captions for agentic node_start only (timeline owns streaming text)."""
     start_lines: list[str] = []
-    results: list[dict[str, str]] = []
-    streaming_domains: set[str] = set()
-
-    def _repaint_results() -> None:
-        _render_node_result_boxes(
-            results,
-            placeholder=results_placeholder,
-            expanded_domains=streaming_domains,
-        )
 
     def callback(evt: dict) -> None:
         if not _is_node_progress_event(evt):
             return
         start = _agentic_node_start_line(evt)
-        if start:
-            start_lines.append(start)
-            _append_turn_node_start(start)
-            _render_node_start_lines(start_lines, placeholder=starts_placeholder)
+        if not start:
             return
-
-        stream = _agentic_node_stream_update(evt)
-        if stream is not None:
-            domain, content, reset = stream
-            if reset:
-                streaming_domains.add(domain)
-            _upsert_streaming_node_result(
-                results, domain=domain, content=content, reset=reset
-            )
-            if content or reset:
-                if content:
-                    streaming_domains.add(domain)
-                _repaint_results()
-            return
-
-        entry = _agentic_node_result_entry(evt)
-        if not entry:
-            return
-        domain = entry["domain"]
-        streaming_domains.discard(domain)
-        # Replace any streaming draft for this domain with the final message.
-        replaced = False
-        for i, item in enumerate(results):
-            if item.get("domain") == domain:
-                results[i] = entry
-                replaced = True
-                break
-        if not replaced:
-            results.append(entry)
-        _append_turn_node_result(entry)
-        _repaint_results()
+        start_lines.append(start)
+        _append_turn_node_start(start)
+        _render_node_start_lines(start_lines, placeholder=starts_placeholder)
 
     def start_snapshot() -> list[str]:
         return list(start_lines)
 
-    def result_snapshot() -> list[dict[str, str]]:
-        return [
-            dict(item)
-            for item in results
-            if isinstance(item.get("message"), str) and item["message"].strip()
-        ]
-
-    return callback, start_snapshot, result_snapshot
+    return callback, start_snapshot
 
 
 def _render_thinking_box(
@@ -1581,7 +1903,6 @@ class StreamingTurnLayout:
     thinking_placeholder: DeltaGenerator
     node_starts_placeholder: DeltaGenerator
     tools_placeholder: DeltaGenerator
-    node_results_placeholder: DeltaGenerator
     trace_placeholder: DeltaGenerator
     _layout_slot: DeltaGenerator
     message_placeholder: DeltaGenerator
@@ -1629,11 +1950,10 @@ class StreamingTurnLayout:
 
 def _make_streaming_turn_placeholders() -> StreamingTurnLayout:
     """Placeholders for a live assistant turn (full-width until maps arrive)."""
-    # Order: Thinking → Node starts → Tools → Domain results → Trace → Answer
+    # Order: Thinking → Node starts → Agent timeline (text+tools) → Trace → Answer
     thinking_placeholder = st.empty()
     node_starts_placeholder = st.empty()
     tools_placeholder = st.empty()
-    node_results_placeholder = st.empty()
     trace_placeholder = st.empty()
     layout_slot = st.empty()
     with layout_slot.container():
@@ -1642,7 +1962,6 @@ def _make_streaming_turn_placeholders() -> StreamingTurnLayout:
         thinking_placeholder=thinking_placeholder,
         node_starts_placeholder=node_starts_placeholder,
         tools_placeholder=tools_placeholder,
-        node_results_placeholder=node_results_placeholder,
         trace_placeholder=trace_placeholder,
         _layout_slot=layout_slot,
         message_placeholder=message_placeholder,
@@ -1660,18 +1979,15 @@ def _make_streaming_event_handler(
     Callable[[], list[str]],
     Callable[[], list[ToolCallRecord]],
     Callable[[], list[str]],
-    Callable[[], list[dict[str, str]]],
+    Callable[[], list[AgentTimelineItem]],
     Callable[[], None],
     Callable[[], ToolArtifacts],
 ]:
-    tool_tracker, tool_snapshot, tool_tick = _make_tool_status_tracker(
-        layout.tools_placeholder
+    timeline_tracker, tool_snapshot, timeline_snapshot, tool_tick = (
+        _make_agent_timeline_tracker(layout.tools_placeholder)
     )
-    node_tracker, node_start_snapshot, node_result_snapshot = (
-        _make_live_node_results_updater(
-            layout.node_starts_placeholder,
-            layout.node_results_placeholder,
-        )
+    node_start_tracker, node_start_snapshot = _make_live_node_start_updater(
+        layout.node_starts_placeholder
     )
     trace_updater = _make_live_trace_updater(layout.trace_placeholder)
     thinking_updater, thinking_snapshot = _make_live_thinking_updater(
@@ -1680,7 +1996,7 @@ def _make_streaming_event_handler(
     live_artifacts = ToolArtifacts()
 
     def tools_callback(evt: dict) -> None:
-        tool_tracker(evt)
+        timeline_tracker(evt)
         if evt.get("type") != "data_agent_step" or evt.get("phase") != "done":
             return
         if not _extend_artifacts_unique(live_artifacts, evt.get("artifacts")):
@@ -1688,7 +2004,10 @@ def _make_streaming_event_handler(
         layout.paint_artifacts(live_artifacts)
 
     def nodes_callback(evt: dict) -> None:
-        node_tracker(evt)
+        node_start_tracker(evt)
+        # Streaming text + node_end finalize live in the shared timeline.
+        if evt.get("phase") in {"streaming", "done"}:
+            timeline_tracker(evt)
 
     def trace_callback(evt: dict) -> None:
         if evt.get("type") == "thinking":
@@ -1717,7 +2036,7 @@ def _make_streaming_event_handler(
         thinking_snapshot,
         tool_snapshot,
         node_start_snapshot,
-        node_result_snapshot,
+        timeline_snapshot,
         tool_tick,
         artifacts_snapshot,
     )
@@ -1890,8 +2209,14 @@ def _extract_ui_only_assistant_fields(messages: list) -> list[dict]:
             continue
         node_start_lines = msg.get("node_start_lines")
         node_result_lines = msg.get("node_result_lines")
+        agent_timeline = msg.get("agent_timeline")
         thinking_lines = msg.get("thinking_lines")
-        if not node_start_lines and not node_result_lines and not thinking_lines:
+        if (
+            not node_start_lines
+            and not node_result_lines
+            and not agent_timeline
+            and not thinking_lines
+        ):
             continue
         preserved.append(
             {
@@ -1905,6 +2230,9 @@ def _extract_ui_only_assistant_fields(messages: list) -> list[dict]:
                     list(node_result_lines)
                     if isinstance(node_result_lines, list)
                     else None
+                ),
+                "agent_timeline": (
+                    list(agent_timeline) if isinstance(agent_timeline, list) else None
                 ),
                 "thinking_lines": (
                     list(thinking_lines) if isinstance(thinking_lines, list) else None
@@ -1927,6 +2255,7 @@ def _merge_ui_only_assistant_fields(
         if (
             item.get("node_start_lines")
             or item.get("node_result_lines")
+            or item.get("agent_timeline")
             or item.get("thinking_lines")
         )
     ]
@@ -1940,6 +2269,8 @@ def _merge_ui_only_assistant_fields(
             msg["node_start_lines"] = item["node_start_lines"]
         if item.get("node_result_lines") and not msg.get("node_result_lines"):
             msg["node_result_lines"] = item["node_result_lines"]
+        if item.get("agent_timeline") and not msg.get("agent_timeline"):
+            msg["agent_timeline"] = item["agent_timeline"]
         if item.get("thinking_lines") and not msg.get("thinking_lines"):
             msg["thinking_lines"] = item["thinking_lines"]
     return ui_messages
@@ -2155,6 +2486,9 @@ if "turn_node_start_lines" not in st.session_state:
 if "turn_node_result_entries" not in st.session_state:
     st.session_state.turn_node_result_entries = []
 
+if "turn_agent_timeline" not in st.session_state:
+    st.session_state.turn_agent_timeline = []
+
 if "auto_confirm_attempts" not in st.session_state:
     # Map normalized location_query -> int attempts in current session
     st.session_state.auto_confirm_attempts = {}
@@ -2325,6 +2659,7 @@ for msg in st.session_state.messages:
     stored_tool_calls: list[ToolCallRecord] = []
     stored_node_starts: list[str] = []
     stored_node_results: list[dict[str, str]] = []
+    stored_agent_timeline: list[AgentTimelineItem] = []
     stored_thinking: list[str] = []
 
     if role == "assistant":
@@ -2344,6 +2679,10 @@ for msg in st.session_state.messages:
             and isinstance(item.get("domain"), str)
             and isinstance(item.get("message"), str)
         ]
+        raw_timeline = assistant_msg.get("agent_timeline") or []
+        stored_agent_timeline = [
+            item for item in raw_timeline if isinstance(item, dict) and item.get("kind")
+        ]
         stored_thinking = assistant_msg.get("thinking_lines") or []
 
     with st.chat_message(role):
@@ -2351,12 +2690,17 @@ for msg in st.session_state.messages:
             _render_thinking_box(stored_thinking)
         if role == "assistant" and stored_node_starts:
             _render_node_start_lines(stored_node_starts)
-        if role == "assistant" and stored_tool_calls:
+        if role == "assistant" and stored_agent_timeline:
+            _render_agent_timeline(stored_agent_timeline)
+        elif role == "assistant" and stored_tool_calls:
             _render_tool_status_box(
                 [_record_to_tool_call(record) for record in stored_tool_calls]
             )
-        if role == "assistant" and stored_node_results:
-            _render_node_result_boxes(stored_node_results)
+            for item in stored_node_results:
+                _render_timeline_text_block(
+                    str(item.get("message") or ""),
+                    domain=str(item.get("domain") or "") or None,
+                )
         if role == "assistant" and is_error:
             st.error(content or "An error occurred.")
         elif role != "assistant":
@@ -2475,7 +2819,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     thinking_snapshot,
                     tool_snapshot,
                     node_start_snapshot,
-                    node_result_snapshot,
+                    timeline_snapshot,
                     tool_tick,
                     artifacts_snapshot,
                 ) = _make_streaming_event_handler(layout=layout)
@@ -2499,7 +2843,9 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     )
                     tool_calls = tool_snapshot()
                     node_start_lines = _turn_node_start_lines(node_start_snapshot)
-                    node_result_lines = _turn_node_result_entries(node_result_snapshot)
+                    agent_timeline = _turn_agent_timeline(timeline_snapshot)
+                    node_result_lines = _node_results_from_timeline(agent_timeline)
+                    _append_turn_agent_timeline(agent_timeline)
                     _store_conversation_id(result.conversation_id)
                     _store_conversation_title(
                         result.conversation_id, result.conversation_title
@@ -2526,6 +2872,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             tool_calls=tool_calls,
                             node_start_lines=node_start_lines,
                             node_result_lines=node_result_lines,
+                            agent_timeline=agent_timeline,
                             thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
@@ -2550,7 +2897,10 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             error=True,
                             tool_calls=tool_snapshot(),
                             node_start_lines=_turn_node_start_lines(node_start_snapshot),
-                            node_result_lines=_turn_node_result_entries(node_result_snapshot),
+                            agent_timeline=_turn_agent_timeline(timeline_snapshot),
+                            node_result_lines=_node_results_from_timeline(
+                                _turn_agent_timeline(timeline_snapshot)
+                            ),
                         )
                     )
                     st.session_state.messages_en.append(
@@ -2801,7 +3151,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     thinking_snapshot,
                     tool_snapshot,
                     node_start_snapshot,
-                    node_result_snapshot,
+                    timeline_snapshot,
                     tool_tick,
                     artifacts_snapshot,
                 ) = _make_streaming_event_handler(layout=layout)
@@ -2822,7 +3172,9 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     )
                     tool_calls = tool_snapshot()
                     node_start_lines = _turn_node_start_lines(node_start_snapshot)
-                    node_result_lines = _turn_node_result_entries(node_result_snapshot)
+                    agent_timeline = _turn_agent_timeline(timeline_snapshot)
+                    node_result_lines = _node_results_from_timeline(agent_timeline)
+                    _append_turn_agent_timeline(agent_timeline)
                     _store_conversation_id(result.conversation_id)
                     _store_conversation_title(
                         result.conversation_id, result.conversation_title
@@ -2848,6 +3200,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             tool_calls=tool_calls,
                             node_start_lines=node_start_lines,
                             node_result_lines=node_result_lines,
+                            agent_timeline=agent_timeline,
                             thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
@@ -2872,7 +3225,10 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             error=True,
                             tool_calls=tool_snapshot(),
                             node_start_lines=_turn_node_start_lines(node_start_snapshot),
-                            node_result_lines=_turn_node_result_entries(node_result_snapshot),
+                            agent_timeline=_turn_agent_timeline(timeline_snapshot),
+                            node_result_lines=_node_results_from_timeline(
+                                _turn_agent_timeline(timeline_snapshot)
+                            ),
                         )
                     )
                     st.session_state.messages_en.append(
@@ -3158,7 +3514,7 @@ if user_input:
             thinking_snapshot,
             tool_snapshot,
             node_start_snapshot,
-            node_result_snapshot,
+            timeline_snapshot,
             tool_tick,
             artifacts_snapshot,
         ) = _make_streaming_event_handler(layout=layout)
@@ -3191,7 +3547,9 @@ if user_input:
             )
             tool_calls = tool_snapshot()
             node_start_lines = _turn_node_start_lines(node_start_snapshot)
-            node_result_lines = _turn_node_result_entries(node_result_snapshot)
+            agent_timeline = _turn_agent_timeline(timeline_snapshot)
+            node_result_lines = _node_results_from_timeline(agent_timeline)
+            _append_turn_agent_timeline(agent_timeline)
             _store_conversation_id(result.conversation_id)
             _store_conversation_title(
                 result.conversation_id, result.conversation_title
@@ -3230,6 +3588,7 @@ if user_input:
                     tool_calls=tool_calls,
                     node_start_lines=node_start_lines,
                     node_result_lines=node_result_lines,
+                    agent_timeline=agent_timeline,
                     thinking_lines=_turn_thinking_lines(thinking_snapshot),
                 )
             )
@@ -3254,7 +3613,8 @@ if user_input:
                     error=True,
                     tool_calls=tool_snapshot(),
                     node_start_lines=_turn_node_start_lines(node_start_snapshot),
-                    node_result_lines=_turn_node_result_entries(node_result_snapshot),
+                    agent_timeline=_turn_agent_timeline(timeline_snapshot),
+                    node_result_lines=_node_results_from_timeline(agent_timeline),
                 )
             )
             st.session_state.messages_en.append(
