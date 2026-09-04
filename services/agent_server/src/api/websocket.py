@@ -23,6 +23,7 @@ from src.core.logger import get_logger
 from src.core.websocket_traffic_logger import log_websocket_traffic
 from src.db import ConversationService, User, get_db
 from src.schemas.websocket import (
+    AgentStage,
     ChatRequestMessage,
     ChatResumeMessage,
     ClientMessageType,
@@ -52,8 +53,6 @@ async def _keepalive_during_task(
     interval_seconds: float = 25.0,
 ) -> None:
     """Send lightweight status updates while a long-running handler is active."""
-    from src.schemas.websocket import AgentStage
-
     while not task.done() and not conn.is_closed:
         await asyncio.sleep(interval_seconds)
         if task.done() or conn.is_closed:

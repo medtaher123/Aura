@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Message, Conversation, User
 from ..repositories import MessageRepository, ConversationRepository
+from src.services.llm_service import get_chat_llm
 
 
 MAX_CONVERSATION_TITLE_LENGTH = 80
@@ -177,8 +178,6 @@ class ConversationService:
 
     def generate_title(self, user_message: str, assistant_message: str) -> str:
         """Generate a short title from the first conversation turn."""
-        from src.services.llm_service import get_chat_llm
-
         fallback_title = self._fallback_title(user_message)
         prompt = (
             "Generate a concise chat title for this conversation.\n"

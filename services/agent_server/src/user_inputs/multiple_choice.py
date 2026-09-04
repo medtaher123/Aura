@@ -76,8 +76,6 @@ class MultipleChoiceUserInput(
         prior_data: dict[str, Any],
         attachment: MessageAttachment,
     ) -> tuple[str, dict[str, Any]]:
-        from src.db.models.message_attachments import MultipleChoiceAttachment
-
         if not isinstance(attachment, MultipleChoiceAttachment):
             return super().enrich_resumed_tool_result(prior_data, attachment)
 
@@ -113,8 +111,6 @@ class MultipleChoiceUserInput(
 
     @staticmethod
     def _wire_user_answer(attachment: MultipleChoiceAttachment) -> dict[str, Any]:
-        from src.user_inputs.types import OTHER_OPTION_ID
-
         out: dict[str, Any] = {
             "selected_option_id": attachment.option_id,
             "selected_label": attachment.label,

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -95,8 +95,6 @@ class ToolDefinitionRepository(BaseRepository[ToolDefinition]):
         mcp_server_id: Optional[uuid.UUID] = None,
     ) -> list[ToolDefinition]:
         """Return enabled tools, excluding those whose MCP server is disabled."""
-        from sqlalchemy import or_
-
         stmt = (
             select(ToolDefinition)
             .outerjoin(McpServer, ToolDefinition.mcp_server_id == McpServer.id)

@@ -14,6 +14,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from langgraph.config import get_config
+
+from eo_llm.graph.nodes.helpers import resolved_location_from_candidate
+from eo_llm.graph.state import dump_state, validate_state
 from src.db.models.message_attachments import (
     MessageAttachment,
     apply_attachments,
@@ -36,8 +40,6 @@ _resume_attachments: dict[str, list[dict[str, Any]]] = {}
 def current_thread_id() -> str:
     """LangGraph ``thread_id`` for the running node, or a test default."""
     try:
-        from langgraph.config import get_config
-
         conf = get_config().get("configurable") or {}
         thread_id = conf.get("thread_id")
         if isinstance(thread_id, str) and thread_id.strip():
@@ -138,8 +140,6 @@ def resume_state_patch(*, thread_id: str | None = None) -> dict[str, Any]:
 
 def hydrate_state_from_resume(s: Any) -> Any:
     """Merge resume attachment effects into a state model (in-node only)."""
-    from eo_llm.graph.state import dump_state, validate_state
-
     patch = resume_state_patch()
     if not patch:
         return s
@@ -178,8 +178,6 @@ def state_update_from_attachments(
     Do not pass this through ``Command(update=...)`` — that races with ``dump_state``
     returns and raises ``InvalidUpdateError``.
     """
-    from eo_llm.graph.nodes.helpers import resolved_location_from_candidate
-
     parsed = parse_attachments(attachments)  # type: ignore[arg-type]
     if not parsed:
         return {}

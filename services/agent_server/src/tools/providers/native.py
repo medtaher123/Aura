@@ -8,6 +8,7 @@ from uuid import UUID
 
 from src.tools.contracts import ToolResponse
 from src.tools.native.base import NATIVE_INPUT_SCHEMA_ATTR
+from src.tools.native.discover import discover_native_tools
 from src.tools.providers.base import ProviderHealth, ToolDescriptor, ToolProvider
 
 NativeHandler = Callable[..., ToolResponse | Awaitable[ToolResponse]]
@@ -131,8 +132,6 @@ def build_default_native_provider(
     db_tools: list[tuple[UUID | None, str, str, dict[str, Any]]] | None = None,
 ) -> NativeToolProvider:
     """Register every ``@native_tool`` found under ``src.tools.native``."""
-    from src.tools.native.discover import discover_native_tools
-
     provider = NativeToolProvider()
     db_by_name = {
         name: (tid, desc, schema) for tid, name, desc, schema in (db_tools or [])

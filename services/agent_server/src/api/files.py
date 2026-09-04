@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db import User, get_db
 from src.db.services import EmptyFileError, FileService, FileTooLargeError
-from src.schemas import FileRead
+from src.schemas.files import FileRead
 
 from .deps import get_current_user
 

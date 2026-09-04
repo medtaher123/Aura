@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
 from eo_llm.prompts.persona import AURA_PERSONA
+from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
 
 
 def _join_sections(*sections: str) -> str:
@@ -26,8 +28,6 @@ def _format_context(**context: Any) -> str:
         if value is None or value == "":
             continue
         if isinstance(value, (dict, list)):
-            import json
-
             rendered = json.dumps(value, ensure_ascii=True, default=str)
         else:
             rendered = str(value).strip()
@@ -65,8 +65,6 @@ class PromptSpec:
         if rules_block:
             sections.append(rules_block)
         if self.include_schema_rules:
-            from eo_llm.prompts.shared.schema import SCHEMA_OUTPUT_RULES
-
             sections.append(_format_rules("Output", SCHEMA_OUTPUT_RULES))
         if self.examples:
             sections.append("Examples:\n" + "\n\n".join(self.examples))

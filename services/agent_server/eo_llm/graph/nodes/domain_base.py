@@ -19,10 +19,13 @@ from eo_llm.graph.tool_plan import (
     ToolPlanner,
 )
 from eo_llm.prompts import get_domain_agent_prompt
+from src.db.models.message_attachments import parse_attachments
+from src.tools.contracts import ToolResponse
 from src.tools.filtering.agent_filter import (
     get_cached_agent_profile,
     resolve_allowed_tools,
 )
+from src.tools.runtime.gateway import get_tool_gateway
 from src.tools.runtime.registry import ToolRegistry
 from src.user_inputs import (
     BoundingBoxRequest,
@@ -108,8 +111,6 @@ def _expandable_tool_entry(entry: object) -> bool:
 
 def _tool_gateway_registry() -> ToolRegistry | None:
     try:
-        from src.tools.runtime.gateway import get_tool_gateway
-
         return get_tool_gateway().registry
     except Exception:
         return None
@@ -355,9 +356,6 @@ class AgenticDomainNode(DomainToolsNode):
         Match by ``result.data["input_kind"]`` (set by ``UserInputNativeTool``) to
         ``attachment.type`` — no tool-name parsing.
         """
-        from src.db.models.message_attachments import parse_attachments
-        from src.tools.contracts import ToolResponse
-
         parsed = parse_attachments(attachments)
         if not records or not parsed:
             return list(records)

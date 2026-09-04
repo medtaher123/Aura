@@ -8,11 +8,13 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.deps import get_current_user_from_token
 from src.auth.router import AuthRouter
 from src.config import get_config
 from src.db.database import get_db
 from src.db.models.user import User
 from src.db.repositories.users import UserRepository
+from src.db.services import UserService
 
 
 def _admin_user_ids() -> set[str]:
@@ -57,9 +59,6 @@ async def require_admin_user(
             detail="Missing bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    from src.api.deps import get_current_user_from_token
-    from src.db.services import UserService
 
     auth_context = await get_current_user_from_token(authorization)
     user = await UserService(db).sync_authenticated_user(auth_context)

@@ -5,17 +5,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Type, TypeVar
+from typing import Any, AsyncIterator, Literal, Type, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.db.models.message_attachments import FileAttachment
+from src.db.models.message import Message, MessageKind, ToolCallMessage, ToolResultMessage
+from src.db.models.message_attachments import FileAttachment, MessageAttachment
 from src.tools.contracts import ToolResponse
 from src.tools.providers.base import ToolDescriptor
-
-if TYPE_CHECKING:
-    from src.db.models.message import Message
-    from src.db.models.message_attachments import MessageAttachment
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -53,8 +50,6 @@ class AgentToolCallRecord(BaseModel):
 
     def to_messages(self) -> list["Message"]:
         """Persistable tool-call / tool-result message pair (UI-hidden)."""
-        from src.db.models.message import Message, ToolCallMessage, ToolResultMessage
-
         call: Message = ToolCallMessage.create(
             tool_use_id=self.tool_use_id,
             tool_name=self.tool_name,
@@ -134,8 +129,6 @@ class LLMProvider(ABC):
         *,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> list[dict[str, Any]]:
-        from src.db.models.message import MessageKind, ToolCallMessage, ToolResultMessage
-
         if isinstance(message, ToolCallMessage) or message.kind == MessageKind.TOOL_CALL.value:
             return self._tool_call_content_blocks(message)
         if (
@@ -249,8 +242,6 @@ class LLMProvider(ABC):
         history = list(messages or ())
         if include_tool_messages:
             return history
-
-        from src.db.models.message import MessageKind
 
         return [
             message

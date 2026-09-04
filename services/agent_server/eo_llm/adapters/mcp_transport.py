@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Optional
 
@@ -93,8 +94,6 @@ def tool_metadata_from_mcp_tool(tool: Any) -> dict[str, Any]:
 
 def extract_tool_payload(tool_name: str, result: Any) -> Any:
     """Pull JSON tool payload from an MCP CallToolResult (text and/or structured)."""
-    import json
-
     # Prefer structured content when the server emitted it (MCP SDK v2).
     structured = getattr(result, "structured_content", None)
     if structured is None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+from langgraph.types import interrupt
+
 from eo_llm.graph import hitl as hitl_store
 from eo_llm.graph.state import GraphState, GraphStateModel, validate_state
 from src.core.event_emitter import GraphNodeLifecycleEvent, GraphStatusStage, emit_event
@@ -131,8 +133,6 @@ class GraphNode(ABC):
         return hitl_store.client_payload_needs_input(payload)
 
     def _interrupt(self, client_payload: dict[str, Any]) -> dict[str, Any]:
-        from langgraph.types import interrupt
-
         raw = interrupt(client_payload)
         if isinstance(raw, dict):
             return raw

@@ -8,6 +8,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 
+from eo_llm.graph.state import ResolvedLocationModel
+from src.schemas.spatial import BoundingBox
+from src.user_inputs.types import OTHER_OPTION_ID
+
 AttachmentType = Literal["location", "file", "bounding_box", "multiple_choice"]
 OSMType = Literal["relation", "way", "node"]
 OSMPrefixType = Literal["R", "W", "N"]
@@ -44,8 +48,6 @@ class LocationAttachment(MessageAttachment):
 
     def apply_to_state(self, state: dict[str, Any]) -> dict[str, Any]:
         """Seed resolved location data (proactive or resume)."""
-        from eo_llm.graph.state import ResolvedLocationModel
-
         lat, lon = self.coordinates
         state["resolved_location"] = ResolvedLocationModel(
             display_name=self.name,
@@ -74,15 +76,10 @@ class BoundingBoxAttachment(MessageAttachment):
     area: dict[str, Any] = Field(..., description="BoundingBox payload")
 
     def llm_text(self) -> str:
-        from src.schemas.spatial import BoundingBox
-
         box = BoundingBox.model_validate(self.area)
         return f"Selected area: {box.label()}."
 
     def apply_to_state(self, state: dict[str, Any]) -> dict[str, Any]:
-        from eo_llm.graph.state import ResolvedLocationModel
-        from src.schemas.spatial import BoundingBox
-
         box = BoundingBox.model_validate(self.area)
         lat, lon = box.centroid()
         state["resolved_area"] = box.model_dump(mode="python")
@@ -135,8 +132,6 @@ class MultipleChoiceAttachment(MessageAttachment):
     )
 
     def llm_text(self) -> str:
-        from src.user_inputs.types import OTHER_OPTION_ID
-
         if self.option_id == OTHER_OPTION_ID and self.custom_text:
             return (
                 "User answered your multiple-choice question with a custom response: "
@@ -149,8 +144,6 @@ class MultipleChoiceAttachment(MessageAttachment):
 
     def answer_summary(self) -> str:
         """One-line answer for tool results and chat history."""
-        from src.user_inputs.types import OTHER_OPTION_ID
-
         if self.option_id == OTHER_OPTION_ID and self.custom_text:
             return f"Custom answer: {self.custom_text.strip()}"
         return f"Selected option: {self.label} (id={self.option_id})"
@@ -173,8 +166,6 @@ class MultipleChoiceAttachment(MessageAttachment):
 
     @model_validator(mode="after")
     def validate_other_answer(self) -> MultipleChoiceAttachment:
-        from src.user_inputs.types import OTHER_OPTION_ID
-
         if self.option_id == OTHER_OPTION_ID:
             text = (self.custom_text or "").strip()
             if not text:

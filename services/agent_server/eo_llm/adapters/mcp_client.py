@@ -18,6 +18,7 @@ from eo_llm.adapters.mcp_transport import (
 from src.config import get_config
 from src.core.singleton_meta import SingletonMeta
 from src.tools.contracts import ToolArtifacts, ToolResponse
+from src.tools.runtime.gateway import get_tool_gateway
 
 
 class MCPClient(metaclass=SingletonMeta):
@@ -92,8 +93,6 @@ class MCPClient(metaclass=SingletonMeta):
 
     async def get_tool_metadata(self, tool_name: str) -> dict[str, Any]:
         try:
-            from src.tools.runtime.gateway import get_tool_gateway
-
             meta = await get_tool_gateway().get_metadata(tool_name)
             if meta.get("all_params") or meta.get("docstring"):
                 return meta
@@ -115,8 +114,6 @@ class MCPClient(metaclass=SingletonMeta):
     ) -> ToolResponse:
         """Call a tool and return a typed ToolResponse."""
         try:
-            from src.tools.runtime.gateway import get_tool_gateway
-
             return await get_tool_gateway().invoke(tool_name, arguments)
         except Exception:
             pass

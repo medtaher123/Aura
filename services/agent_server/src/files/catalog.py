@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.database import AsyncSessionLocal
 from src.db.models.file import File
 from src.db.models.message_attachments import FileAttachment
 from src.db.repositories.files import FileRepository
@@ -52,8 +53,6 @@ class FileCatalog:
     async def _fetch_record(self, file_id: UUID) -> File | None:
         if self._db is not None:
             return await FileRepository(self._db).get_for_owner(file_id, self._user_id)
-        from src.db.database import AsyncSessionLocal
-
         async with AsyncSessionLocal() as session:
             return await FileRepository(session).get_for_owner(file_id, self._user_id)
 
