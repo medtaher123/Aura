@@ -28,12 +28,23 @@ class ToolCallRecord(TypedDict, total=False):
     arguments: dict | None
 
 
+class NodeCallRecord(TypedDict, total=False):
+    node_name: str
+    status: ToolRunStatus
+    domain: str | None
+    detail: str | None
+    result: dict | None
+
+
 class AssistantMessage(TypedDict, total=False):
     role: Literal["assistant"]
     content: str
     artifacts: ToolArtifacts
     error: bool
     tool_calls: list[ToolCallRecord]
+    node_calls: list[NodeCallRecord]
+    node_start_lines: list[str]
+    node_result_lines: list[dict[str, str]]
     thinking_lines: list[str]
 
 

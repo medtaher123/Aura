@@ -266,6 +266,7 @@ def _invoke_agent_with_streaming_display(
     *,
     layout: "StreamingTurnLayout",
     tools_callback: Callable[[dict], None] | None = None,
+    nodes_callback: Callable[[dict], None] | None = None,
     tools_tick: Callable[[], None] | None = None,
     artifacts_snapshot: Callable[[], ToolArtifacts] | None = None,
     trace_callback: Callable[[dict], None] | None = None,
@@ -313,6 +314,8 @@ def _invoke_agent_with_streaming_display(
             elif kind == "event" and isinstance(payload, dict):
                 if payload.get("type") == "thinking" and thinking_callback:
                     thinking_callback(payload)
+                elif nodes_callback and _is_node_progress_event(payload):
+                    nodes_callback(payload)
                 elif tools_callback and _is_tool_progress_event(payload):
                     tools_callback(payload)
                 elif trace_callback:
@@ -1189,6 +1192,227 @@ def _make_tool_status_tracker(
     return callback, snapshot, tick
 
 
+def _is_node_progress_event(evt: dict) -> bool:
+    return evt.get("type") == "graph_node"
+
+
+def _agentic_node_domain(evt: dict) -> str | None:
+    domain = evt.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        return domain.strip()
+    result = evt.get("result")
+    if isinstance(result, dict):
+        nested = result.get("domain")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _agentic_node_start_line(evt: dict) -> str | None:
+    """Small caption line for agentic domain node_start."""
+    if evt.get("phase") != "running":
+        return None
+    domain = _agentic_node_domain(evt)
+    if not domain:
+        return None
+    message = evt.get("message")
+    detail = (
+        message.strip()
+        if isinstance(message, str) and message.strip()
+        else "started"
+    )
+    return f"{domain} · {detail}"
+
+
+def _agentic_node_result_entry(evt: dict) -> dict[str, str] | None:
+    """Expandable result body for agentic domain node_end."""
+    if evt.get("phase") != "done":
+        return None
+    domain = _agentic_node_domain(evt)
+    result = evt.get("result")
+    if not domain or not isinstance(result, dict):
+        return None
+    if "tool_call_count" not in result and not result.get("domain"):
+        return None
+    message = result.get("message") or evt.get("message") or ""
+    if not isinstance(message, str) or not message.strip():
+        return None
+    status_like = {
+        "analyzing floods...",
+        "detecting fires...",
+        "querying infrastructure...",
+        "searching the satellite catalog...",
+        "querying disaster events...",
+        "running agentic tool loop...",
+        "started",
+    }
+    text = message.strip()
+    if text.lower() in status_like:
+        return None
+    return {"domain": domain, "message": text}
+
+
+def _render_node_start_lines(
+    start_lines: list[str],
+    *,
+    placeholder: DeltaGenerator | None = None,
+) -> None:
+    """Render node starts as small captions (no box)."""
+    starts = [
+        line.strip() for line in start_lines if isinstance(line, str) and line.strip()
+    ]
+    if not starts:
+        return
+
+    def _paint() -> None:
+        for line in starts[-8:]:
+            st.caption(line)
+
+    if placeholder is not None:
+        placeholder.empty()
+        with placeholder.container():
+            _paint()
+        return
+    _paint()
+
+
+def _render_node_result_boxes(
+    results: list[dict[str, str]],
+    *,
+    placeholder: DeltaGenerator | None = None,
+) -> None:
+    """Render domain results as grey expandable boxes."""
+    bodies = [
+        item
+        for item in results
+        if isinstance(item, dict)
+        and isinstance(item.get("domain"), str)
+        and isinstance(item.get("message"), str)
+        and item["message"].strip()
+    ]
+    if not bodies:
+        return
+
+    def _paint() -> None:
+        for item in bodies[-8:]:
+            domain = str(item["domain"]).strip()
+            message = str(item["message"]).strip()
+            with st.expander(f"Domain result · {domain}", expanded=False):
+                st.markdown(
+                    (
+                        "<div style='background:#f0f2f6;color:inherit;"
+                        "padding:0.75rem 0.9rem;border-radius:0.4rem;"
+                        "white-space:pre-wrap;'>"
+                        f"{html.escape(message)}"
+                        "</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+    if placeholder is not None:
+        placeholder.empty()
+        with placeholder.container():
+            _paint()
+        return
+    _paint()
+
+
+def _append_turn_node_start(line: str) -> None:
+    text = (line or "").strip()
+    if not text:
+        return
+    lines = st.session_state.setdefault("turn_node_start_lines", [])
+    lines.append(text)
+
+
+def _append_turn_node_result(entry: dict[str, str]) -> None:
+    if not isinstance(entry, dict):
+        return
+    domain = str(entry.get("domain") or "").strip()
+    message = str(entry.get("message") or "").strip()
+    if not domain or not message:
+        return
+    items = st.session_state.setdefault("turn_node_result_entries", [])
+    items.append({"domain": domain, "message": message})
+
+
+def _turn_node_start_lines(*snapshots: Callable[[], list[str]]) -> list[str]:
+    merged: list[str] = list(st.session_state.get("turn_node_start_lines") or [])
+    for snapshot in snapshots:
+        for line in snapshot():
+            text = (line or "").strip()
+            if text:
+                merged.append(text)
+    return list(dict.fromkeys(merged))
+
+
+def _turn_node_result_entries(
+    *snapshots: Callable[[], list[dict[str, str]]],
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = list(
+        st.session_state.get("turn_node_result_entries") or []
+    )
+    for snapshot in snapshots:
+        for item in snapshot():
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain") or "").strip()
+            message = str(item.get("message") or "").strip()
+            if domain and message:
+                merged.append({"domain": domain, "message": message})
+    # De-dupe while preserving order.
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+    for item in merged:
+        key = (item["domain"], item["message"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _reset_turn_node_results() -> None:
+    st.session_state.turn_node_start_lines = []
+    st.session_state.turn_node_result_entries = []
+
+
+def _make_live_node_results_updater(
+    starts_placeholder: DeltaGenerator,
+    results_placeholder: DeltaGenerator,
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[], list[str]],
+    Callable[[], list[dict[str, str]]],
+]:
+    start_lines: list[str] = []
+    results: list[dict[str, str]] = []
+
+    def callback(evt: dict) -> None:
+        if not _is_node_progress_event(evt):
+            return
+        start = _agentic_node_start_line(evt)
+        if start:
+            start_lines.append(start)
+            _append_turn_node_start(start)
+            _render_node_start_lines(start_lines, placeholder=starts_placeholder)
+            return
+        entry = _agentic_node_result_entry(evt)
+        if not entry:
+            return
+        results.append(entry)
+        _append_turn_node_result(entry)
+        _render_node_result_boxes(results, placeholder=results_placeholder)
+
+    def start_snapshot() -> list[str]:
+        return list(start_lines)
+
+    def result_snapshot() -> list[dict[str, str]]:
+        return [dict(item) for item in results]
+
+    return callback, start_snapshot, result_snapshot
+
+
 def _render_thinking_box(
     lines: list[str],
     *,
@@ -1249,7 +1473,9 @@ class StreamingTurnLayout:
     """Live turn layout: full-width text until a map artifact arrives, then 2 columns."""
 
     thinking_placeholder: DeltaGenerator
+    node_starts_placeholder: DeltaGenerator
     tools_placeholder: DeltaGenerator
+    node_results_placeholder: DeltaGenerator
     trace_placeholder: DeltaGenerator
     _layout_slot: DeltaGenerator
     message_placeholder: DeltaGenerator
@@ -1297,15 +1523,20 @@ class StreamingTurnLayout:
 
 def _make_streaming_turn_placeholders() -> StreamingTurnLayout:
     """Placeholders for a live assistant turn (full-width until maps arrive)."""
+    # Order: Thinking → Node starts → Tools → Domain results → Trace → Answer
     thinking_placeholder = st.empty()
+    node_starts_placeholder = st.empty()
     tools_placeholder = st.empty()
+    node_results_placeholder = st.empty()
     trace_placeholder = st.empty()
     layout_slot = st.empty()
     with layout_slot.container():
         message_placeholder = st.empty()
     return StreamingTurnLayout(
         thinking_placeholder=thinking_placeholder,
+        node_starts_placeholder=node_starts_placeholder,
         tools_placeholder=tools_placeholder,
+        node_results_placeholder=node_results_placeholder,
         trace_placeholder=trace_placeholder,
         _layout_slot=layout_slot,
         message_placeholder=message_placeholder,
@@ -1319,13 +1550,22 @@ def _make_streaming_event_handler(
     Callable[[dict], None],
     Callable[[dict], None],
     Callable[[dict], None],
+    Callable[[dict], None],
     Callable[[], list[str]],
     Callable[[], list[ToolCallRecord]],
+    Callable[[], list[str]],
+    Callable[[], list[dict[str, str]]],
     Callable[[], None],
     Callable[[], ToolArtifacts],
 ]:
     tool_tracker, tool_snapshot, tool_tick = _make_tool_status_tracker(
         layout.tools_placeholder
+    )
+    node_tracker, node_start_snapshot, node_result_snapshot = (
+        _make_live_node_results_updater(
+            layout.node_starts_placeholder,
+            layout.node_results_placeholder,
+        )
     )
     trace_updater = _make_live_trace_updater(layout.trace_placeholder)
     thinking_updater, thinking_snapshot = _make_live_thinking_updater(
@@ -1341,10 +1581,15 @@ def _make_streaming_event_handler(
             return
         layout.paint_artifacts(live_artifacts)
 
+    def nodes_callback(evt: dict) -> None:
+        node_tracker(evt)
+
     def trace_callback(evt: dict) -> None:
         if evt.get("type") == "thinking":
             return
         if _is_tool_progress_event(evt):
+            return
+        if _is_node_progress_event(evt):
             return
         trace_updater(evt)
 
@@ -1360,10 +1605,13 @@ def _make_streaming_event_handler(
 
     return (
         tools_callback,
+        nodes_callback,
         trace_callback,
         thinking_callback,
         thinking_snapshot,
         tool_snapshot,
+        node_start_snapshot,
+        node_result_snapshot,
         tool_tick,
         artifacts_snapshot,
     )
@@ -1520,8 +1768,75 @@ def _sync_conversation_from_server() -> None:
     persisted before ``complete`` was sent — live session appends can miss
     the final assistant message across the post-turn rerun.
     """
+    # Node lifecycle / thinking are live-only today (not in conversation API).
+    # Stash them so the force-reload can reattach to the matching assistant turns.
+    st.session_state._preserve_ui_fields = _extract_ui_only_assistant_fields(
+        st.session_state.get("messages") or []
+    )
     st.session_state.loaded_conversation_id = None
     st.session_state._force_history_reload = True
+
+
+def _extract_ui_only_assistant_fields(messages: list) -> list[dict]:
+    preserved: list[dict] = []
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        node_start_lines = msg.get("node_start_lines")
+        node_result_lines = msg.get("node_result_lines")
+        thinking_lines = msg.get("thinking_lines")
+        if not node_start_lines and not node_result_lines and not thinking_lines:
+            continue
+        preserved.append(
+            {
+                "content": msg.get("content") or "",
+                "node_start_lines": (
+                    list(node_start_lines)
+                    if isinstance(node_start_lines, list)
+                    else None
+                ),
+                "node_result_lines": (
+                    list(node_result_lines)
+                    if isinstance(node_result_lines, list)
+                    else None
+                ),
+                "thinking_lines": (
+                    list(thinking_lines) if isinstance(thinking_lines, list) else None
+                ),
+            }
+        )
+    return preserved
+
+
+def _merge_ui_only_assistant_fields(
+    ui_messages: list, preserved: list[dict] | None
+) -> list:
+    if not preserved:
+        return ui_messages
+    # Match from the end by position: live turns are not in the conversation API yet
+    # as node/thinking lines, and UI content may be translated vs server English.
+    preserved_rev = [
+        item
+        for item in reversed(preserved)
+        if (
+            item.get("node_start_lines")
+            or item.get("node_result_lines")
+            or item.get("thinking_lines")
+        )
+    ]
+    assistants = [
+        msg
+        for msg in ui_messages
+        if isinstance(msg, dict) and msg.get("role") == "assistant"
+    ]
+    for msg, item in zip(reversed(assistants), preserved_rev):
+        if item.get("node_start_lines") and not msg.get("node_start_lines"):
+            msg["node_start_lines"] = item["node_start_lines"]
+        if item.get("node_result_lines") and not msg.get("node_result_lines"):
+            msg["node_result_lines"] = item["node_result_lines"]
+        if item.get("thinking_lines") and not msg.get("thinking_lines"):
+            msg["thinking_lines"] = item["thinking_lines"]
+    return ui_messages
 
 
 def _normalize_conversation_id(value: object) -> str | None:
@@ -1638,6 +1953,9 @@ def _load_conversation_into_session(
     if not isinstance(messages, list):
         messages = []
     ui_messages, agent_messages = _conversation_messages_to_chat_state(messages)
+    preserved = st.session_state.pop("_preserve_ui_fields", None)
+    if isinstance(preserved, list):
+        ui_messages = _merge_ui_only_assistant_fields(ui_messages, preserved)
     st.session_state.messages = ui_messages
     st.session_state.messages_en = agent_messages
     st.session_state.pending_user_input = _pending_from_conversation_messages(messages)
@@ -1724,6 +2042,12 @@ if "composer_file_uploader_key" not in st.session_state:
 
 if "turn_thinking_lines" not in st.session_state:
     st.session_state.turn_thinking_lines = []
+
+if "turn_node_start_lines" not in st.session_state:
+    st.session_state.turn_node_start_lines = []
+
+if "turn_node_result_entries" not in st.session_state:
+    st.session_state.turn_node_result_entries = []
 
 if "auto_confirm_attempts" not in st.session_state:
     # Map normalized location_query -> int attempts in current session
@@ -1893,6 +2217,8 @@ for msg in st.session_state.messages:
     maps: list = []
     thumbnails: list = []
     stored_tool_calls: list[ToolCallRecord] = []
+    stored_node_starts: list[str] = []
+    stored_node_results: list[dict[str, str]] = []
     stored_thinking: list[str] = []
 
     if role == "assistant":
@@ -1903,15 +2229,28 @@ for msg in st.session_state.messages:
         maps = artifacts.maps if hasattr(artifacts, "maps") else []
         thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
         stored_tool_calls = assistant_msg.get("tool_calls") or []
+        stored_node_starts = assistant_msg.get("node_start_lines") or []
+        raw_node_results = assistant_msg.get("node_result_lines") or []
+        stored_node_results = [
+            item
+            for item in raw_node_results
+            if isinstance(item, dict)
+            and isinstance(item.get("domain"), str)
+            and isinstance(item.get("message"), str)
+        ]
         stored_thinking = assistant_msg.get("thinking_lines") or []
 
     with st.chat_message(role):
         if role == "assistant" and stored_thinking:
             _render_thinking_box(stored_thinking)
+        if role == "assistant" and stored_node_starts:
+            _render_node_start_lines(stored_node_starts)
         if role == "assistant" and stored_tool_calls:
             _render_tool_status_box(
                 [_record_to_tool_call(record) for record in stored_tool_calls]
             )
+        if role == "assistant" and stored_node_results:
+            _render_node_result_boxes(stored_node_results)
         if role == "assistant" and is_error:
             st.error(content or "An error occurred.")
         elif role != "assistant":
@@ -2024,10 +2363,13 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                 layout = _make_streaming_turn_placeholders()
                 (
                     tools_callback,
+                    nodes_callback,
                     trace_callback,
                     thinking_callback,
                     thinking_snapshot,
                     tool_snapshot,
+                    node_start_snapshot,
+                    node_result_snapshot,
                     tool_tick,
                     artifacts_snapshot,
                 ) = _make_streaming_event_handler(layout=layout)
@@ -2039,6 +2381,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         agent_executor,
                         layout=layout,
                         tools_callback=tools_callback,
+                        nodes_callback=nodes_callback,
                         tools_tick=tool_tick,
                         artifacts_snapshot=artifacts_snapshot,
                         trace_callback=trace_callback,
@@ -2049,6 +2392,8 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         conversation_id=st.session_state.conversation_id,
                     )
                     tool_calls = tool_snapshot()
+                    node_start_lines = _turn_node_start_lines(node_start_snapshot)
+                    node_result_lines = _turn_node_result_entries(node_result_snapshot)
                     _store_conversation_id(result.conversation_id)
                     _store_conversation_title(
                         result.conversation_id, result.conversation_title
@@ -2073,6 +2418,8 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             artifacts=result.artifacts,
                             error=result.error,
                             tool_calls=tool_calls,
+                            node_start_lines=node_start_lines,
+                            node_result_lines=node_result_lines,
                             thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
@@ -2080,6 +2427,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         pass
                     else:
                         _reset_turn_thinking()
+                        _reset_turn_node_results()
                         _sync_conversation_from_server()
                 except Exception as e:
                     logger.error(
@@ -2095,6 +2443,8 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             artifacts=ToolArtifacts(),
                             error=True,
                             tool_calls=tool_snapshot(),
+                            node_start_lines=_turn_node_start_lines(node_start_snapshot),
+                            node_result_lines=_turn_node_result_entries(node_result_snapshot),
                         )
                     )
                     st.session_state.messages_en.append(
@@ -2339,10 +2689,13 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                 layout = _make_streaming_turn_placeholders()
                 (
                     tools_callback,
+                    nodes_callback,
                     trace_callback,
                     thinking_callback,
                     thinking_snapshot,
                     tool_snapshot,
+                    node_start_snapshot,
+                    node_result_snapshot,
                     tool_tick,
                     artifacts_snapshot,
                 ) = _make_streaming_event_handler(layout=layout)
@@ -2351,6 +2704,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         agent_executor,
                         layout=layout,
                         tools_callback=tools_callback,
+                        nodes_callback=nodes_callback,
                         tools_tick=tool_tick,
                         artifacts_snapshot=artifacts_snapshot,
                         trace_callback=trace_callback,
@@ -2361,6 +2715,8 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         conversation_id=st.session_state.conversation_id,
                     )
                     tool_calls = tool_snapshot()
+                    node_start_lines = _turn_node_start_lines(node_start_snapshot)
+                    node_result_lines = _turn_node_result_entries(node_result_snapshot)
                     _store_conversation_id(result.conversation_id)
                     _store_conversation_title(
                         result.conversation_id, result.conversation_title
@@ -2384,6 +2740,8 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             artifacts=result.artifacts,
                             error=result.error,
                             tool_calls=tool_calls,
+                            node_start_lines=node_start_lines,
+                            node_result_lines=node_result_lines,
                             thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
@@ -2391,6 +2749,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         pass
                     else:
                         _reset_turn_thinking()
+                        _reset_turn_node_results()
                         _sync_conversation_from_server()
                 except Exception as e:
                     logger.error(
@@ -2406,6 +2765,8 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                             artifacts=ToolArtifacts(),
                             error=True,
                             tool_calls=tool_snapshot(),
+                            node_start_lines=_turn_node_start_lines(node_start_snapshot),
+                            node_result_lines=_turn_node_result_entries(node_result_snapshot),
                         )
                     )
                     st.session_state.messages_en.append(
@@ -2662,6 +3023,7 @@ user_input = st.chat_input(
 if user_input:
     logger.info(f"New user input received: {user_input[:100]}...")
     _reset_turn_thinking()
+    _reset_turn_node_results()
     attached_for_send = list((st.session_state.attached_user_inputs or {}).values())
     st.session_state.attached_user_inputs = {}
     st.session_state.composer_attach_mode = None
@@ -2684,10 +3046,13 @@ if user_input:
         layout = _make_streaming_turn_placeholders()
         (
             tools_callback,
+            nodes_callback,
             trace_callback,
             thinking_callback,
             thinking_snapshot,
             tool_snapshot,
+            node_start_snapshot,
+            node_result_snapshot,
             tool_tick,
             artifacts_snapshot,
         ) = _make_streaming_event_handler(layout=layout)
@@ -2709,6 +3074,7 @@ if user_input:
                 agent_executor,
                 layout=layout,
                 tools_callback=tools_callback,
+                nodes_callback=nodes_callback,
                 tools_tick=tool_tick,
                 artifacts_snapshot=artifacts_snapshot,
                 trace_callback=trace_callback,
@@ -2718,6 +3084,8 @@ if user_input:
                 attachments=attached_for_send or None,
             )
             tool_calls = tool_snapshot()
+            node_start_lines = _turn_node_start_lines(node_start_snapshot)
+            node_result_lines = _turn_node_result_entries(node_result_snapshot)
             _store_conversation_id(result.conversation_id)
             _store_conversation_title(
                 result.conversation_id, result.conversation_title
@@ -2754,6 +3122,8 @@ if user_input:
                     artifacts=result.artifacts,
                     error=result.error,
                     tool_calls=tool_calls,
+                    node_start_lines=node_start_lines,
+                    node_result_lines=node_result_lines,
                     thinking_lines=_turn_thinking_lines(thinking_snapshot),
                 )
             )
@@ -2761,6 +3131,7 @@ if user_input:
                 pass
             else:
                 _reset_turn_thinking()
+                _reset_turn_node_results()
                 _sync_conversation_from_server()
 
         except Exception as e:
@@ -2776,6 +3147,8 @@ if user_input:
                     artifacts=ToolArtifacts(),
                     error=True,
                     tool_calls=tool_snapshot(),
+                    node_start_lines=_turn_node_start_lines(node_start_snapshot),
+                    node_result_lines=_turn_node_result_entries(node_result_snapshot),
                 )
             )
             st.session_state.messages_en.append(

@@ -197,6 +197,52 @@ class RemoteAgentAdapter:
                     payload["tool_input"] = tool_input
                 stream_callback(payload)
 
+        def on_node_start(node_name: str, meta: dict | None = None):
+            if stream_callback:
+                meta = meta or {}
+                stream_callback(
+                    {
+                        "type": "graph_node",
+                        "phase": "running",
+                        "node_name": node_name,
+                        "domain": meta.get("domain"),
+                        "message": meta.get("message"),
+                    }
+                )
+
+        def on_node_end(node_name: str, meta: dict | None = None):
+            if stream_callback:
+                meta = meta or {}
+                raw_result = meta.get("result")
+                # Only forward slim agentic payloads (full graph dumps break the UI).
+                result = None
+                if isinstance(raw_result, dict) and (
+                    "tool_call_count" in raw_result or raw_result.get("domain")
+                ):
+                    result = {
+                        key: raw_result.get(key)
+                        for key in (
+                            "domain",
+                            "status",
+                            "message",
+                            "error",
+                            "tool",
+                            "tool_call_count",
+                        )
+                        if key in raw_result
+                    }
+                stream_callback(
+                    {
+                        "type": "graph_node",
+                        "phase": "done",
+                        "node_name": node_name,
+                        "domain": meta.get("domain"),
+                        "message": meta.get("message"),
+                        "result": result,
+                        "error": bool(meta.get("error")),
+                    }
+                )
+
         def on_token(content: str):
             if stream_callback and content:
                 stream_callback({"type": "token", "content": content})
@@ -216,6 +262,8 @@ class RemoteAgentAdapter:
                     on_thinking=on_thinking,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
+                    on_node_start=on_node_start,
+                    on_node_end=on_node_end,
                 )
             else:
                 logger.debug("Sending normal chat request")
@@ -229,6 +277,8 @@ class RemoteAgentAdapter:
                     on_thinking=on_thinking,
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
+                    on_node_start=on_node_start,
+                    on_node_end=on_node_end,
                 )
 
             artifacts_dict = response.artifacts or {}

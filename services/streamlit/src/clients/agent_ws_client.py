@@ -28,7 +28,7 @@ from src.core.logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
 # Bump when the websocket client protocol changes (e.g. new message types).
-WS_PROTOCOL_VERSION = 4
+WS_PROTOCOL_VERSION = 5
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
 DEFAULT_RECONNECT_ATTEMPTS = 3
@@ -318,6 +318,8 @@ class AgentWebSocketClient:
         on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[..., None]] = None,
         on_tool_result: Optional[Callable[..., None]] = None,
+        on_node_start: Optional[Callable[..., None]] = None,
+        on_node_end: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Send a message and receive streaming response."""
         current_loop_id = id(asyncio.get_event_loop())
@@ -439,6 +441,38 @@ class AgentWebSocketClient:
                         except Exception as e:
                             logger.warning(f"Error in on_tool_result callback: {e}")
 
+                elif msg_type == "node_start":
+                    node_name = data.get("node_name", "")
+                    logger.info(f"Node started: {node_name}")
+                    if on_node_start:
+                        try:
+                            on_node_start(
+                                node_name,
+                                {
+                                    "domain": data.get("domain"),
+                                    "message": data.get("message"),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error in on_node_start callback: {e}")
+
+                elif msg_type == "node_end":
+                    node_name = data.get("node_name", "")
+                    logger.info(f"Node completed: {node_name}")
+                    if on_node_end:
+                        try:
+                            on_node_end(
+                                node_name,
+                                {
+                                    "domain": data.get("domain"),
+                                    "message": data.get("message"),
+                                    "result": data.get("result"),
+                                    "error": data.get("error", False),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error in on_node_end callback: {e}")
+
                 elif msg_type == "user_input_request":
                     needs_input = data.get("needs_input") or {}
                     pause_state = data.get("pause_state", {})
@@ -530,6 +564,8 @@ class AgentWebSocketClient:
         on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[..., None]] = None,
         on_tool_result: Optional[Callable[..., None]] = None,
+        on_node_start: Optional[Callable[..., None]] = None,
+        on_node_end: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Send a chat message and receive streaming response."""
         payload = {
@@ -548,6 +584,8 @@ class AgentWebSocketClient:
                 on_thinking=on_thinking,
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
+                on_node_start=on_node_start,
+                on_node_end=on_node_end,
             )
 
         return self._run_sync(_do_send())
@@ -561,6 +599,8 @@ class AgentWebSocketClient:
         on_thinking: Optional[Callable[[dict], None]] = None,
         on_tool_start: Optional[Callable[..., None]] = None,
         on_tool_result: Optional[Callable[..., None]] = None,
+        on_node_start: Optional[Callable[..., None]] = None,
+        on_node_end: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Resume chat after collecting required user inputs.
 
@@ -583,6 +623,8 @@ class AgentWebSocketClient:
                 on_thinking=on_thinking,
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
+                on_node_start=on_node_start,
+                on_node_end=on_node_end,
             )
 
         return self._run_sync(_do_send())
