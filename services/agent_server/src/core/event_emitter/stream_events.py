@@ -64,3 +64,13 @@ class GraphNodeLifecycleEvent:
     message: str | None = None
     result: dict[str, Any] | None = None
     error: bool = False
+
+
+@dataclass
+class GraphNodeTokenEvent:
+    """Incremental text from an agentic domain LLM turn (before node_end)."""
+
+    node_name: str
+    domain: str | None = None
+    content: str = ""
+    reset: bool = False

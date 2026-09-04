@@ -1252,6 +1252,61 @@ def _agentic_node_result_entry(evt: dict) -> dict[str, str] | None:
     return {"domain": domain, "message": text}
 
 
+def _agentic_node_stream_update(
+    evt: dict,
+) -> tuple[str, str, bool] | None:
+    """Parse a streaming node_token event as (domain, content, reset)."""
+    if evt.get("phase") != "streaming":
+        return None
+    domain = _agentic_node_domain(evt)
+    if not domain:
+        node_name = evt.get("node_name")
+        if isinstance(node_name, str) and node_name.strip():
+            domain = node_name.strip()
+    if not domain:
+        return None
+    reset = bool(evt.get("reset"))
+    content = evt.get("content") or ""
+    if not isinstance(content, str):
+        content = str(content)
+    return domain, content, reset
+
+
+def _upsert_streaming_node_result(
+    results: list[dict[str, str]],
+    *,
+    domain: str,
+    content: str,
+    reset: bool,
+) -> None:
+    """Mutate ``results`` for a live domain draft (reset and/or append)."""
+    domain = domain.strip()
+    if not domain:
+        return
+    idx = next(
+        (i for i, item in enumerate(results) if item.get("domain") == domain),
+        None,
+    )
+    if reset:
+        if idx is None:
+            results.append({"domain": domain, "message": ""})
+        else:
+            results[idx] = {"domain": domain, "message": ""}
+        idx = next(
+            (i for i, item in enumerate(results) if item.get("domain") == domain),
+            None,
+        )
+    if not content:
+        return
+    if idx is None:
+        results.append({"domain": domain, "message": content})
+        return
+    results[idx] = {
+        "domain": domain,
+        "message": (results[idx].get("message") or "") + content,
+    }
+
+
 def _render_node_start_lines(
     start_lines: list[str],
     *,
@@ -1276,10 +1331,17 @@ def _render_node_start_lines(
     _paint()
 
 
+def _compact_domain_result_text(message: str) -> str:
+    """Collapse blank lines and trailing spaces for a denser domain-result block."""
+    lines = [line.rstrip() for line in str(message or "").splitlines()]
+    return "\n".join(line for line in lines if line.strip())
+
+
 def _render_node_result_boxes(
     results: list[dict[str, str]],
     *,
     placeholder: DeltaGenerator | None = None,
+    expanded_domains: set[str] | None = None,
 ) -> None:
     """Render domain results as grey expandable boxes."""
     bodies = [
@@ -1292,17 +1354,24 @@ def _render_node_result_boxes(
     ]
     if not bodies:
         return
+    open_domains = expanded_domains or set()
 
     def _paint() -> None:
         for item in bodies[-8:]:
             domain = str(item["domain"]).strip()
-            message = str(item["message"]).strip()
-            with st.expander(f"Domain result · {domain}", expanded=False):
+            message = _compact_domain_result_text(str(item["message"]))
+            if not message:
+                continue
+            with st.expander(
+                f"Domain result · {domain}",
+                expanded=domain in open_domains,
+            ):
                 st.markdown(
                     (
                         "<div style='background:#f0f2f6;color:inherit;"
-                        "padding:0.75rem 0.9rem;border-radius:0.4rem;"
-                        "white-space:pre-wrap;'>"
+                        "padding:0.45rem 0.65rem;border-radius:0.35rem;"
+                        "line-height:1.25;font-size:0.9rem;"
+                        "white-space:pre-wrap;margin:0;'>"
                         f"{html.escape(message)}"
                         "</div>"
                     ),
@@ -1387,6 +1456,14 @@ def _make_live_node_results_updater(
 ]:
     start_lines: list[str] = []
     results: list[dict[str, str]] = []
+    streaming_domains: set[str] = set()
+
+    def _repaint_results() -> None:
+        _render_node_result_boxes(
+            results,
+            placeholder=results_placeholder,
+            expanded_domains=streaming_domains,
+        )
 
     def callback(evt: dict) -> None:
         if not _is_node_progress_event(evt):
@@ -1397,18 +1474,47 @@ def _make_live_node_results_updater(
             _append_turn_node_start(start)
             _render_node_start_lines(start_lines, placeholder=starts_placeholder)
             return
+
+        stream = _agentic_node_stream_update(evt)
+        if stream is not None:
+            domain, content, reset = stream
+            if reset:
+                streaming_domains.add(domain)
+            _upsert_streaming_node_result(
+                results, domain=domain, content=content, reset=reset
+            )
+            if content or reset:
+                if content:
+                    streaming_domains.add(domain)
+                _repaint_results()
+            return
+
         entry = _agentic_node_result_entry(evt)
         if not entry:
             return
-        results.append(entry)
+        domain = entry["domain"]
+        streaming_domains.discard(domain)
+        # Replace any streaming draft for this domain with the final message.
+        replaced = False
+        for i, item in enumerate(results):
+            if item.get("domain") == domain:
+                results[i] = entry
+                replaced = True
+                break
+        if not replaced:
+            results.append(entry)
         _append_turn_node_result(entry)
-        _render_node_result_boxes(results, placeholder=results_placeholder)
+        _repaint_results()
 
     def start_snapshot() -> list[str]:
         return list(start_lines)
 
     def result_snapshot() -> list[dict[str, str]]:
-        return [dict(item) for item in results]
+        return [
+            dict(item)
+            for item in results
+            if isinstance(item.get("message"), str) and item["message"].strip()
+        ]
 
     return callback, start_snapshot, result_snapshot
 

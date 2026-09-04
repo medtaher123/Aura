@@ -6,7 +6,7 @@ from enum import Enum
 import importlib
 import inspect
 import pkgutil
-from typing import Any, AsyncIterator, Type, TypeVar
+from typing import Any, AsyncIterator, Callable, Type, TypeVar
 
 from pydantic import BaseModel
 
@@ -181,6 +181,33 @@ class LLMModelRouter(metaclass=SingletonMeta):
             chat_history=chat_history,
             model_id=model.model_id,
             file_media_mode=file_media_mode,
+        )
+
+    async def call_converse_stream(
+        self,
+        *,
+        system_prompt: str,
+        chat_history: Sequence[Message] | None = None,
+        tools: list[ToolDescriptor] | None = None,
+        temperature: float = 0.1,
+        max_tokens: int = 4096,
+        task_type: TaskType = TaskType.REASONING,
+        model: LLMRoute | None = None,
+        file_media_mode: FileMediaMode = FileMediaMode.MEDIA,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ConverseResponse:
+        if model is None:
+            model = self.get_route(task_type)
+
+        return await model.provider.call_converse_stream(
+            system_prompt=system_prompt,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            chat_history=chat_history,
+            model_id=model.model_id,
+            file_media_mode=file_media_mode,
+            on_text_delta=on_text_delta,
         )
 
     async def call_standard_with_document(

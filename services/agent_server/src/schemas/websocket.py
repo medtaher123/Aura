@@ -39,6 +39,7 @@ __all__ = [
     "InputKind",
     "NodeEndMessage",
     "NodeStartMessage",
+    "NodeTokenMessage",
     "OSMPrefixType",
     "OSMType",
     "ServerMessage",
@@ -76,6 +77,7 @@ class ServerMessageType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
     NODE_START = "node_start"
+    NODE_TOKEN = "node_token"
     NODE_END = "node_end"
     USER_INPUT_REQUEST = "user_input_request"
     CONVERSATION_TITLE = "conversation_title"
@@ -255,6 +257,19 @@ class NodeStartMessage(BaseModel):
     )
 
 
+class NodeTokenMessage(BaseModel):
+    """Incremental text from an agentic domain LLM turn (before node_end)."""
+
+    type: str = Field(default=ServerMessageType.NODE_TOKEN.value)
+    node_name: str = Field(..., description="Graph node name")
+    domain: Optional[str] = Field(default=None, description="Domain for domain nodes")
+    content: str = Field(default="", description="Text delta (empty when reset=true)")
+    reset: bool = Field(
+        default=False,
+        description="If true, clear any in-progress draft for this domain/node",
+    )
+
+
 class NodeEndMessage(BaseModel):
     """Result from a finished graph node."""
 
@@ -335,6 +350,7 @@ ServerMessage = (
     | ToolStartMessage
     | ToolResultMessage
     | NodeStartMessage
+    | NodeTokenMessage
     | NodeEndMessage
     | UserInputRequestMessage
     | ConversationTitleMessage

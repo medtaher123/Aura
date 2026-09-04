@@ -343,7 +343,7 @@ async def test_router_uses_caption_for_structured_and_media_for_stream():
 
     from eo_llm.adapters.bedrock.llm_provider import FileMediaMode
     from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter, LLMRoute
-    from eo_llm.adapters.bedrock.llm_provider import LLMProvider
+    from eo_llm.adapters.bedrock.llm_provider import ConverseResponse, LLMProvider
 
     class _Schema(BaseModel):
         ok: bool = True
@@ -369,6 +369,12 @@ async def test_router_uses_caption_for_structured_and_media_for_stream():
             seen["stream"] = kwargs.get("file_media_mode", FileMediaMode.CAPTION)
             if False:
                 yield ""
+
+        async def call_converse(self, **kwargs):
+            return ConverseResponse(stop_reason="end_turn", text="ok")
+
+        async def call_converse_stream(self, **kwargs):
+            return ConverseResponse(stop_reason="end_turn", text="ok")
 
         async def call_standard_with_document(self, **kwargs):
             return {}

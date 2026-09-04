@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, AsyncIterator, Type
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Type
 
 import aioboto3
 
@@ -150,6 +150,15 @@ class BedrockProvider(LLMProvider):
         return formatted
 
     @staticmethod
+    def _normalize_stop_reason(stop_reason: str) -> str:
+        value = str(stop_reason or "").lower()
+        if value == "tool_use":
+            return "tool_use"
+        if value == "end_turn":
+            return "end_turn"
+        return "other"
+
+    @staticmethod
     def _parse_converse_response(raw: dict[str, Any]) -> ConverseResponse:
         stop_reason = str(raw.get("stopReason") or "").lower()
         content = list((raw.get("output") or {}).get("message", {}).get("content") or [])
@@ -172,16 +181,80 @@ class BedrockProvider(LLMProvider):
                         arguments=raw_input if isinstance(raw_input, dict) else {},
                     )
                 )
-        normalized_stop = (
-            "tool_use"
-            if stop_reason == "tool_use"
-            else "end_turn"
-            if stop_reason == "end_turn"
-            else "other"
-        )
         return ConverseResponse(
-            stop_reason=normalized_stop,
+            stop_reason=BedrockProvider._normalize_stop_reason(stop_reason),  # type: ignore[arg-type]
             text="\n".join(text_parts).strip(),
+            tool_calls=tool_calls,
+        )
+
+    @staticmethod
+    def accumulate_converse_stream_events(
+        events: Iterable[dict[str, Any]],
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ConverseResponse:
+        """Parse Bedrock ``converse_stream`` events into a ``ConverseResponse``.
+
+        Invokes ``on_text_delta`` for each text chunk as it arrives.
+        """
+        text_parts: list[str] = []
+        tool_calls: list[ConverseToolCall] = []
+        current_tool: dict[str, str] | None = None
+        stop_reason = "other"
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if "contentBlockStart" in event:
+                start = event["contentBlockStart"].get("start") or {}
+                tool_use = start.get("toolUse") if isinstance(start, dict) else None
+                if isinstance(tool_use, dict):
+                    current_tool = {
+                        "id": str(tool_use.get("toolUseId") or ""),
+                        "name": str(tool_use.get("name") or ""),
+                        "input_json": "",
+                    }
+                continue
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                if "text" in delta:
+                    chunk = str(delta.get("text") or "")
+                    if chunk:
+                        text_parts.append(chunk)
+                        if on_text_delta is not None:
+                            on_text_delta(chunk)
+                tool_delta = delta.get("toolUse")
+                if isinstance(tool_delta, dict) and current_tool is not None:
+                    current_tool["input_json"] += str(tool_delta.get("input") or "")
+                continue
+            if "contentBlockStop" in event:
+                if current_tool is None:
+                    continue
+                raw_input = current_tool.get("input_json") or ""
+                try:
+                    parsed = json.loads(raw_input) if raw_input.strip() else {}
+                except json.JSONDecodeError:
+                    parsed = {}
+                if not isinstance(parsed, dict):
+                    parsed = {}
+                tool_calls.append(
+                    ConverseToolCall(
+                        id=current_tool["id"],
+                        name=current_tool["name"],
+                        arguments=parsed,
+                    )
+                )
+                current_tool = None
+                continue
+            if "messageStop" in event:
+                stop = event["messageStop"].get("stopReason")
+                stop_reason = BedrockProvider._normalize_stop_reason(str(stop or ""))
+
+        return ConverseResponse(
+            stop_reason=stop_reason,  # type: ignore[arg-type]
+            text="".join(text_parts).strip(),
             tool_calls=tool_calls,
         )
 
@@ -351,6 +424,78 @@ class BedrockProvider(LLMProvider):
         async with self._session.client("bedrock-runtime") as client:
             raw = await client.converse(**request)
         return self._parse_converse_response(raw)
+
+    async def call_converse_stream(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        chat_history: Sequence["Message"] | None = None,
+        tools: list[ToolDescriptor] | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ConverseResponse:
+        if not model_id:
+            self._last_failure_reason = "model_not_ready"
+            raise RuntimeError("Bedrock model_id is not configured")
+
+        converse_messages = await self.format_converse_messages(
+            chat_history=chat_history,
+            file_media_mode=file_media_mode,
+            include_tool_messages=bool(tools),
+        )
+
+        self._last_failure_reason = ""
+        request: dict[str, Any] = {
+            "modelId": model_id,
+            "system": [{"text": system_prompt}],
+            "messages": converse_messages,
+            "inferenceConfig": {
+                "temperature": float(temperature),
+                "maxTokens": int(max_tokens),
+            },
+        }
+        if tools:
+            request["toolConfig"] = self._bedrock_tool_config(tools)
+
+        try:
+            async with self._session.client("bedrock-runtime") as client:
+                response = await client.converse_stream(**request)
+                stream = response.get("stream")
+
+                async def _event_iter() -> AsyncIterator[dict[str, Any]]:
+                    if not stream:
+                        return
+                    async for event in stream:
+                        if isinstance(event, dict):
+                            yield event
+
+                # accumulate_converse_stream_events is sync/iterable — drain async
+                # events into a buffer while forwarding text deltas immediately.
+                buffered: list[dict[str, Any]] = []
+                text_relay = on_text_delta
+
+                async for event in _event_iter():
+                    # Forward text deltas as soon as each stream event arrives.
+                    if "contentBlockDelta" in event and text_relay is not None:
+                        delta = event["contentBlockDelta"].get("delta") or {}
+                        if isinstance(delta, dict) and "text" in delta:
+                            chunk = str(delta.get("text") or "")
+                            if chunk:
+                                text_relay(chunk)
+                    buffered.append(event)
+
+                return self.accumulate_converse_stream_events(
+                    buffered, on_text_delta=None
+                )
+        except Exception as e:
+            self._last_failure_reason = f"{type(e).__name__}:{e}"
+            logger.warning("Bedrock converse stream failed: %s", e)
+            raise RuntimeError(
+                f"Converse stream failed: {self._last_failure_reason}"
+            ) from e
 
     async def call_standard_with_document(
         self,

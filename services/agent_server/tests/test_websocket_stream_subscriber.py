@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ from src.core.event_emitter import (
     DataAgentStepEvent,
     EventEmitter,
     GraphNodeLifecycleEvent,
+    GraphNodeTokenEvent,
 )
 from src.tools.contracts import ToolArtifacts
 
@@ -151,3 +153,30 @@ async def test_forward_node_done_sends_node_end_with_result() -> None:
         error=False,
     )
     conn.send_node_start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_forward_node_token_sends_node_token() -> None:
+    conn = MagicMock()
+    conn.send_node_token = AsyncMock()
+    loop = asyncio.get_running_loop()
+    subscriber = WebSocketStreamSubscriber(
+        conn, loop, emitter=EventEmitter()
+    )
+
+    subscriber.on_graph_node_token(
+        GraphNodeTokenEvent(
+            node_name="flood_damage",
+            domain="flood_damage",
+            content="Hello",
+            reset=False,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    conn.send_node_token.assert_awaited_once_with(
+        "flood_damage",
+        domain="flood_damage",
+        content="Hello",
+        reset=False,
+    )

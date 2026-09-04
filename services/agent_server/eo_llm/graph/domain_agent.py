@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
 from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
 from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord, ConverseToolCall
-from src.core.event_emitter import DataAgentStepEvent, emit_event
+from src.core.event_emitter import DataAgentStepEvent, GraphNodeTokenEvent, emit_event
 from src.tools.contracts import ToolArtifacts, ToolResponse
 from src.tools.runtime.gateway import get_tool_gateway
 
@@ -41,9 +41,11 @@ class DomainToolAgent:
         runtime_args_by_tool: dict[str, dict[str, Any]] | None = None,
         execution_context: dict[str, Any] | None = None,
         tool_call_records: list[AgentToolCallRecord] | None = None,
+        node_name: str | None = None,
     ) -> DomainAgentRunResult:
         runtime_args_by_tool = runtime_args_by_tool or {}
         execution_context = execution_context or {}
+        stream_node = (node_name or domain or "").strip() or domain
 
         gateway = get_tool_gateway()
         allowed = set(allowed_tools)
@@ -61,10 +63,34 @@ class DomainToolAgent:
             history = list(get_chat_history() or ())
             for record in records:
                 history.extend(record.to_messages())
-            turn = await LLMModelRouter().call_converse(
+
+            # Clear any prior draft when a new LLM turn starts (e.g. after tools).
+            emit_event(
+                GraphNodeTokenEvent(
+                    node_name=stream_node,
+                    domain=domain,
+                    content="",
+                    reset=True,
+                )
+            )
+
+            def _on_delta(chunk: str, *, _node: str = stream_node, _domain: str = domain) -> None:
+                if not chunk:
+                    return
+                emit_event(
+                    GraphNodeTokenEvent(
+                        node_name=_node,
+                        domain=_domain,
+                        content=chunk,
+                        reset=False,
+                    )
+                )
+
+            turn = await LLMModelRouter().call_converse_stream(
                 system_prompt=system_prompt,
                 chat_history=history,
                 tools=tools,
+                on_text_delta=_on_delta,
             )
 
             if turn.stop_reason != "tool_use":

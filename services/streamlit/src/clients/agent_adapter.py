@@ -210,6 +210,20 @@ class RemoteAgentAdapter:
                     }
                 )
 
+        def on_node_token(node_name: str, meta: dict | None = None):
+            if stream_callback:
+                meta = meta or {}
+                stream_callback(
+                    {
+                        "type": "graph_node",
+                        "phase": "streaming",
+                        "node_name": node_name,
+                        "domain": meta.get("domain"),
+                        "content": meta.get("content") or "",
+                        "reset": bool(meta.get("reset")),
+                    }
+                )
+
         def on_node_end(node_name: str, meta: dict | None = None):
             if stream_callback:
                 meta = meta or {}
@@ -263,6 +277,7 @@ class RemoteAgentAdapter:
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
                     on_node_start=on_node_start,
+                    on_node_token=on_node_token,
                     on_node_end=on_node_end,
                 )
             else:
@@ -278,6 +293,7 @@ class RemoteAgentAdapter:
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
                     on_node_start=on_node_start,
+                    on_node_token=on_node_token,
                     on_node_end=on_node_end,
                 )
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, AsyncIterator, Literal, Type, TypeVar
+from typing import Any, AsyncIterator, Callable, Literal, Type, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -296,6 +296,21 @@ class LLMProvider(ABC):
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
     ) -> ConverseResponse:
         """One multi-modal / tool-use converse turn."""
+
+    @abstractmethod
+    async def call_converse_stream(
+        self,
+        *,
+        model_id: str,
+        system_prompt: str,
+        chat_history: Sequence["Message"] | None = None,
+        tools: list[ToolDescriptor] | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ConverseResponse:
+        """One tool-aware converse turn via streaming; invokes ``on_text_delta`` per chunk."""
 
     @abstractmethod
     async def call_standard_with_document(

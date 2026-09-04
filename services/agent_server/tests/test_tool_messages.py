@@ -86,6 +86,9 @@ def test_llm_provider_formats_tool_messages():
         async def call_converse(self, **kwargs):
             return ConverseResponse(stop_reason="end_turn", text="ok")
 
+        async def call_converse_stream(self, **kwargs):
+            return ConverseResponse(stop_reason="end_turn", text="ok")
+
     record = AgentToolCallRecord(
         tool_use_id="tid",
         tool_name="calculator",

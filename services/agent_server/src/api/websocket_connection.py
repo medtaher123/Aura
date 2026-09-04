@@ -13,6 +13,7 @@ from src.schemas.websocket import (
     ErrorMessage,
     NodeEndMessage,
     NodeStartMessage,
+    NodeTokenMessage,
     StatusMessage,
     ThinkingMessage,
     ToolResultMessage,
@@ -189,6 +190,24 @@ class WebSocketConnection:
                 node_name=node_name,
                 domain=domain,
                 message=message,
+            )
+        )
+
+    async def send_node_token(
+        self,
+        node_name: str,
+        *,
+        domain: str | None = None,
+        content: str = "",
+        reset: bool = False,
+    ) -> None:
+        """Send an incremental domain-agent text delta (or draft reset)."""
+        await self.send(
+            NodeTokenMessage(
+                node_name=node_name,
+                domain=domain,
+                content=content,
+                reset=reset,
             )
         )
 

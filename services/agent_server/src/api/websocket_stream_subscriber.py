@@ -12,6 +12,7 @@ from src.core.event_emitter import (
     EventEmitter,
     EventSubscriber,
     GraphNodeLifecycleEvent,
+    GraphNodeTokenEvent,
     GraphStatusEvent,
     GraphStatusStage,
     ThinkingStreamEvent,
@@ -86,6 +87,17 @@ class WebSocketStreamSubscriber(EventSubscriber):
     @on_event(GraphNodeLifecycleEvent)
     def on_graph_node_lifecycle(self, event: GraphNodeLifecycleEvent) -> None:
         self._schedule(self._forward_node_lifecycle(event))
+
+    @on_event(GraphNodeTokenEvent)
+    def on_graph_node_token(self, event: GraphNodeTokenEvent) -> None:
+        self._schedule(
+            self._conn.send_node_token(
+                event.node_name,
+                domain=event.domain,
+                content=event.content,
+                reset=event.reset,
+            )
+        )
 
     async def _forward_node_lifecycle(self, event: GraphNodeLifecycleEvent) -> None:
         if event.phase == "running":

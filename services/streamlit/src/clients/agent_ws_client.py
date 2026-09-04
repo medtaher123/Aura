@@ -28,7 +28,7 @@ from src.core.logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
 # Bump when the websocket client protocol changes (e.g. new message types).
-WS_PROTOCOL_VERSION = 5
+WS_PROTOCOL_VERSION = 6
 
 DEFAULT_AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
 DEFAULT_RECONNECT_ATTEMPTS = 3
@@ -319,6 +319,7 @@ class AgentWebSocketClient:
         on_tool_start: Optional[Callable[..., None]] = None,
         on_tool_result: Optional[Callable[..., None]] = None,
         on_node_start: Optional[Callable[..., None]] = None,
+        on_node_token: Optional[Callable[..., None]] = None,
         on_node_end: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Send a message and receive streaming response."""
@@ -456,6 +457,21 @@ class AgentWebSocketClient:
                         except Exception as e:
                             logger.warning(f"Error in on_node_start callback: {e}")
 
+                elif msg_type == "node_token":
+                    node_name = data.get("node_name", "")
+                    if on_node_token:
+                        try:
+                            on_node_token(
+                                node_name,
+                                {
+                                    "domain": data.get("domain"),
+                                    "content": data.get("content") or "",
+                                    "reset": bool(data.get("reset")),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error in on_node_token callback: {e}")
+
                 elif msg_type == "node_end":
                     node_name = data.get("node_name", "")
                     logger.info(f"Node completed: {node_name}")
@@ -565,6 +581,7 @@ class AgentWebSocketClient:
         on_tool_start: Optional[Callable[..., None]] = None,
         on_tool_result: Optional[Callable[..., None]] = None,
         on_node_start: Optional[Callable[..., None]] = None,
+        on_node_token: Optional[Callable[..., None]] = None,
         on_node_end: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Send a chat message and receive streaming response."""
@@ -585,6 +602,7 @@ class AgentWebSocketClient:
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
                 on_node_start=on_node_start,
+                on_node_token=on_node_token,
                 on_node_end=on_node_end,
             )
 
@@ -600,6 +618,7 @@ class AgentWebSocketClient:
         on_tool_start: Optional[Callable[..., None]] = None,
         on_tool_result: Optional[Callable[..., None]] = None,
         on_node_start: Optional[Callable[..., None]] = None,
+        on_node_token: Optional[Callable[..., None]] = None,
         on_node_end: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Resume chat after collecting required user inputs.
@@ -624,6 +643,7 @@ class AgentWebSocketClient:
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
                 on_node_start=on_node_start,
+                on_node_token=on_node_token,
                 on_node_end=on_node_end,
             )
 

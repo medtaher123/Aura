@@ -308,6 +308,7 @@ class AgenticDomainNode(DomainToolsNode):
                         "resolved_location": ctx.resolved,
                     },
                     tool_call_records=tool_call_records,
+                    node_name=self.node_name or self.domain_name,
                 )
             except Exception as exc:
                 return wrap_domain_result(

@@ -54,6 +54,9 @@ def test_llm_provider_formats_message_history():
         async def call_converse(self, **kwargs):
             return ConverseResponse(stop_reason="end_turn", text="ok")
 
+        async def call_converse_stream(self, **kwargs):
+            return ConverseResponse(stop_reason="end_turn", text="ok")
+
     formatted = _Stub().format_messages(
         [
             UserMessage.create("What about Berlin?"),
