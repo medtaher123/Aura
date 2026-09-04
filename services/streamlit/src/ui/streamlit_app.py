@@ -920,6 +920,17 @@ def _resolve_tool_domain(evt: dict) -> str | None:
     return None
 
 
+def _tool_arguments_from_event(evt: dict) -> dict | None:
+    raw_args = evt.get("tool_input") or evt.get("arguments")
+    if not isinstance(raw_args, dict):
+        return None
+    return {
+        key: value
+        for key, value in raw_args.items()
+        if key not in {"step_id", "domain"}
+    }
+
+
 def _tool_call_key(evt: dict, *, order: int) -> str:
     step_id = _resolve_tool_step_id(evt)
     if step_id:
@@ -1117,6 +1128,7 @@ def _make_tool_status_tracker(
                 domain=domain,
                 started_at=time.monotonic(),
                 order=next_order,
+                arguments=_tool_arguments_from_event(normalized),
             )
             _render(now=time.monotonic())
             return
@@ -1163,9 +1175,9 @@ def _make_tool_status_tracker(
         raw_result = normalized.get("result")
         if isinstance(raw_result, dict):
             tool.result = dict(raw_result)
-        raw_args = normalized.get("tool_input") or normalized.get("arguments")
-        if isinstance(raw_args, dict):
-            tool.arguments = dict(raw_args)
+        args = _tool_arguments_from_event(normalized)
+        if args is not None:
+            tool.arguments = args
         _render()
 
     def snapshot() -> list[ToolCallRecord]:

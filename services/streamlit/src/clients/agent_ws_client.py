@@ -316,8 +316,8 @@ class AgentWebSocketClient:
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
-        on_tool_start: Optional[Callable[[str, dict], None]] = None,
-        on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
+        on_tool_start: Optional[Callable[..., None]] = None,
+        on_tool_result: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Send a message and receive streaming response."""
         current_loop_id = id(asyncio.get_event_loop())
@@ -394,16 +394,19 @@ class AgentWebSocketClient:
                 elif msg_type == "tool_start":
                     tool_name = data.get("tool_name", "")
                     tool_input = dict(data.get("tool_input", {}) or {})
-                    step_id = data.get("step_id")
-                    domain = data.get("domain")
-                    if step_id:
-                        tool_input["step_id"] = step_id
-                    if domain:
-                        tool_input["domain"] = domain
+                    meta = {
+                        "step_id": data.get("step_id"),
+                        "domain": data.get("domain"),
+                    }
                     logger.info(f"Tool started: {tool_name}")
                     if on_tool_start:
                         try:
-                            on_tool_start(tool_name, tool_input)
+                            on_tool_start(tool_name, tool_input, meta)
+                        except TypeError:
+                            try:
+                                on_tool_start(tool_name, tool_input)
+                            except Exception as e:
+                                logger.warning(f"Error in on_tool_start callback: {e}")
                         except Exception as e:
                             logger.warning(f"Error in on_tool_start callback: {e}")
 
@@ -411,19 +414,28 @@ class AgentWebSocketClient:
                     tool_name = data.get("tool_name", "")
                     result = dict(data.get("result", {}) or {})
                     artifacts = data.get("artifacts", {})
-                    if data.get("step_id"):
-                        result["step_id"] = data.get("step_id")
-                    if data.get("domain"):
-                        result["domain"] = data.get("domain")
-                    if data.get("execution_time_seconds") is not None:
-                        result["execution_time_seconds"] = data.get("execution_time_seconds")
+                    meta = {
+                        "step_id": data.get("step_id"),
+                        "domain": data.get("domain"),
+                        "execution_time_seconds": data.get("execution_time_seconds"),
+                        "status": data.get("status"),
+                        "attempts": data.get("attempts"),
+                        "observation": data.get("observation"),
+                        "error": data.get("error", False),
+                        "tool_input": data.get("tool_input"),
+                    }
                     logger.info(f"Tool completed: {tool_name}")
 
                     _extend_artifacts_unique(final_artifacts, artifacts)
 
                     if on_tool_result:
                         try:
-                            on_tool_result(tool_name, result, artifacts)
+                            on_tool_result(tool_name, result, artifacts, meta)
+                        except TypeError:
+                            try:
+                                on_tool_result(tool_name, result, artifacts)
+                            except Exception as e:
+                                logger.warning(f"Error in on_tool_result callback: {e}")
                         except Exception as e:
                             logger.warning(f"Error in on_tool_result callback: {e}")
 
@@ -516,8 +528,8 @@ class AgentWebSocketClient:
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
-        on_tool_start: Optional[Callable[[str, dict], None]] = None,
-        on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
+        on_tool_start: Optional[Callable[..., None]] = None,
+        on_tool_result: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Send a chat message and receive streaming response."""
         payload = {
@@ -547,8 +559,8 @@ class AgentWebSocketClient:
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         on_thinking: Optional[Callable[[dict], None]] = None,
-        on_tool_start: Optional[Callable[[str, dict], None]] = None,
-        on_tool_result: Optional[Callable[[str, dict, dict], None]] = None,
+        on_tool_start: Optional[Callable[..., None]] = None,
+        on_tool_result: Optional[Callable[..., None]] = None,
     ) -> ChatResponse:
         """Resume chat after collecting required user inputs.
 

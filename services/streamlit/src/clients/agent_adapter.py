@@ -147,40 +147,55 @@ class RemoteAgentAdapter:
                     }
                 )
 
-        def on_tool_start(tool_name: str, tool_input: dict):
+        def on_tool_start(tool_name: str, tool_input: dict, meta: dict | None = None):
             if stream_callback:
+                meta = meta or {}
                 payload = {
                     "type": "data_agent_step",
                     "phase": "running",
                     "tool_name": tool_name,
                     "tool_input": tool_input,
                 }
-                if isinstance(tool_input, dict):
-                    if tool_input.get("step_id"):
-                        payload["step_id"] = tool_input["step_id"]
-                    if tool_input.get("domain"):
-                        payload["domain"] = tool_input["domain"]
+                step_id = meta.get("step_id")
+                domain = meta.get("domain")
+                if step_id:
+                    payload["step_id"] = step_id
+                if domain:
+                    payload["domain"] = domain
                 stream_callback(payload)
 
-        def on_tool_result(tool_name: str, result: dict, artifacts: dict):
+        def on_tool_result(
+            tool_name: str,
+            result: dict,
+            artifacts: dict,
+            meta: dict | None = None,
+        ):
             if stream_callback:
-                stream_callback(
-                    {
-                        "type": "data_agent_step",
-                        "phase": "done",
-                        "tool_name": tool_name,
-                        "observation": result.get("observation", "")
-                        or result.get("message", ""),
-                        "error": result.get("error", False),
-                        "execution_time_seconds": result.get("execution_time_seconds"),
-                        "attempts": result.get("attempts"),
-                        "status": result.get("status"),
-                        "step_id": result.get("step_id"),
-                        "domain": result.get("domain"),
-                        "result": result,
-                        "artifacts": artifacts or {},
-                    }
-                )
+                meta = meta or {}
+                observation = meta.get("observation") or ""
+                if not observation and isinstance(result, dict):
+                    observation = result.get("message") or ""
+                error = meta.get("error")
+                if error is None and isinstance(result, dict):
+                    error = result.get("error", False)
+                payload = {
+                    "type": "data_agent_step",
+                    "phase": "done",
+                    "tool_name": tool_name,
+                    "observation": observation,
+                    "error": bool(error),
+                    "execution_time_seconds": meta.get("execution_time_seconds"),
+                    "attempts": meta.get("attempts"),
+                    "status": meta.get("status"),
+                    "step_id": meta.get("step_id"),
+                    "domain": meta.get("domain"),
+                    "result": result,
+                    "artifacts": artifacts or {},
+                }
+                tool_input = meta.get("tool_input")
+                if isinstance(tool_input, dict):
+                    payload["tool_input"] = tool_input
+                stream_callback(payload)
 
         def on_token(content: str):
             if stream_callback and content:
