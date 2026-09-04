@@ -31,6 +31,25 @@ def test_agentic_test_node_registers_tools():
     assert AgenticTestNode.tools_for("agentic_test") == tools
 
 
+def test_domain_nodes_extend_agentic_domain_node():
+    from eo_llm.graph.nodes.domains.disaster_detection_node import (
+        DisasterDetectionNode,
+    )
+    from eo_llm.graph.nodes.domains.fire_detection_node import FireDetectionNode
+    from eo_llm.graph.nodes.domains.flood_damage_node import FloodDamageNode
+    from eo_llm.graph.nodes.domains.infrastructure_node import InfrastructureNode
+    from eo_llm.graph.nodes.domains.stac_node import StacNode
+
+    for node_cls in (
+        DisasterDetectionNode,
+        FireDetectionNode,
+        FloodDamageNode,
+        InfrastructureNode,
+        StacNode,
+    ):
+        assert isinstance(node_cls(), AgenticDomainNode)
+
+
 @pytest.mark.asyncio
 async def test_agentic_test_node_execute_success():
     node = AgenticTestNode()
@@ -240,6 +259,81 @@ async def test_agentic_test_node_patches_user_input_on_resume(monkeypatch):
     assert patched.result.data.get("stopped_for_user_input") is False
     assert patched.result.data.get("user_answer", {}).get("type") == "bounding_box"
     assert "Selected area" in patched.result.message
+
+
+@pytest.mark.asyncio
+async def test_agentic_test_node_restarts_from_top_after_hitl_resume(monkeypatch):
+    from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord
+    from src.tools.contracts import ToolResponse
+
+    node = AgenticTestNode()
+    paused_record = AgentToolCallRecord(
+        tool_use_id="bbox-1",
+        turn_index=0,
+        tool_name="request_bounding_box_user_input",
+        arguments={},
+        status="done",
+        result=ToolResponse(
+            tool_name="request_bounding_box_user_input",
+            message="Draw a box",
+            data={
+                "needs_input": {"bounding_box": {"prompt": "Draw an area"}},
+                "stopped_for_user_input": True,
+                "input_kind": "bounding_box",
+            },
+        ),
+    )
+    paused = MagicMock()
+    paused.paused = True
+    paused.needs_input = {"bounding_box": {"prompt": "Draw an area"}}
+    paused.error = False
+    paused.message = "Draw a box"
+    paused.tool_calls = [paused_record]
+
+    success = MagicMock()
+    success.paused = False
+    success.needs_input = None
+    success.error = False
+    success.message = "Done after resume."
+    success.tool_calls = []
+
+    async def fake_pause(self, s, client_payload, *, blob=None):
+        payload_blob = blob if blob is not None else self.serialize_hitl_blob(s)
+        return await simulate_hitl_resume(
+            self,
+            s,
+            [
+                {
+                    "type": "bounding_box",
+                    "area": {
+                        "kind": "bounding_box",
+                        "min_lat": 1.0,
+                        "max_lat": 2.0,
+                        "min_lon": 3.0,
+                        "max_lon": 4.0,
+                    },
+                }
+            ],
+            blob=payload_blob,
+        )
+
+    monkeypatch.setattr(AgenticDomainNode, "pause_for_hitl", fake_pause)
+
+    run_mock = AsyncMock(side_effect=[paused, success])
+    state = validate_state(
+        {
+            "query": "test",
+            "user_query": "test",
+            "selected_domains": ["agentic_test"],
+        }
+    )
+
+    with patch.object(node._agent, "run", new=run_mock):
+        out = await node.execute(state)
+
+    assert run_mock.await_count == 2
+    assert out["domain_results"]["agentic_test"]["status"] == "done"
+    assert out["domain_results"]["agentic_test"]["message"] == "Done after resume."
 
 
 def test_with_user_input_answers_matches_input_kind():

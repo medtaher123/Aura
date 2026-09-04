@@ -16,7 +16,6 @@ from eo_llm.adapters.bedrock.llm_providers.bedrock_helpers.file_media_context im
     get_bedrock_file_media,
 )
 from eo_llm.adapters.bedrock.llm_provider import (
-    AgentToolCallRecord,
     ConverseResponse,
     ConverseToolCall,
     FileMediaMode,
@@ -65,7 +64,7 @@ class BedrockProvider(LLMProvider):
             )
         return [media.to_content_block()]
 
-    def _content_blocks_for_message(
+    def _standard_content_blocks_for_message(
         self,
         message: "Message",
         *,
@@ -135,14 +134,19 @@ class BedrockProvider(LLMProvider):
         self,
         *,
         chat_history: Sequence["Message"] | None = None,
-        tool_call_records: Sequence[AgentToolCallRecord] = (),
+        query: str | None = None,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+        include_tool_messages: bool = False,
     ) -> list[dict[str, Any]]:
-        messages = list(chat_history or ())
+        messages = self.filter_messages_for_llm(
+            chat_history,
+            include_tool_messages=include_tool_messages,
+        )
         if file_media_mode is FileMediaMode.MEDIA and messages:
             await ensure_bedrock_media_for_messages(messages)
         formatted = self.format_messages(messages, file_media_mode=file_media_mode)
-        formatted.extend(self.format_tool_call_records(tool_call_records))
+        if not formatted and query:
+            return [{"role": "user", "content": [{"text": query}]}]
         return formatted
 
     @staticmethod
@@ -246,6 +250,7 @@ class BedrockProvider(LLMProvider):
                     messages=await self.format_converse_messages(
                         chat_history=chat_history,
                         file_media_mode=file_media_mode,
+                        include_tool_messages=False,
                     ),
                     inferenceConfig={
                         "temperature": float(temperature),
@@ -288,6 +293,7 @@ class BedrockProvider(LLMProvider):
                     messages=await self.format_converse_messages(
                         chat_history=chat_history,
                         file_media_mode=file_media_mode,
+                        include_tool_messages=False,
                     ),
                     inferenceConfig={
                         "temperature": float(temperature),
@@ -315,7 +321,6 @@ class BedrockProvider(LLMProvider):
         system_prompt: str,
         chat_history: Sequence["Message"] | None = None,
         tools: list[ToolDescriptor] | None = None,
-        tool_call_records: Sequence[AgentToolCallRecord] = (),
         temperature: float = 0.0,
         max_tokens: int = 4096,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
@@ -326,8 +331,8 @@ class BedrockProvider(LLMProvider):
 
         converse_messages = await self.format_converse_messages(
             chat_history=chat_history,
-            tool_call_records=tool_call_records,
             file_media_mode=file_media_mode,
+            include_tool_messages=bool(tools),
         )
 
         self._last_failure_reason = ""

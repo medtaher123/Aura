@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from eo_llm.adapters.bedrock.llm_provider import AgentToolCallRecord, ConverseResponse, LLMProvider
+from eo_llm.adapters.bedrock.llm_providers.bedrockProvider import BedrockProvider
 from eo_llm.graph.state import GraphStateModel
 
 from src.db.base import BaseModel
@@ -100,6 +101,65 @@ def test_llm_provider_formats_tool_messages():
     assert formatted[1]["role"] == "user"
     assert formatted[1]["content"][0]["toolResult"]["toolUseId"] == "tid"
     assert formatted[1]["content"][0]["toolResult"]["status"] == "success"
+
+
+def test_bedrock_provider_formats_tool_messages():
+    record = AgentToolCallRecord(
+        tool_use_id="tid",
+        tool_name="calculator",
+        arguments={"expression": "2+2"},
+        status="done",
+        result=ToolResponse(message="4", tool_name="calculator"),
+    )
+    formatted = BedrockProvider().format_messages(record.to_messages())
+    assert len(formatted) == 2
+    assert formatted[0]["role"] == "assistant"
+    assert formatted[0]["content"][0]["toolUse"]["toolUseId"] == "tid"
+    assert formatted[0]["content"][0]["toolUse"]["name"] == "calculator"
+    assert formatted[1]["role"] == "user"
+    assert formatted[1]["content"][0]["toolResult"]["toolUseId"] == "tid"
+    assert formatted[1]["content"][0]["toolResult"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_provider_filters_tool_messages_without_tool_config():
+    record = AgentToolCallRecord(
+        tool_use_id="tid",
+        tool_name="calculator",
+        arguments={"expression": "2+2"},
+        status="done",
+        result=ToolResponse(message="4", tool_name="calculator"),
+    )
+    chat_history = [UserMessage.create("hello"), *record.to_messages()]
+
+    filtered = await BedrockProvider().format_converse_messages(
+        chat_history=chat_history
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["role"] == "user"
+    assert filtered[0]["content"][0]["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_provider_keeps_tool_messages_when_enabled():
+    record = AgentToolCallRecord(
+        tool_use_id="tid",
+        tool_name="calculator",
+        arguments={"expression": "2+2"},
+        status="done",
+        result=ToolResponse(message="4", tool_name="calculator"),
+    )
+    chat_history = [UserMessage.create("hello"), *record.to_messages()]
+
+    formatted = await BedrockProvider().format_converse_messages(
+        chat_history=chat_history,
+        include_tool_messages=True,
+    )
+
+    assert len(formatted) == 3
+    assert formatted[1]["content"][0]["toolUse"]["toolUseId"] == "tid"
+    assert formatted[2]["content"][0]["toolResult"]["toolUseId"] == "tid"
 
 
 def test_graph_turn_result_factory_collects_tool_messages_on_complete():

@@ -44,6 +44,7 @@ class DataAgentStepEvent:
     observation: str = ""
     error: bool = False
     artifacts: ToolArtifacts = field(default_factory=ToolArtifacts)
+    result: dict[str, Any] | None = None
 
 
 @dataclass

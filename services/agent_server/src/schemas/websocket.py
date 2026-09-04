@@ -217,12 +217,26 @@ class ToolResultMessage(BaseModel):
 
     type: str = Field(default=ServerMessageType.TOOL_RESULT.value)
     tool_name: str = Field(..., description="Name of the tool that was called")
-    result: dict[str, Any] = Field(..., description="Tool result data")
+    result: dict[str, Any] = Field(
+        ..., description="ToolResponse body (message, data, error, artifacts, …)"
+    )
     artifacts: ToolArtifacts = Field(default=ToolArtifacts(), description="Artifacts")
     step_id: Optional[str] = Field(default=None, description="Planned tool step id")
     domain: Optional[str] = Field(default=None, description="Domain that ran the tool")
     execution_time_seconds: Optional[float] = Field(
         default=None, description="Wall-clock execution time in seconds"
+    )
+    status: Optional[str] = Field(
+        default=None, description="Step status: done, error, or skipped"
+    )
+    attempts: Optional[int] = Field(default=None, description="Number of attempts")
+    observation: Optional[str] = Field(
+        default=None, description="Short observation / message for UI detail"
+    )
+    error: bool = Field(default=False, description="Whether the step ended in error")
+    tool_input: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Tool arguments (redundant with tool_start for late UI joins)",
     )
 
 

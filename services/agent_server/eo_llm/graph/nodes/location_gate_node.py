@@ -143,7 +143,9 @@ class LocationGateNode(GraphNode):
             },
             blob=self.serialize_hitl_blob(s),
         )
-        return dump_state(s)
+        # Keep HITL behavior uniform: once resume data is available, restart the
+        # node from the top and let the normal early exits apply.
+        return await self.run(s)
 
     async def _extract_location_hint(self) -> str:
         response = await LLMModelRouter().call_structured(

@@ -97,17 +97,14 @@ class WebSocketStreamSubscriber(EventSubscriber):
 
         await self._conn.send_tool_result(
             tool_name=event.tool_name,
-            result={
-                "observation": event.observation,
-                "error": event.error,
-                "status": event.status,
-                "attempts": event.attempts,
-                "step_id": event.step_id,
-                "domain": event.domain,
-                "execution_time_seconds": event.execution_time_seconds,
-            },
+            result=event.result or {},
             artifacts=event.artifacts,
             step_id=event.step_id,
             domain=event.domain,
             execution_time_seconds=event.execution_time_seconds,
+            status=event.status,
+            attempts=event.attempts,
+            observation=event.observation or None,
+            error=event.error,
+            tool_input=event.tool_input or None,
         )

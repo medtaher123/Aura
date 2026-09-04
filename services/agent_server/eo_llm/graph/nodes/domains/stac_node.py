@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ModuleTools, ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import AgenticDomainNode, ModuleTools
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
-class StacNode(ToolPlanDomainNode):
+class StacNode(AgenticDomainNode):
     domain_name = "stac"
     status_message = "Searching the satellite catalog..."
     tools = [

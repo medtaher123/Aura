@@ -333,8 +333,9 @@ class AgenticDomainNode(DomainToolsNode):
                     s, tool_call_records=run.tool_calls
                 ),
             )
-            # interrupt() suspends; on resume this node restarts from the top.
-            raise RuntimeError("HITL pause returned; resume must restart the node")
+            # Do not rely on the graph runtime to rewind this frame for us.
+            # If interrupt() returns on resume, explicitly restart this node.
+            return await self.execute(s)
 
     def _error_result(self, ctx: LocationContext, exc: Exception) -> dict[str, Any]:
         return {
@@ -520,14 +521,9 @@ class ToolPlanDomainNode(DomainToolsNode):
                     },
                     blob=self.serialize_hitl_blob(s, plan=plan),
                 )
-                ctx = LocationContext.from_state(s)
-                runtime_args = {
-                    **self.build_shared_runtime_args(s, ctx),
-                    **self.build_runtime_args(ctx),
-                }
-                missing = self.missing_user_inputs(plan, s, ctx)
-                if missing:
-                    raise RuntimeError("Required user inputs still missing after HITL resume")
+                # Keep resume semantics consistent across HITL nodes: resume by
+                # re-entering the node from the top, not by falling through.
+                return await self.execute(s)
 
             execution = await self.execute_tool_plan(
                 plan=plan,

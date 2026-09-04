@@ -328,6 +328,11 @@ def test_executor_emits_tool_start_and_done_events() -> None:
     assert events[1].artifacts.maps == [{"title": "fires", "layers": []}]
     assert events[1].artifacts.thumbnails == ["https://example.com/t.png"]
     assert events[1].artifacts.urls == ["https://example.com/data"]
+    assert events[1].result is not None
+    assert events[1].result["message"] == "ok"
+    assert events[1].result["tool_name"] == "detect_fire_tool"
+    assert events[1].result["artifacts"]["maps"] == [{"title": "fires", "layers": []}]
+    assert events[1].tool_input == args
 
 
 def test_executor_emits_done_event_on_tool_error() -> None:
@@ -371,3 +376,7 @@ def test_executor_emits_done_event_on_tool_error() -> None:
     assert len(done_events) == 1
     assert done_events[0].status == "error"
     assert done_events[0].error is True
+    assert done_events[0].result is not None
+    assert done_events[0].result["message"] == "failed"
+    assert done_events[0].result["error"] is True
+    assert done_events[0].tool_input == {"lat": 48.0, "lon": 2.0}

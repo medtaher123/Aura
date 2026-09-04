@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ModuleTools, ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import AgenticDomainNode, ModuleTools
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
-class DisasterDetectionNode(ToolPlanDomainNode):
+class DisasterDetectionNode(AgenticDomainNode):
     domain_name = "disaster_detection"
     status_message = "Querying disaster events..."
     tools = [

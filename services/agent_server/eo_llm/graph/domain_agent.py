@@ -58,11 +58,13 @@ class DomainToolAgent:
         records: list[AgentToolCallRecord] = list(tool_call_records or [])
 
         for turn_index in range(self._max_rounds):
+            history = list(get_chat_history() or ())
+            for record in records:
+                history.extend(record.to_messages())
             turn = await LLMModelRouter().call_converse(
                 system_prompt=system_prompt,
-                chat_history=get_chat_history(),
+                chat_history=history,
                 tools=tools,
-                tool_call_records=records,
             )
 
             if turn.stop_reason != "tool_use":
@@ -206,6 +208,9 @@ class DomainToolAgent:
             result.message if result is not None else (record.error_message or "")
         )
         artifacts = result.artifacts if result is not None else ToolArtifacts()
+        result_payload = (
+            result.model_dump(mode="python") if result is not None else None
+        )
         emit_event(
             DataAgentStepEvent(
                 phase="done",
@@ -218,5 +223,6 @@ class DomainToolAgent:
                 observation=observation,
                 error=record.status != "done",
                 artifacts=artifacts,
+                result=result_payload,
             )
         )

@@ -4,26 +4,32 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ModuleTools, ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import (
+    AgenticDomainNode,
+    ModuleTools,
+    ProviderTools,
+)
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
-class InfrastructureNode(ToolPlanDomainNode):
+class InfrastructureNode(AgenticDomainNode):
     domain_name = "infrastructure"
     status_message = "Querying infrastructure..."
     tools = [
         ModuleTools(
             "geospatial",
-            include=(
-                "infrastructure_query_tool",
-                "bdtopo_visualize_tool",
-                "bdtopo_query_tool",
-                "bdtopo_intersection_tool",
-                "bdtopo_thematic_explain_tool",
-            ),
+            # include=(
+            #     "infrastructure_query_tool",
+            #     "bdtopo_visualize_tool",
+            #     "bdtopo_query_tool",
+            #     "bdtopo_intersection_tool",
+            #     "bdtopo_thematic_explain_tool",
+            # ),
         ),
         ModuleTools("utility", include=("get_route_info",)),
         # TODO: inlude bdtopo mcp
+        ProviderTools("ign-geocontext"),
+        ProviderTools("data-gouv"),
     ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:

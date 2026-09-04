@@ -11,7 +11,6 @@ from typing import Any, AsyncIterator, Type, TypeVar
 from pydantic import BaseModel
 
 from eo_llm.adapters.bedrock.llm_provider import (
-    AgentToolCallRecord,
     ConverseResponse,
     FileMediaMode,
     LLMProvider,
@@ -165,7 +164,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
         system_prompt: str,
         chat_history: Sequence[Message] | None = None,
         tools: list[ToolDescriptor] | None = None,
-        tool_call_records: Sequence[AgentToolCallRecord] = (),
         temperature: float = 0.1,
         max_tokens: int = 4096,
         task_type: TaskType = TaskType.REASONING,
@@ -178,7 +176,6 @@ class LLMModelRouter(metaclass=SingletonMeta):
         return await model.provider.call_converse(
             system_prompt=system_prompt,
             tools=tools,
-            tool_call_records=tool_call_records,
             temperature=temperature,
             max_tokens=max_tokens,
             chat_history=chat_history,

@@ -547,6 +547,9 @@ class ToolExecutor(metaclass=SingletonMeta):
         else:
             observation = execution.error_message or ""
             artifacts = ToolArtifacts()
+        result_payload = (
+            result.model_dump(mode="python") if result is not None else None
+        )
 
         emit_event(
             DataAgentStepEvent(
@@ -563,6 +566,7 @@ class ToolExecutor(metaclass=SingletonMeta):
                 observation=observation,
                 error=execution.status != "done",
                 artifacts=artifacts,
+                result=result_payload,
             )
         )
 

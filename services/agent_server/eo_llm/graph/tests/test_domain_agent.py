@@ -96,7 +96,12 @@ async def test_domain_tool_agent_final_answer_after_tool_use():
     )
     assert mock_router.call_converse.await_count == 2
     second_call_kwargs = mock_router.call_converse.await_args_list[1].kwargs
-    assert len(second_call_kwargs["tool_call_records"]) == 1
+    assert "tool_call_records" not in second_call_kwargs
+    chat_history = second_call_kwargs["chat_history"]
+    expected_tool_messages = result.tool_calls[0].to_messages()
+    assert len(chat_history) == len(expected_tool_messages)
+    assert [m.kind for m in chat_history] == [m.kind for m in expected_tool_messages]
+    assert chat_history[0].message_metadata["tool_use_id"] == "tu-1"
 
 
 @pytest.mark.asyncio

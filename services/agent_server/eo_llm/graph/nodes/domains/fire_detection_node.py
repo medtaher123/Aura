@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from eo_llm.graph.nodes.domain_base import ModuleTools, ToolPlanDomainNode
+from eo_llm.graph.nodes.domain_base import AgenticDomainNode, ModuleTools
 from eo_llm.graph.nodes.helpers import LocationContext, omit_none
 
 
-class FireDetectionNode(ToolPlanDomainNode):
+class FireDetectionNode(AgenticDomainNode):
     domain_name = "fire_detection"
     status_message = "Detecting fires..."
     tools = [

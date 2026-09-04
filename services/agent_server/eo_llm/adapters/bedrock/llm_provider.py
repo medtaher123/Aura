@@ -143,7 +143,16 @@ class LLMProvider(ABC):
             or message.kind == MessageKind.TOOL_RESULT.value
         ):
             return self._tool_result_content_blocks(message)
+        return self._standard_content_blocks_for_message(
+            message, file_media_mode=file_media_mode
+        )
 
+    def _standard_content_blocks_for_message(
+        self,
+        message: "Message",
+        *,
+        file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+    ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         text = (message.content or "").strip()
         if text:
@@ -226,6 +235,33 @@ class LLMProvider(ABC):
             "content": blocks,
         }
 
+    def filter_messages_for_llm(
+        self,
+        messages: Sequence["Message"] | None,
+        *,
+        include_tool_messages: bool = False,
+    ) -> list["Message"]:
+        """Return messages safe for a provider call.
+
+        Bedrock requires ``toolConfig`` whenever history contains ``toolUse`` or
+        ``toolResult`` blocks, so non-tool calls must exclude persisted tool rows.
+        """
+        history = list(messages or ())
+        if include_tool_messages:
+            return history
+
+        from src.db.models.message import MessageKind
+
+        return [
+            message
+            for message in history
+            if message.kind
+            not in {
+                MessageKind.TOOL_CALL.value,
+                MessageKind.TOOL_RESULT.value,
+            }
+        ]
+
     @abstractmethod
     async def call_structured(
         self,
@@ -264,7 +300,6 @@ class LLMProvider(ABC):
         system_prompt: str,
         chat_history: Sequence["Message"] | None = None,
         tools: list[ToolDescriptor] | None = None,
-        tool_call_records: Sequence[AgentToolCallRecord] = (),
         temperature: float = 0.0,
         max_tokens: int = 4096,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
@@ -288,72 +323,20 @@ class LLMProvider(ABC):
         self,
         *,
         chat_history: Sequence["Message"] | None = None,
-        tool_call_records: Sequence[AgentToolCallRecord] = (),
         query: str | None = None,
         file_media_mode: FileMediaMode = FileMediaMode.CAPTION,
+        include_tool_messages: bool = False,
     ) -> list[dict[str, Any]]:
-        """Chat history plus prior tool rounds in provider-native message shape."""
-        messages = self.format_messages(chat_history or (), file_media_mode=file_media_mode)
+        """Chat history in provider-native message shape."""
+        messages = self.format_messages(
+            self.filter_messages_for_llm(
+                chat_history,
+                include_tool_messages=include_tool_messages,
+            ),
+            file_media_mode=file_media_mode,
+        )
         if not messages and query:
             messages = [{"role": "user", "content": [{"text": query}]}]
-        messages.extend(self.format_tool_call_records(tool_call_records))
-        return messages
-
-    def format_tool_call_records(
-        self,
-        records: Sequence[AgentToolCallRecord],
-    ) -> list[dict[str, Any]]:
-        """Turn executed tool records into assistant/user tool-use messages."""
-        if not records:
-            return []
-
-        messages: list[dict[str, Any]] = []
-        sorted_records = sorted(records, key=lambda record: record.turn_index)
-        turn_indices = {record.turn_index for record in sorted_records}
-
-        for turn_index in sorted(turn_indices):
-            turn_records = [
-                record
-                for record in sorted_records
-                if record.turn_index == turn_index and record.tool_use_id
-            ]
-            if not turn_records:
-                continue
-
-            tool_use_blocks: list[dict[str, Any]] = []
-            tool_result_blocks: list[dict[str, Any]] = []
-            for record in turn_records:
-                tool_use_blocks.append(
-                    {   
-                        "toolUse": {
-                            "toolUseId": record.tool_use_id,
-                            "name": record.tool_name,
-                            "input": record.arguments,
-                        }
-                    }
-                )
-                if record.result is not None:
-                    result_payload = record.result.model_dump(mode="python")
-                    result_status: Literal["success", "error"] = (
-                        "error" if record.status == "error" else "success"
-                    )
-                else:
-                    result_payload = {
-                        "message": record.error_message or "",
-                        "error": True,
-                    }
-                    result_status = "error"
-                tool_result_blocks.append(
-                    self.tool_result_content_block(
-                        tool_use_id=record.tool_use_id,
-                        result=result_payload,
-                        status=result_status,
-                    )
-                )
-
-            messages.append({"role": "assistant", "content": tool_use_blocks})
-            messages.append({"role": "user", "content": tool_result_blocks})
-
         return messages
 
     def tool_result_content_block(

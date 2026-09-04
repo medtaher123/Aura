@@ -150,6 +150,11 @@ class WebSocketConnection:
         step_id: str | None = None,
         domain: str | None = None,
         execution_time_seconds: float | None = None,
+        status: str | None = None,
+        attempts: int | None = None,
+        observation: str | None = None,
+        error: bool = False,
+        tool_input: dict | None = None,
     ) -> None:
         """Send tool execution result."""
         artifacts = artifacts or ToolArtifacts()
@@ -161,6 +166,11 @@ class WebSocketConnection:
                 step_id=step_id,
                 domain=domain,
                 execution_time_seconds=execution_time_seconds,
+                status=status,
+                attempts=attempts,
+                observation=observation,
+                error=error,
+                tool_input=tool_input,
             )
         )
 
