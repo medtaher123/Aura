@@ -420,6 +420,27 @@ class AgenticDomainNode(DomainToolsNode):
             "error": run.error,
         }
 
+    #TODO: result should be typed and the same for all nodes
+    def node_lifecycle_result(self, result: GraphState) -> dict[str, Any] | None:
+        """UI-friendly domain payload without heavy tool_messages blobs."""
+        domain_results = result.get("domain_results") if isinstance(result, dict) else None
+        payload: dict[str, Any] = {}
+        if isinstance(domain_results, dict):
+            raw = domain_results.get(self.domain_name)
+            if isinstance(raw, dict):
+                payload = dict(raw)
+        tool_calls = payload.get("tool_calls")
+        return {
+            "domain": self.domain_name,
+            "status": payload.get("status"),
+            "message": payload.get("message") or "",
+            "error": bool(payload.get("error")),
+            "tool": payload.get("tool"),
+            "result": payload.get("result") if isinstance(payload.get("result"), dict) else {},
+            "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+            "resolved_location": payload.get("resolved_location"),
+        }
+
 
 class ToolPlanDomainNode(DomainToolsNode):
     """Domain node that plans and executes MCP tools via Bedrock LLM."""

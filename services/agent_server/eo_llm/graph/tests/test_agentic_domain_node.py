@@ -31,6 +31,37 @@ def test_agentic_test_node_registers_tools():
     assert AgenticTestNode.tools_for("agentic_test") == tools
 
 
+def test_agentic_node_lifecycle_result_is_ui_friendly():
+    node = AgenticTestNode()
+    payload = node.node_lifecycle_result(
+        {
+            "domain_results": {
+                "agentic_test": {
+                    "status": "done",
+                    "message": "Flood analysis complete.",
+                    "error": False,
+                    "tool": "terrazard_flood_briefing",
+                    "result": {"message": "ok"},
+                    "tool_calls": [{"tool_name": "a"}, {"tool_name": "b"}],
+                    "tool_messages": [{"kind": "tool_call"}, {"kind": "tool_result"}],
+                    "resolved_location": {"name": "Paris"},
+                }
+            }
+        }
+    )
+    assert payload is not None
+    assert payload["domain"] == "agentic_test"
+    assert payload["message"] == "Flood analysis complete."
+    assert payload["status"] == "done"
+    assert payload["error"] is False
+    assert payload["tool"] == "terrazard_flood_briefing"
+    assert payload["result"] == {"message": "ok"}
+    assert payload["tool_call_count"] == 2
+    assert payload["resolved_location"] == {"name": "Paris"}
+    assert "tool_messages" not in payload
+    assert "tool_calls" not in payload
+
+
 def test_domain_nodes_extend_agentic_domain_node():
     from eo_llm.graph.nodes.domains.disaster_detection_node import (
         DisasterDetectionNode,

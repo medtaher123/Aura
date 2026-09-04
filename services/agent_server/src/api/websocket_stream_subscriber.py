@@ -11,6 +11,7 @@ from src.core.event_emitter import (
     DataAgentStepEvent,
     EventEmitter,
     EventSubscriber,
+    GraphNodeLifecycleEvent,
     GraphStatusEvent,
     GraphStatusStage,
     ThinkingStreamEvent,
@@ -81,6 +82,28 @@ class WebSocketStreamSubscriber(EventSubscriber):
     @on_event(DataAgentStepEvent)
     def on_data_agent_step(self, event: DataAgentStepEvent) -> None:
         self._schedule(self._forward_tool_step(event))
+
+    @on_event(GraphNodeLifecycleEvent)
+    def on_graph_node_lifecycle(self, event: GraphNodeLifecycleEvent) -> None:
+        self._schedule(self._forward_node_lifecycle(event))
+
+    async def _forward_node_lifecycle(self, event: GraphNodeLifecycleEvent) -> None:
+        if event.phase == "running":
+            await self._conn.send_node_start(
+                event.node_name,
+                domain=event.domain,
+                message=event.message,
+            )
+            return
+        if event.phase != "done":
+            return
+        await self._conn.send_node_end(
+            event.node_name,
+            domain=event.domain,
+            message=event.message,
+            result=event.result,
+            error=event.error,
+        )
 
     async def _forward_tool_step(self, event: DataAgentStepEvent) -> None:
         if event.phase == "running":

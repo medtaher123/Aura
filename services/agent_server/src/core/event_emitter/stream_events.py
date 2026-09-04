@@ -51,3 +51,16 @@ class DataAgentStepEvent:
 class GraphStatusEvent:
     stage: GraphStatusStage
     message: str
+
+
+GraphNodeLifecyclePhase = Literal["running", "done"]
+
+
+@dataclass
+class GraphNodeLifecycleEvent:
+    phase: GraphNodeLifecyclePhase
+    node_name: str
+    domain: str | None = None
+    message: str | None = None
+    result: dict[str, Any] | None = None
+    error: bool = False

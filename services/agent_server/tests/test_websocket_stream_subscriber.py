@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.api.websocket_stream_subscriber import WebSocketStreamSubscriber
-from src.core.event_emitter import DataAgentStepEvent, EventEmitter
+from src.core.event_emitter import (
+    DataAgentStepEvent,
+    EventEmitter,
+    GraphNodeLifecycleEvent,
+)
 from src.tools.contracts import ToolArtifacts
 
 
@@ -85,3 +89,65 @@ async def test_forward_tool_done_sends_tool_response_body() -> None:
     assert kwargs["error"] is False
     assert kwargs["tool_input"] == {"location_query": "Pas-de-Calais, France"}
     conn.send_tool_start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_forward_node_running_sends_node_start() -> None:
+    conn = MagicMock()
+    conn.send_node_start = AsyncMock()
+    conn.send_node_end = AsyncMock()
+    subscriber = WebSocketStreamSubscriber(
+        conn, MagicMock(), emitter=EventEmitter()
+    )
+
+    await subscriber._forward_node_lifecycle(
+        GraphNodeLifecycleEvent(
+            phase="running",
+            node_name="flood_damage",
+            domain="flood_damage",
+            message="Analyzing floods...",
+        )
+    )
+
+    conn.send_node_start.assert_awaited_once_with(
+        "flood_damage",
+        domain="flood_damage",
+        message="Analyzing floods...",
+    )
+    conn.send_node_end.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_forward_node_done_sends_node_end_with_result() -> None:
+    conn = MagicMock()
+    conn.send_node_start = AsyncMock()
+    conn.send_node_end = AsyncMock()
+    subscriber = WebSocketStreamSubscriber(
+        conn, MagicMock(), emitter=EventEmitter()
+    )
+    result = {
+        "domain": "flood_damage",
+        "status": "done",
+        "message": "Analysis complete.",
+        "error": False,
+    }
+
+    await subscriber._forward_node_lifecycle(
+        GraphNodeLifecycleEvent(
+            phase="done",
+            node_name="flood_damage",
+            domain="flood_damage",
+            message="Analysis complete.",
+            result=result,
+            error=False,
+        )
+    )
+
+    conn.send_node_end.assert_awaited_once_with(
+        "flood_damage",
+        domain="flood_damage",
+        message="Analysis complete.",
+        result=result,
+        error=False,
+    )
+    conn.send_node_start.assert_not_awaited()

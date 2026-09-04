@@ -47,3 +47,6 @@ logs/
 
 # Database
 agent_server.db
+
+# Local uploaded files
+data/

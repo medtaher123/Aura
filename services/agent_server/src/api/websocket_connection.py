@@ -11,6 +11,8 @@ from src.schemas.websocket import (
     ConversationTitleMessage,
     CompleteMessage,
     ErrorMessage,
+    NodeEndMessage,
+    NodeStartMessage,
     StatusMessage,
     ThinkingMessage,
     ToolResultMessage,
@@ -171,6 +173,42 @@ class WebSocketConnection:
                 observation=observation,
                 error=error,
                 tool_input=tool_input,
+            )
+        )
+
+    async def send_node_start(
+        self,
+        node_name: str,
+        *,
+        domain: str | None = None,
+        message: str | None = None,
+    ) -> None:
+        """Send notification that a graph node is starting."""
+        await self.send(
+            NodeStartMessage(
+                node_name=node_name,
+                domain=domain,
+                message=message,
+            )
+        )
+
+    async def send_node_end(
+        self,
+        node_name: str,
+        *,
+        domain: str | None = None,
+        message: str | None = None,
+        result: dict | None = None,
+        error: bool = False,
+    ) -> None:
+        """Send notification that a graph node finished."""
+        await self.send(
+            NodeEndMessage(
+                node_name=node_name,
+                domain=domain,
+                message=message,
+                result=result,
+                error=error,
             )
         )
 

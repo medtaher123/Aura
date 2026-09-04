@@ -37,6 +37,8 @@ __all__ = [
     "Coordinates",
     "ErrorMessage",
     "InputKind",
+    "NodeEndMessage",
+    "NodeStartMessage",
     "OSMPrefixType",
     "OSMType",
     "ServerMessage",
@@ -73,6 +75,8 @@ class ServerMessageType(str, Enum):
     THINKING = "thinking"
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
+    NODE_START = "node_start"
+    NODE_END = "node_end"
     USER_INPUT_REQUEST = "user_input_request"
     CONVERSATION_TITLE = "conversation_title"
     COMPLETE = "complete"
@@ -240,6 +244,33 @@ class ToolResultMessage(BaseModel):
     )
 
 
+class NodeStartMessage(BaseModel):
+    """Notification that a graph node is starting."""
+
+    type: str = Field(default=ServerMessageType.NODE_START.value)
+    node_name: str = Field(..., description="Graph node name")
+    domain: Optional[str] = Field(default=None, description="Domain for domain nodes")
+    message: Optional[str] = Field(
+        default=None, description="Status / display message for the node"
+    )
+
+
+class NodeEndMessage(BaseModel):
+    """Result from a finished graph node."""
+
+    type: str = Field(default=ServerMessageType.NODE_END.value)
+    node_name: str = Field(..., description="Graph node name")
+    domain: Optional[str] = Field(default=None, description="Domain for domain nodes")
+    message: Optional[str] = Field(
+        default=None,
+        description="Display text (agentic domain message or status message)",
+    )
+    result: Optional[dict[str, Any]] = Field(
+        default=None, description="Node result payload"
+    )
+    error: bool = Field(default=False, description="Whether the node ended in error")
+
+
 class UserInputRequestMessage(BaseModel):
     """Request for the client to collect one or more user inputs."""
 
@@ -303,6 +334,8 @@ ServerMessage = (
     | ThinkingMessage
     | ToolStartMessage
     | ToolResultMessage
+    | NodeStartMessage
+    | NodeEndMessage
     | UserInputRequestMessage
     | ConversationTitleMessage
     | CompleteMessage
