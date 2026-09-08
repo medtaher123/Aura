@@ -140,24 +140,40 @@ class ModuleRegistry:
             record = self.records[name]
             module_dep_failures = self._required_module_dep_failures(record.module)
             if module_dep_failures:
+                failed = set(module_dep_failures)
+                requirements = []
+                for req in record.module.requirements:
+                    if req.kind is RequirementKind.MODULE and req.name in failed:
+                        requirements.append(
+                            {
+                                "name": req.name,
+                                "label": req.label or req.name,
+                                "kind": req.kind.value,
+                                "required": req.required,
+                                "healthy": False,
+                                "status": "unhealthy",
+                                "message": f"Module '{req.name}' is unhealthy",
+                            }
+                        )
+                    else:
+                        requirements.append(
+                            {
+                                **req.describe(),
+                                "healthy": None,
+                                "status": "skipped",
+                                "message": (
+                                    "Not probed because a required module "
+                                    "dependency is unhealthy"
+                                ),
+                            }
+                        )
                 status = HealthStatus(
                     healthy=False,
                     details={
                         "reason": "required_module_dependency_unhealthy",
                         "failed_dependencies": module_dep_failures,
                     },
-                    requirements=[
-                        {
-                            "name": dep_name,
-                            "label": dep_name,
-                            "kind": RequirementKind.MODULE.value,
-                            "required": True,
-                            "healthy": False,
-                            "status": "unhealthy",
-                            "message": f"Module '{dep_name}' is unhealthy",
-                        }
-                        for dep_name in module_dep_failures
-                    ],
+                    requirements=requirements,
                 )
             else:
                 try:
@@ -195,7 +211,11 @@ class ModuleRegistry:
         return failures
 
     def register_healthy_tools(
-        self, mcp: MCPServer, context: SharedContext
+        self,
+        mcp: MCPServer,
+        context: SharedContext,
+        *,
+        include_unhealthy: bool = False,
     ) -> list[str]:
         """Register tools from newly healthy modules only.
 
@@ -203,6 +223,9 @@ class ModuleRegistry:
         every health refresh so dependents that were skipped at bootstrap
         (because a required module was down) get their tools once the
         dependency recovers.
+
+        ``include_unhealthy`` is for unit tests that assert tool presence
+        without live databases or APIs.
         """
         registered: list[str] = []
         before = {t.name for t in self._list_tools_sync(mcp)}
@@ -211,7 +234,7 @@ class ModuleRegistry:
             record = self.records[name]
             if record.state == ModuleState.TOOLS_REGISTERED:
                 continue
-            if record.state != ModuleState.HEALTHY:
+            if record.state != ModuleState.HEALTHY and not include_unhealthy:
                 logger.warning(
                     "Skipping tool registration for unhealthy module %s", name
                 )

@@ -74,7 +74,7 @@ class FloodModule(BaseModule):
 
         for fn in (
             #get_terrazard_available_dates_tool,
-            #get_terrazard_hazard_map_tool,
+            get_terrazard_hazard_map_tool,
             get_terrazard_flood_briefing_tool,
             get_terrazard_flood_damage_tool,
             geoserver_risk_mask_tool,

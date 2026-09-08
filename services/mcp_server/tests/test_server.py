@@ -87,10 +87,10 @@ async def test_list_tools_method(mcp_server):
     for tool in tools:
         assert hasattr(tool, "name")
         assert hasattr(tool, "description")
-        assert hasattr(tool, "inputSchema")
-
-        # Verify schema structure
-        assert isinstance(tool.inputSchema, dict)
+        schema = getattr(tool, "input_schema", None) or getattr(
+            tool, "inputSchema", None
+        )
+        assert isinstance(schema, dict)
     # Verify our simple tools are present
     tool_names = [tool.name for tool in tools]
     assert "get_time" in tool_names
@@ -105,11 +105,13 @@ async def test_call_tool_method_success(mcp_server):
     # Test with get_time tool (no arguments required)
     result = await mcp_server.call_tool("get_time", {})
 
-    # Verify result is not None
     assert result is not None
-
-    # Raw MCP call_tool returns a list of content objects (or tuple)
-    assert isinstance(result, (list, tuple))
+    content = getattr(result, "content", result)
+    assert content
+    structured = getattr(result, "structured_content", None)
+    if structured is not None:
+        assert structured.get("tool_name") == "get_time"
+        assert structured.get("error") is False
 
 
 @pytest.mark.integration
@@ -119,11 +121,13 @@ async def test_call_tool_method_with_arguments(mcp_server):
     # Test calculator tool with addition
     result = await mcp_server.call_tool("calculator", {"expression": "2 + 2"})
 
-    # Verify result is not None
     assert result is not None
-
-    # Raw MCP call_tool returns a list of content objects (or tuple)
-    assert isinstance(result, (list, tuple))
+    content = getattr(result, "content", result)
+    assert content
+    structured = getattr(result, "structured_content", None)
+    if structured is not None:
+        assert structured.get("tool_name") == "calculator"
+        assert structured.get("error") is False
 
 
 @pytest.mark.integration

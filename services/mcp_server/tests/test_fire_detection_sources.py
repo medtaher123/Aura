@@ -36,8 +36,8 @@ def test_source_selection_for_date_ranges(
     end_obj = date.fromisoformat(end_date)
     assert _needs_archive(start_obj, today=TODAY) is expect_archive
     assert _needs_api(end_obj, today=TODAY) is expect_api
-    assert should_use_archive(start_date, end_date) is expect_archive
-    assert should_use_api(start_date, end_date) is expect_api
+    assert should_use_archive(start_date, end_date, today=TODAY) is expect_archive
+    assert should_use_api(start_date, end_date, today=TODAY) is expect_api
 
 
 @pytest.mark.unit

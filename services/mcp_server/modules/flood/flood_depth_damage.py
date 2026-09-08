@@ -370,7 +370,7 @@ def compute_unit_damage_eur(
 def flood_depth_damage_tool(
     country: str,
     depth_m: float,
-    asset_class: str,
+    asset_class: Optional[str] = None,
     building_type: Optional[str] = None,
     continent: Optional[str] = None,
     basis: Optional[str] = None,

@@ -9,11 +9,12 @@ from modules.flood.terrazard.damage_service import FloodDamageEstimate
 from utils.contracts import BoundingBox, ToolArtifacts, ToolCoordinates
 
 _EMPTY_TOUCHED_BUILDINGS = {"type": "FeatureCollection", "features": []}
+# Stay under the tool's 1 km x 1 km bbox cap (~0.4 km x 0.4 km around Paris).
 _SAMPLE_BBOX = BoundingBox(
-    min_lat=48.80,
-    max_lat=48.90,
-    min_lon=2.20,
-    max_lon=2.45,
+    min_lat=48.8540,
+    max_lat=48.8580,
+    min_lon=2.3500,
+    max_lon=2.3550,
 )
 _SAMPLE_BBOX_LIST = _SAMPLE_BBOX.as_list()
 
@@ -292,7 +293,7 @@ def test_flood_damage_tool_passes_bbox_to_estimate(monkeypatch):
         lambda **_kwargs: ToolArtifacts(),
     )
 
-    bbox = BoundingBox(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+    bbox = BoundingBox(min_lat=48.8500, max_lat=48.8550, min_lon=2.3400, max_lon=2.3450)
     result = mod.get_terrazard_flood_damage_tool(
         observation_date="2024-03-15",
         bbox=bbox,

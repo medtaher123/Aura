@@ -1,8 +1,9 @@
 """Pytest configuration and fixtures for MCP server tests."""
 
+import asyncio
+import json
 import os
 import sys
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -53,12 +54,22 @@ class MockMCPClient:
         result = await self.mcp.call_tool(tool_name, arguments)
 
         if isinstance(result, tuple) and len(result) == 2:
-            text_contents, result_dict = result
+            _text_contents, result_dict = result
             return result_dict
 
-        import json
+        structured = getattr(result, "structured_content", None) or getattr(
+            result, "structuredContent", None
+        )
+        if isinstance(structured, dict):
+            return structured
 
-        if result and len(result) > 0 and hasattr(result[0], "text"):
+        content = getattr(result, "content", None)
+        if content:
+            first = content[0]
+            if hasattr(first, "text"):
+                return json.loads(first.text)
+
+        if isinstance(result, (list, tuple)) and result and hasattr(result[0], "text"):
             return json.loads(result[0].text)
 
         return result
@@ -81,8 +92,18 @@ class MockMCPClient:
 @pytest.fixture(scope="session")
 def bootstrapped_app():
     """Import main to run module discovery + tool registration once per session."""
+    from config import get_config
+    from core.context import SharedContext
+
     import main
 
+    context = SharedContext(get_config())
+    context.registry = main._registry
+    for name, record in main._registry.records.items():
+        context.set_module(name, record.module)
+    # CI has no live BDTOPO/TerraZard DBs; still register tools so unit tests
+    # can assert presence and call mocked implementations.
+    main._registry.register_healthy_tools(mcp, context, include_unhealthy=True)
     return main.app
 
 

@@ -98,8 +98,13 @@ async def test_flood_damage_city_tool_empty_city(mcp_client):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_flood_damage_city_tool_unsupported_asset_class(mcp_client):
+async def test_flood_damage_city_tool_unsupported_asset_class(mcp_client, monkeypatch):
     """Test tool returns error when asset_class is invalid."""
+    def fake_geocode(_city_name):
+        return "POLYGON((2 48, 3 48, 3 49, 2 49, 2 48))", "France", "Paris", 48.8566, 2.3522
+
+    monkeypatch.setattr(fdc, "_get_city_polygon_and_country", fake_geocode)
+
     result = await mcp_client.call_tool(
         "flood_damage_city_tool",
         {"city": "Paris", "depth_m": 2.0, "asset_class": "invalid_type"},

@@ -15,7 +15,10 @@ def get_country_info(country_name: str):
     response = requests.get(url)
     if response.status_code != 200:
         return None
-    data = response.json()[0]
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        return None
+    data = payload[0]
     info = {
         "Type": "Country",
         "Name": data.get("name", {}).get("common"),
@@ -37,9 +40,10 @@ def get_city_info(city_name: str):
     url = f"https://nominatim.openstreetmap.org/search?city={city_name}&format=json&addressdetails=1&limit=1&extratags=1"
     headers = {"User-Agent": "GeoApp/1.0"}
     response = requests.get(url, headers=headers)
-    if response.status_code != 200 or not response.json():
+    payload = response.json() if response.status_code == 200 else None
+    if response.status_code != 200 or not isinstance(payload, list) or not payload:
         return None
-    data = response.json()[0]
+    data = payload[0]
     address = data.get("address", {})
 
     population = data.get("extratags", {}).get("population")

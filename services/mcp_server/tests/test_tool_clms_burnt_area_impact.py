@@ -141,6 +141,11 @@ def test_clms_burnt_area_fallback_to_monthly(monkeypatch):
     from modules.hazards import clms_burnt_area_impact as mod
 
     monkeypatch.setattr(mod, "_oauth_token", lambda: "token")
+    monkeypatch.setattr(
+        mod,
+        "reverse_geocode",
+        lambda _lat, _lon: {"city": "Paris", "country": "France"},
+    )
     called_candidates: list[str] = []
 
     def _fake_fetch(**kwargs):
