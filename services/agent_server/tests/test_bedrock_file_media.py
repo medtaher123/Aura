@@ -338,7 +338,7 @@ def test_media_mode_caps_documents_per_message():
 
 
 @pytest.mark.asyncio
-async def test_router_uses_caption_for_structured_and_media_for_stream():
+async def test_router_defaults_file_media_mode_to_media():
     from pydantic import BaseModel
 
     from eo_llm.adapters.bedrock.llm_provider import FileMediaMode
@@ -390,5 +390,5 @@ async def test_router_uses_caption_for_structured_and_media_for_stream():
     )
     async for _ in router.call_stream(system_prompt="s", model=route):
         pass
-    assert seen["structured"] is FileMediaMode.CAPTION
+    assert seen["structured"] is FileMediaMode.MEDIA
     assert seen["stream"] is FileMediaMode.MEDIA
