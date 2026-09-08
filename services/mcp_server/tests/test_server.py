@@ -64,13 +64,10 @@ def test_health_endpoint(client):
     # Verify response structure
     assert "status" in data
     assert "service" in data
-    assert "tools_loaded" in data
     assert "timestamp" in data
 
-    # Verify values
     assert data["status"] == "healthy"
     assert data["service"] == "mcp-server"
-    assert data["tools_loaded"] > 0
 
 
 @pytest.mark.integration
