@@ -330,7 +330,8 @@ TOOLS_CATALOG = {
             "lat": "Latitude in decimal degrees",
             "lon": "Longitude in decimal degrees",
             "radius_m": "Radius in meters for proximity queries",
-            "limit": "Max rows to return (1-50)"
+            "limit": "Max rows to return (1-50)",
+            "include_geometry": "Set to false to skip GeoJSON generation and map layers for faster responses"
         }
     },
     "bdtopo_intersection_tool": {
@@ -466,6 +467,28 @@ TOOLS_CATALOG = {
             "themes": "Optional list of theme hints (buildings, transport, hydro_surface, ...)",
         },
     },
+    "bdtopo_buildings_by_cleabs_tool": {
+        "name": "BDTOPO Buildings By Cleabs Tool",
+        "purpose": "Fetch one or more BDTOPO building records directly from the raw batiment table using cleabs identifiers",
+        "data_sources": [
+            "PostGIS raw BDTOPO batiment table"
+        ],
+        "capabilities": [
+            "Lookup a single building by cleabs",
+            "Batch lookup multiple buildings by cleabs in one call",
+            "Return building attributes, centroid coordinates, and geometry when available",
+            "Report missing cleabs values explicitly"
+        ],
+        "example_questions": [
+            "Give me the building for this cleabs.",
+            "Fetch these three buildings by cleabs and tell me which ones are missing."
+        ],
+        "parameters": {
+            "cleabs": "Single cleabs string or list of cleabs strings",
+            "limit": "Optional max rows to return",
+            "include_geometry": "Set to false to skip centroid/GeoJSON generation for faster responses"
+        }
+    },
     "geo_info_tool": {
         "name": "Geographic Information Tool",
         "purpose": "Retrieve information about countries and cities",
@@ -575,6 +598,7 @@ TOOL_CATEGORIES = {
     "Infrastructure & Geography": [
         "infrastructure_query_tool",
         "bdtopo_query_tool",
+        "bdtopo_buildings_by_cleabs_tool",
         "bdtopo_intersection_tool",
         "bdtopo_coverage_quality_tool",
         "bdtopo_change_snapshot_tool",
