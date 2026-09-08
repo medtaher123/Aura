@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tool Detail — Metaplanet</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --card: #141c2f;
+      --text: #edf2ff;
+      --muted: #9aa7bf;
+      --ok: #34d399;
+      --bad: #f87171;
+      --border: #243049;
+      --accent: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.2rem; word-break: break-word; }
+    main { padding: 1.25rem; max-width: 960px; margin: 0 auto; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; margin-bottom: 0.25rem; }
+    .muted { color: var(--muted); }
+    .error { color: var(--bad); }
+    .pill {
+      display: inline-block;
+      font-size: 0.72rem;
+      border-radius: 999px;
+      padding: 0.1rem 0.45rem;
+      border: 1px solid var(--border);
+    }
+    .pill.ok { color: var(--ok); }
+    .pill.bad { color: var(--bad); }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+    .meta-item {
+      background: #0f1526;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+    }
+    .meta-item .value { font-weight: 600; margin-top: 0.15rem; word-break: break-all; }
+    pre {
+      margin: 0;
+      padding: 0.85rem;
+      background: #0f1526;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: auto;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    input[type="password"], input[type="text"] {
+      width: min(420px, 100%);
+      padding: 0.45rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f1526;
+      color: var(--text);
+    }
+    button {
+      background: var(--accent);
+      color: #081021;
+      border: none;
+      border-radius: 8px;
+      padding: 0.45rem 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    .desc { white-space: pre-wrap; line-height: 1.5; margin: 0; }
+    h2 { font-size: 0.95rem; margin: 0 0 0.65rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="muted" style="margin-bottom:0.35rem"><a href="/admin/ui">← Tool Platform</a></div>
+      <h1 id="title">Tool</h1>
+    </div>
+    <div class="muted" id="status">—</div>
+  </header>
+  <main>
+    <section>
+      <div class="toolbar">
+        <label class="muted" for="token">Bearer token</label>
+        <input id="token" type="password" placeholder="Paste Cognito JWT (optional if auth disabled)" />
+        <button id="refreshBtn" type="button">Refresh</button>
+      </div>
+      <div id="error" class="error"></div>
+    </section>
+
+    <section id="content" hidden>
+      <div class="card">
+        <div class="label">Description</div>
+        <p class="desc" id="description">—</p>
+        <div class="meta" id="meta"></div>
+      </div>
+      <div class="card">
+        <h2>Input schema</h2>
+        <pre id="schema">{}</pre>
+      </div>
+    </section>
+  </main>
+  <script>
+    const tokenInput = document.getElementById('token');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const errorEl = document.getElementById('error');
+    const titleEl = document.getElementById('title');
+    const statusEl = document.getElementById('status');
+    const contentEl = document.getElementById('content');
+    const descriptionEl = document.getElementById('description');
+    const metaEl = document.getElementById('meta');
+    const schemaEl = document.getElementById('schema');
+
+    const TOKEN_KEY = 'metaplanet_admin_token';
+    const saved = sessionStorage.getItem(TOKEN_KEY);
+    if (saved) tokenInput.value = saved;
+
+    function toolIdFromPath() {
+      const parts = location.pathname.replace(/\/+$/, '').split('/');
+      return parts[parts.length - 1] || '';
+    }
+
+    function authHeaders() {
+      const token = tokenInput.value.trim();
+      if (token) sessionStorage.setItem(TOKEN_KEY, token);
+      else sessionStorage.removeItem(TOKEN_KEY);
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    }
+
+    async function api(path) {
+      const res = await fetch(path, {
+        headers: { ...authHeaders(), Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`${path} → ${res.status}: ${text}`);
+      }
+      return res.json();
+    }
+
+    function metaItem(label, value) {
+      return `<div class="meta-item">
+        <div class="label">${label}</div>
+        <div class="value">${value}</div>
+      </div>`;
+    }
+
+    function formatTs(value) {
+      if (!value) return '—';
+      try { return new Date(value).toLocaleString(); } catch { return value; }
+    }
+
+    function render(tool) {
+      document.title = `${tool.name} — Metaplanet`;
+      titleEl.textContent = tool.name;
+      statusEl.innerHTML = tool.enabled
+        ? '<span class="pill ok">enabled</span>'
+        : '<span class="pill bad">disabled</span>';
+      descriptionEl.textContent = tool.description || '(no description)';
+      metaEl.innerHTML = [
+        metaItem('Source', tool.source),
+        metaItem('Provider', tool.provider_slug),
+        metaItem('Tool ID', `<code>${tool.id}</code>`),
+        metaItem('MCP server ID', tool.mcp_server_id ? `<code>${tool.mcp_server_id}</code>` : '—'),
+        metaItem('Discovered', formatTs(tool.discovered_at)),
+        metaItem('Updated', formatTs(tool.updated_at)),
+      ].join('');
+      schemaEl.textContent = JSON.stringify(tool.input_schema || {}, null, 2);
+      contentEl.hidden = false;
+    }
+
+    async function refresh() {
+      errorEl.textContent = '';
+      const id = toolIdFromPath();
+      if (!id) {
+        errorEl.textContent = 'Missing tool id in URL';
+        return;
+      }
+      try {
+        const tool = await api(`/admin/tools/${id}`);
+        render(tool);
+      } catch (err) {
+        contentEl.hidden = true;
+        errorEl.textContent = err.message;
+      }
+    }
+
+    refreshBtn.addEventListener('click', refresh);
+    tokenInput.addEventListener('change', refresh);
+    refresh();
+  </script>
+</body>
+</html>
