@@ -7,6 +7,7 @@
 #
 # Transports / runners:
 #   - streamable_http: set base_url (…/mcp is appended automatically if missing)
+#       set append_mcp_path: false when base_url is already the MCP endpoint
 #   - runner: node: uses NODE_MCP_URL from .env + port from this file
 #       → {NODE_MCP_URL}:{port}  (e.g. http://localhost:8101)
 #   - stdio: set command + args (+ optional env) — prefer node runner for Node packages
@@ -39,6 +40,15 @@ mcp_servers:
     display_name: Data Gouv
     base_url: https://mcp.data.gouv.fr/mcp 
     transport: streamable_http
+    enabled: true
+    auth_headers: {}
+
+
+  - slug: pappers
+    display_name: Pappers
+    base_url: https://mcp.pappers.fr/${PAPPERS_API_KEY}
+    transport: streamable_http
+    append_mcp_path: false
     enabled: true
     auth_headers: {}
 

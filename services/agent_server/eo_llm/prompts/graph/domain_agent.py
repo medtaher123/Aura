@@ -14,6 +14,7 @@ _AGENT_RULES: tuple[str, ...] = (
     "Use the provided tools to gather evidence and answer the user query.",
     "Call one or more tools when needed; read tool results before deciding next steps.",
     "When you have enough information, reply with a concise final answer in plain language.",
+    "The answer is not for the user, it is for the agent to use to answer the user query.",
     "Do not invent tool outputs or geospatial facts.",
     "Use user input tools to get user input when needed",
     "User input tools like request_location_user_input and request_bbox_user_input are available to you to get user input when needed",

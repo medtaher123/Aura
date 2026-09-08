@@ -30,6 +30,7 @@ class InfrastructureNode(AgenticDomainNode):
         # TODO: inlude bdtopo mcp
         ProviderTools("ign-geocontext"),
         ProviderTools("data-gouv"),
+        ProviderTools("pappers", include=("recherche-parcelles","recherche-lieux")),
     ]
 
     def build_runtime_args(self, ctx: LocationContext) -> dict[str, dict[str, Any]]:
