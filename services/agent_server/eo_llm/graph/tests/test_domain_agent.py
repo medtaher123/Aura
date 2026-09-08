@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -199,3 +200,64 @@ async def test_domain_tool_agent_pauses_on_user_input_tool():
 
     assert result.paused is True
     assert result.needs_input == {"bounding_box": {"prompt": "Draw the area"}}
+
+
+@pytest.mark.asyncio
+async def test_domain_tool_agent_runs_same_turn_tools_in_parallel():
+    agent = DomainToolAgent(max_rounds=2)
+    descriptors = [_descriptor("tool_a"), _descriptor("tool_b")]
+    started: list[str] = []
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _invoke(tool_name: str, _args: dict[str, Any]) -> ToolResponse:
+        started.append(tool_name)
+        if len(started) >= 2:
+            both_started.set()
+        await release.wait()
+        return ToolResponse(
+            tool_name=tool_name,
+            message=f"{tool_name} ok",
+            data={},
+            error=False,
+        )
+
+    mock_gateway = MagicMock()
+    mock_gateway.list_tools.return_value = descriptors
+    mock_gateway.invoke = AsyncMock(side_effect=_invoke)
+
+    with (
+        patch("eo_llm.graph.domain_agent.LLMModelRouter") as router_cls,
+        patch(
+            "eo_llm.graph.domain_agent.get_tool_gateway",
+            return_value=mock_gateway,
+        ),
+        patch("eo_llm.graph.domain_agent.get_chat_history", return_value=[]),
+    ):
+        mock_router = router_cls.return_value
+        mock_router.call_converse_stream = AsyncMock(
+            side_effect=[
+                ConverseResponse(
+                    stop_reason="tool_use",
+                    tool_calls=[
+                        ConverseToolCall(id="a", name="tool_a", arguments={}),
+                        ConverseToolCall(id="b", name="tool_b", arguments={}),
+                    ],
+                ),
+                ConverseResponse(stop_reason="end_turn", text="done"),
+            ]
+        )
+        run_task = asyncio.create_task(
+            agent.run(
+                domain="agentic_test",
+                allowed_tools=["tool_a", "tool_b"],
+                system_prompt="test",
+            )
+        )
+        await asyncio.wait_for(both_started.wait(), timeout=1.0)
+        release.set()
+        result = await asyncio.wait_for(run_task, timeout=1.0)
+
+    assert result.message == "done"
+    assert [c.tool_name for c in result.tool_calls] == ["tool_a", "tool_b"]
+    assert mock_gateway.invoke.await_count == 2

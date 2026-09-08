@@ -73,6 +73,7 @@ def test_expand_env_mcp_server_url(monkeypatch):
 
 def test_load_default_external_mcp_config(monkeypatch):
     monkeypatch.delenv("NODE_MCP_URL", raising=False)
+    monkeypatch.setenv("PAPPERS_API_KEY", "test-pappers-key")
     get_config.cache_clear()
     path = (
         Path(__file__).resolve().parents[1]
@@ -82,16 +83,21 @@ def test_load_default_external_mcp_config(monkeypatch):
     assert path.is_file()
     document = load_external_mcp_config(path)
     slugs = [s["slug"] for s in document["mcp_servers"]]
-    assert slugs == ["ign-geocontext", "ign-carto", "immo-france"]
+    assert slugs == [
+        "ign-geocontext",
+        "ign-carto",
+        "nominatim",
+        "data-gouv",
+        "pappers",
+    ]
     assert "native_tools" not in document
     assert "agent_profiles" not in document
     assert all(s["slug"] != "metaplanet" for s in document["mcp_servers"])
     assert document["mcp_servers"][0]["base_url"].endswith("/geocontext")
     assert document["mcp_servers"][1]["base_url"].endswith("/carto")
-    immo = document["mcp_servers"][2]
-    assert immo["runner"] == "node"
-    assert immo["port"] == 8101
-    assert immo["transport"] == "streamable_http"
+    pappers = document["mcp_servers"][4]
+    assert pappers["append_mcp_path"] is False
+    assert pappers["base_url"] == "https://mcp.pappers.fr/test-pappers-key"
 
 
 def test_resolve_node_runner_base_url(monkeypatch):
@@ -192,6 +198,51 @@ def test_build_mcp_provider_types():
     assert isinstance(build_mcp_provider(primary), MetaplanetMcpProvider)
     assert isinstance(build_mcp_provider(external), McpToolProvider)
     assert not isinstance(build_mcp_provider(external), MetaplanetMcpProvider)
+
+
+def test_mcp_provider_skips_mcp_path_when_disabled():
+    provider = McpToolProvider(
+        provider_id="pappers",
+        base_url="https://mcp.pappers.fr/abc",
+        stdio_config={"append_mcp_path": False},
+    )
+    assert provider.mcp_http_url == "https://mcp.pappers.fr/abc"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_persists_append_mcp_path_false(
+    db_session, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MCP_SERVER_URL", "http://mcp:8000")
+    monkeypatch.setenv("PAPPERS_API_KEY", "abc")
+    get_config.cache_clear()
+    path = tmp_path / "pappers.yaml"
+    path.write_text(
+        yaml.dump(
+            {
+                "mcp_servers": [
+                    {
+                        "slug": "pappers",
+                        "display_name": "Pappers",
+                        "base_url": "https://mcp.pappers.fr/${PAPPERS_API_KEY}",
+                        "transport": "streamable_http",
+                        "append_mcp_path": False,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    reconciler = ExternalMcpReconciler(config_path=path)
+    result = await reconciler.reconcile(db_session)
+    assert result.created == 2
+
+    pappers = await McpServerRepository(db_session).get_by_slug("pappers")
+    assert pappers is not None
+    assert pappers.base_url == "https://mcp.pappers.fr/abc"
+    assert pappers.stdio_config.get("append_mcp_path") is False
+    provider = build_mcp_provider(pappers)
+    assert provider.mcp_http_url == "https://mcp.pappers.fr/abc"
 
 
 @pytest.mark.asyncio

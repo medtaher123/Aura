@@ -49,10 +49,17 @@ class McpToolProvider(ToolProvider):
         return self._provider_id
 
     @property
+    def append_mcp_path(self) -> bool:
+        return self.stdio_config.get("append_mcp_path", True) is not False
+
+    @property
     def mcp_http_url(self) -> str:
         if self.transport != "streamable_http":
             raise ValueError(f"Unsupported MCP HTTP transport: {self.transport}")
-        return mcp_streamable_http_url(self.base_url)
+        return mcp_streamable_http_url(
+            self.base_url,
+            append_mcp_path=self.append_mcp_path,
+        )
 
     @asynccontextmanager
     async def _client_session(self) -> AsyncIterator[Any]:

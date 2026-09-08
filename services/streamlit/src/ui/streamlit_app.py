@@ -262,6 +262,15 @@ def _invoke_agent_unified(
     )
 
 
+# Separate typewriter speeds (chars/sec). Tune these independently.
+# Domain stays lower/smoother; finalizer is faster (longer answers).
+DOMAIN_TYPEWRITER_CPS = 320.0
+DOMAIN_TYPEWRITER_MAX_CHARS_PER_TICK = 15
+FINALIZER_TYPEWRITER_CPS = 520.0
+FINALIZER_TYPEWRITER_MAX_CHARS_PER_TICK = 18
+TYPEWRITER_TICK_INTERVAL_S = 0.008
+
+
 def _invoke_agent_with_streaming_display(
     executor,
     *,
@@ -269,6 +278,7 @@ def _invoke_agent_with_streaming_display(
     tools_callback: Callable[[dict], None] | None = None,
     nodes_callback: Callable[[dict], None] | None = None,
     tools_tick: Callable[[], None] | None = None,
+    domain_typewriter_snap: Callable[[], None] | None = None,
     artifacts_snapshot: Callable[[], ToolArtifacts] | None = None,
     trace_callback: Callable[[dict], None] | None = None,
     thinking_callback: Callable[[dict], None] | None = None,
@@ -303,15 +313,15 @@ def _invoke_agent_with_streaming_display(
         )
 
     def drain_events() -> None:
-        nonlocal streamed
+        nonlocal streamed_target
         while True:
             try:
                 kind, payload = event_queue.get_nowait()
             except queue.Empty:
                 break
             if kind == "token" and isinstance(payload, str):
-                streamed += payload
-                layout.set_message(streamed, cursor=True)
+                # Buffer only — typewriter reveal happens on the tick below.
+                streamed_target += payload
             elif kind == "event" and isinstance(payload, dict):
                 if payload.get("type") == "thinking" and thinking_callback:
                     thinking_callback(payload)
@@ -322,28 +332,66 @@ def _invoke_agent_with_streaming_display(
                 elif trace_callback:
                     trace_callback(payload)
 
-    streamed = ""
-    last_tool_tick = 0.0
+    def advance_answer_typewriter(*, chars: int = 1) -> bool:
+        """Reveal up to ``chars`` of the finalizer buffer. Returns if progressed."""
+        nonlocal streamed_shown
+        if chars <= 0 or len(streamed_shown) >= len(streamed_target):
+            return False
+        streamed_shown = streamed_target[: len(streamed_shown) + chars]
+        layout.set_message(streamed_shown, cursor=True)
+        return True
+
+    streamed_target = ""
+    streamed_shown = ""
+    last_answer_typewriter = time.monotonic()
+    domain_snapped_for_finalizer = False
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_agent)
         while True:
             drain_events()
+            # Final answer started → cancel domain typewriter and show full text.
+            if streamed_target and not domain_snapped_for_finalizer:
+                if domain_typewriter_snap:
+                    domain_typewriter_snap()
+                domain_snapped_for_finalizer = True
             if tools_tick:
-                now = time.monotonic()
-                if now - last_tool_tick >= 0.1:
-                    tools_tick()
-                    last_tool_tick = now
+                tools_tick()
+            now = time.monotonic()
+            dt = max(0.0, now - last_answer_typewriter)
+            last_answer_typewriter = now
+            chars = int(dt * FINALIZER_TYPEWRITER_CPS)
+            if chars < 1 and len(streamed_shown) < len(streamed_target):
+                chars = 1
+            chars = min(chars, FINALIZER_TYPEWRITER_MAX_CHARS_PER_TICK)
+            advance_answer_typewriter(chars=chars)
             if future.done():
                 drain_events()
-                if tools_tick:
-                    tools_tick()
+                if streamed_target and not domain_snapped_for_finalizer:
+                    if domain_typewriter_snap:
+                        domain_typewriter_snap()
+                    domain_snapped_for_finalizer = True
+                # Catch up remaining finalizer text.
+                while True:
+                    if tools_tick:
+                        tools_tick()
+                    now2 = time.monotonic()
+                    dt2 = max(0.0, now2 - last_answer_typewriter)
+                    last_answer_typewriter = now2
+                    chars2 = int(dt2 * FINALIZER_TYPEWRITER_CPS)
+                    if chars2 < 1 and len(streamed_shown) < len(streamed_target):
+                        chars2 = 1
+                    chars2 = min(chars2, FINALIZER_TYPEWRITER_MAX_CHARS_PER_TICK)
+                    advance_answer_typewriter(chars=chars2)
+                    if len(streamed_shown) >= len(streamed_target):
+                        break
+                    time.sleep(TYPEWRITER_TICK_INTERVAL_S)
                 break
-            time.sleep(0.02)
+            time.sleep(TYPEWRITER_TICK_INTERVAL_S)
 
         result = future.result()
 
-    final_text = (result.message or streamed).strip()
+    final_text = (result.message or streamed_target).strip()
     if final_text:
         layout.set_message(final_text)
     else:
@@ -871,6 +919,81 @@ _TOOL_STATUS_CSS = """
   border-radius: 50%;
   vertical-align: middle;
 }
+/* Dense domain-result markdown (tables/headings), not pre-wrap plaintext. */
+.agent-domain-box {
+  background: #f7f8fa;
+  color: inherit;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.3rem;
+  margin: 0.15rem 0;
+  font-size: 0.88rem;
+  line-height: 1.3;
+  overflow-x: auto;
+}
+.agent-domain-cursor {
+  display: inline;
+  margin-left: 0.05em;
+  opacity: 0.75;
+}
+.agent-domain-box > :first-child { margin-top: 0 !important; }
+.agent-domain-box > :last-child { margin-bottom: 0 !important; }
+.agent-domain-box p {
+  margin: 0.2em 0 !important;
+  line-height: 1.3 !important;
+}
+.agent-domain-box h1,
+.agent-domain-box h2,
+.agent-domain-box h3,
+.agent-domain-box h4 {
+  margin: 0.4em 0 0.15em !important;
+  line-height: 1.2 !important;
+}
+.agent-domain-box h1 { font-size: 1.1rem !important; }
+.agent-domain-box h2 { font-size: 1.02rem !important; }
+.agent-domain-box h3,
+.agent-domain-box h4 { font-size: 0.95rem !important; }
+.agent-domain-box ul,
+.agent-domain-box ol {
+  margin: 0.15em 0 !important;
+  padding-left: 1.15em !important;
+}
+.agent-domain-box li {
+  margin: 0.05em 0 !important;
+  line-height: 1.3 !important;
+}
+.agent-domain-box table {
+  margin: 0.25em 0 !important;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+.agent-domain-box th,
+.agent-domain-box td {
+  border: 1px solid #d0d5dd;
+  padding: 0.18rem 0.4rem !important;
+  vertical-align: top;
+}
+.agent-domain-box th {
+  background: #eef1f5;
+}
+.agent-domain-box hr {
+  margin: 0.35em 0 !important;
+  border: none;
+  border-top: 1px solid #d0d5dd;
+}
+.agent-domain-box blockquote {
+  margin: 0.2em 0 !important;
+  padding-left: 0.6em;
+  border-left: 3px solid #d0d5dd;
+}
+.agent-domain-box pre {
+  margin: 0.2em 0 !important;
+  padding: 0.35em 0.5em;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
 """
 
 @dataclass
@@ -1032,10 +1155,71 @@ def _normalize_tool_progress_event(evt: dict) -> dict | None:
     return None
 
 
-def _compact_domain_result_text(message: str) -> str:
-    """Collapse blank lines and trailing spaces for a denser domain-result block."""
-    lines = [line.rstrip() for line in str(message or "").splitlines()]
-    return "\n".join(line for line in lines if line.strip())
+def _domain_markdown_renderer():
+    """Lazy MarkdownIt instance (GFM tables) for domain result HTML."""
+    renderer = getattr(_domain_markdown_renderer, "_cached", None)
+    if renderer is not None:
+        return renderer
+    from markdown_it import MarkdownIt
+
+    renderer = MarkdownIt("commonmark", {"html": False}).enable("table")
+    _domain_markdown_renderer._cached = renderer  # type: ignore[attr-defined]
+    return renderer
+
+
+def _append_domain_streaming_cursor(body: str) -> str:
+    """Insert the typewriter cursor inside the last text-bearing block.
+
+    Appending after ``</p>`` / ``</table>`` puts the caret on its own line.
+    """
+    cursor = "<span class='agent-domain-cursor'>▌</span>"
+    trimmed = body.rstrip()
+    # Prefer hosts that visually end the typed content.
+    host_tags = (
+        "td",
+        "th",
+        "li",
+        "p",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "pre",
+        "blockquote",
+        "code",
+    )
+    best = -1
+    for tag in host_tags:
+        needle = f"</{tag}>"
+        idx = trimmed.rfind(needle)
+        if idx > best:
+            best = idx
+    if best >= 0:
+        return f"{trimmed[:best]}{cursor}{trimmed[best:]}"
+    return f"{trimmed}{cursor}"
+
+
+def _domain_result_html(message: str, *, streaming: bool = False) -> str:
+    """Render domain text for the Agent panel as dense Markdown HTML.
+
+    Streaming uses the same renderer as the completed result; only a cursor is
+    inserted at the end of the last text block while typing.
+    """
+    text = str(message or "")
+    if not text.strip():
+        if not streaming:
+            return ""
+        return (
+            "<div class='agent-domain-box'>"
+            "<span class='agent-domain-cursor'>▌</span>"
+            "</div>"
+        )
+    body = _domain_markdown_renderer().render(text)
+    if streaming:
+        body = _append_domain_streaming_cursor(body)
+    return f"<div class='agent-domain-box'>{body}</div>"
 
 
 def _render_tool_row(tool: _ToolCallState, *, now: float | None = None) -> None:
@@ -1080,24 +1264,20 @@ def _render_tool_row(tool: _ToolCallState, *, now: float | None = None) -> None:
                 st.json(tool.result)
 
 
+def _timeline_text_block_html(
+    message: str, *, streaming: bool = False
+) -> str:
+    """HTML for a domain text chip (markdown when complete)."""
+    return _domain_result_html(message, streaming=streaming)
+
+
 def _render_timeline_text_block(
     message: str, *, domain: str | None = None, streaming: bool = False
 ) -> None:
-    text = _compact_domain_result_text(message)
-    if not text:
+    block = _timeline_text_block_html(message, streaming=streaming)
+    if not block:
         return
-    suffix = " ▌" if streaming else ""
-    st.markdown(
-        (
-            "<div style='background:#f7f8fa;color:inherit;"
-            "padding:0.3rem 0.55rem;border-radius:0.3rem;"
-            "line-height:1.2;font-size:0.88rem;"
-            "white-space:pre-wrap;margin:0.15rem 0;'>"
-            f"{html.escape(text)}{suffix}"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
+    st.markdown(block, unsafe_allow_html=True)
 
 
 def _render_tool_status_box(
@@ -1122,10 +1302,24 @@ def _render_tool_status_box(
 def _timeline_item_is_visible(item: dict) -> bool:
     kind = item.get("kind")
     if kind == "text":
+        if item.get("open"):
+            return True
         return bool(str(item.get("message") or "").strip())
     if kind == "tool":
         return bool(str(item.get("tool_name") or "").strip())
     return False
+
+
+def _timeline_text_display(item: dict) -> tuple[str, bool]:
+    """Return (text_to_show, streaming_cursor) for a timeline text item."""
+    full = str(item.get("message") or "")
+    open_ = bool(item.get("open"))
+    if not open_:
+        return full, False
+    shown = item.get("shown")
+    if not isinstance(shown, str):
+        shown = ""
+    return shown, True
 
 
 def _render_agent_timeline(
@@ -1153,14 +1347,18 @@ def _render_agent_timeline(
                         unsafe_allow_html=True,
                     )
                 if kind == "text":
+                    display_text, streaming = _timeline_text_display(item)
+                    if not display_text.strip() and not streaming:
+                        prev_kind = kind
+                        continue
                     _render_timeline_text_block(
-                        str(item.get("message") or ""),
+                        display_text,
                         domain=(
                             str(item["domain"]).strip()
                             if isinstance(item.get("domain"), str)
                             else None
                         ),
-                        streaming=bool(item.get("open")),
+                        streaming=streaming,
                     )
                     prev_kind = kind
                     continue
@@ -1191,6 +1389,9 @@ def _close_open_timeline_text(items: list[dict]) -> None:
     for item in items:
         if item.get("kind") == "text":
             item["open"] = False
+            item["awaiting_close"] = False
+            # Snap typewriter to the full buffer when the segment closes.
+            item["shown"] = str(item.get("message") or "")
 
 
 def _append_timeline_text_segment(
@@ -1201,7 +1402,9 @@ def _append_timeline_text_segment(
         "kind": "text",
         "domain": domain,
         "message": "",
+        "shown": "",
         "open": True,
+        "awaiting_close": False,
     }
     items.append(item)
     return item
@@ -1236,6 +1439,77 @@ def _apply_timeline_stream_update(
         open_text = _append_timeline_text_segment(items, domain=domain)
     if content:
         open_text["message"] = str(open_text.get("message") or "") + content
+        if "shown" not in open_text or not isinstance(open_text.get("shown"), str):
+            open_text["shown"] = ""
+
+
+def _advance_timeline_typewriter(
+    items: list[dict], *, chars: int
+) -> bool:
+    """Reveal up to ``chars`` on text segments that are still behind. Returns if progressed."""
+    if chars <= 0:
+        return False
+    advanced = False
+    for item in items:
+        if item.get("kind") != "text":
+            continue
+        target = str(item.get("message") or "")
+        shown = item.get("shown")
+        if not isinstance(shown, str):
+            shown = ""
+        behind = len(shown) < len(target)
+        if not behind and not item.get("open"):
+            continue
+        if behind:
+            item["shown"] = target[: len(shown) + chars]
+            shown = item["shown"]
+            advanced = True
+        # Close only after the typewriter has caught up (set by node_end).
+        if (
+            item.get("awaiting_close")
+            and isinstance(shown, str)
+            and len(shown) >= len(target)
+        ):
+            item["open"] = False
+            item["awaiting_close"] = False
+            advanced = True
+    return advanced
+
+
+def _timeline_typewriter_pending(items: list[dict]) -> bool:
+    """True while any domain text still has unrevealed characters."""
+    for item in items:
+        if item.get("kind") != "text":
+            continue
+        target = str(item.get("message") or "")
+        shown = item.get("shown")
+        if not isinstance(shown, str):
+            shown = ""
+        if len(shown) < len(target):
+            return True
+    return False
+
+
+def _snap_timeline_typewriter(items: list[dict]) -> bool:
+    """Cancel domain typewriter; reveal full text immediately. Returns if changed."""
+    changed = False
+    for item in items:
+        if item.get("kind") != "text":
+            continue
+        target = str(item.get("message") or "")
+        shown = item.get("shown")
+        if not isinstance(shown, str):
+            shown = ""
+        if (
+            shown != target
+            or item.get("open")
+            or item.get("awaiting_close")
+        ):
+            item["shown"] = target
+            item["open"] = False
+            item["awaiting_close"] = False
+            changed = True
+    return changed
 
 
 def _timeline_tool_record(item: dict) -> ToolCallRecord:
@@ -1264,9 +1538,7 @@ def _timeline_snapshot_items(items: list[dict]) -> list[AgentTimelineItem]:
                 {
                     "kind": "text",
                     "domain": item.get("domain"),
-                    "message": _compact_domain_result_text(
-                        str(item.get("message") or "")
-                    ),
+                    "message": str(item.get("message") or ""),
                 }
             )
             continue
@@ -1405,11 +1677,24 @@ def _make_agent_timeline_tracker(
     Callable[[], list[ToolCallRecord]],
     Callable[[], list[AgentTimelineItem]],
     Callable[[], None],
+    Callable[[], bool],
+    Callable[[], None],
 ]:
-    """Track tools + domain streaming text in chronological order."""
+    """Track tools + domain streaming text in chronological order.
+
+    Structure (tools / closed text) rebuilds only when it changes. The open
+    streaming segment is painted into a dedicated ``st.empty`` slot so the
+    typewriter can update letter-by-letter without remounting the whole panel.
+    """
     items: list[dict] = []
     tools_by_key: dict[str, dict] = {}
     next_order = 0
+    structure_dirty = False
+    live_dirty = False
+    last_structure_paint = 0.0
+    last_typewriter = time.monotonic()
+    live_slot: DeltaGenerator | None = None
+    _ELAPSED_PAINT_INTERVAL = 0.1
 
     def _find_running_key(tool_name: str) -> str | None:
         for key, tool in tools_by_key.items():
@@ -1420,12 +1705,124 @@ def _make_agent_timeline_tracker(
     def _has_running_tools() -> bool:
         return any(tool.get("status") == "running" for tool in tools_by_key.values())
 
-    def _repaint(*, now: float | None = None) -> None:
-        _render_agent_timeline(items, placeholder=timeline_placeholder, now=now)
+    def _open_text_item() -> dict | None:
+        for item in reversed(items):
+            if item.get("kind") == "text" and item.get("open"):
+                return item
+        return None
+
+    def _paint_live_text() -> None:
+        nonlocal live_dirty
+        if live_slot is None:
+            return
+        open_item = _open_text_item()
+        if open_item is None:
+            live_slot.empty()
+            live_dirty = False
+            return
+        display_text, streaming = _timeline_text_display(open_item)
+        block = _timeline_text_block_html(display_text, streaming=streaming)
+        if not block:
+            live_slot.empty()
+        else:
+            # Replace in-place — do not empty first (avoids flicker/jumps).
+            live_slot.markdown(block, unsafe_allow_html=True)
+        live_dirty = False
+
+    def _render_completed_item(item: dict, *, now: float) -> None:
+        kind = str(item.get("kind") or "")
+        if kind == "text":
+            if item.get("open"):
+                return
+            display_text, streaming = _timeline_text_display(item)
+            if display_text.strip():
+                _render_timeline_text_block(display_text, streaming=streaming)
+            return
+        tool = _ToolCallState(
+            key=str(item.get("step_id") or item.get("tool_name") or "tool"),
+            tool_name=str(item.get("tool_name") or "tool"),
+            status=item.get("status") or "success",  # type: ignore[arg-type]
+            step_id=item.get("step_id"),
+            domain=item.get("domain"),
+            execution_time_seconds=item.get("execution_time_seconds"),
+            detail=item.get("detail"),
+            result=item.get("result"),
+            arguments=item.get("arguments"),
+            started_at=item.get("started_at"),
+        )
+        _render_tool_row(tool, now=now)
+
+    def _rebuild_structure(*, now: float | None = None) -> None:
+        nonlocal live_slot, structure_dirty, last_structure_paint, live_dirty
+        display_now = now if now is not None else time.monotonic()
+        timeline_placeholder.empty()
+        with timeline_placeholder.container():
+            with st.container(border=True):
+                st.markdown("**Agent**")
+                prev = False
+                for item in items:
+                    if not _timeline_item_is_visible(item):
+                        continue
+                    if item.get("kind") == "text" and item.get("open"):
+                        continue
+                    if prev:
+                        st.markdown(
+                            "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                            unsafe_allow_html=True,
+                        )
+                    _render_completed_item(item, now=display_now)
+                    prev = True
+                if prev:
+                    st.markdown(
+                        "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                        unsafe_allow_html=True,
+                    )
+                live_slot = st.empty()
+        structure_dirty = False
+        last_structure_paint = time.monotonic()
+        live_dirty = True
+        _paint_live_text()
+
+    def _mark_structure_dirty() -> None:
+        nonlocal structure_dirty
+        structure_dirty = True
+
+    def _mark_live_dirty() -> None:
+        nonlocal live_dirty
+        live_dirty = True
 
     def tick() -> None:
-        if _has_running_tools():
-            _repaint(now=time.monotonic())
+        """Advance typewriter, paint live text, or rebuild structure when needed."""
+        nonlocal last_typewriter
+        now = time.monotonic()
+        dt = max(0.0, now - last_typewriter)
+        last_typewriter = now
+        chars = int(dt * DOMAIN_TYPEWRITER_CPS)
+        pending = _timeline_typewriter_pending(items)
+        if chars < 1 and pending:
+            chars = 1
+        chars = min(chars, DOMAIN_TYPEWRITER_MAX_CHARS_PER_TICK)
+
+        before_open = _open_text_item()
+        if _advance_timeline_typewriter(items, chars=chars):
+            after_open = _open_text_item()
+            if before_open is not after_open:
+                # Segment closed (or swapped) — fold into the static panel.
+                _mark_structure_dirty()
+            else:
+                _mark_live_dirty()
+
+        if structure_dirty or live_slot is None:
+            if any(_timeline_item_is_visible(item) for item in items) or _open_text_item():
+                _rebuild_structure(now=now)
+            return
+
+        if live_dirty:
+            _paint_live_text()
+            return
+
+        if _has_running_tools() and now - last_structure_paint >= _ELAPSED_PAINT_INTERVAL:
+            _rebuild_structure(now=now)
 
     def _apply_tool_event(normalized: dict) -> None:
         nonlocal next_order
@@ -1459,7 +1856,7 @@ def _make_agent_timeline_tracker(
             }
             tools_by_key[key] = tool_item
             items.append(tool_item)
-            _repaint(now=time.monotonic())
+            _mark_structure_dirty()
             return
 
         if phase != "done":
@@ -1493,7 +1890,6 @@ def _make_agent_timeline_tracker(
 
         tool = tools_by_key[key]
         if tool.get("step_id") == "__pending__":
-            # Replace pending placeholder with the real tool entry in-place.
             try:
                 idx = items.index(tool)
             except ValueError:
@@ -1534,24 +1930,26 @@ def _make_agent_timeline_tracker(
         args = _tool_arguments_from_event(normalized)
         if args is not None:
             tool["arguments"] = args
-        _repaint()
+        _mark_structure_dirty()
 
     def callback(evt: dict) -> None:
         stream = _agentic_node_stream_update(evt)
         if stream is not None:
             domain, content, reset = stream
+            before_open = _open_text_item()
             _apply_timeline_stream_update(
                 items, domain=domain, content=content, reset=reset
             )
-            if content or reset:
-                _repaint()
+            after_open = _open_text_item()
+            if reset or before_open is not after_open:
+                _mark_structure_dirty()
+            # New target chars are revealed by the typewriter tick.
             return
 
         entry = _agentic_node_result_entry(evt)
         if entry is not None:
             domain = entry["domain"]
             message = entry["message"]
-            # Finalize the last open/same-domain text segment, or append.
             target = next(
                 (
                     item
@@ -1562,9 +1960,14 @@ def _make_agent_timeline_tracker(
             )
             if target is None:
                 target = _append_timeline_text_segment(items, domain=domain)
+                _mark_structure_dirty()
+            # Keep typing until shown catches the final message, then close.
             target["message"] = message
-            target["open"] = False
-            _repaint()
+            target["open"] = True
+            target["awaiting_close"] = True
+            if not isinstance(target.get("shown"), str):
+                target["shown"] = ""
+            _mark_live_dirty()
             return
 
         normalized = _normalize_tool_progress_event(evt)
@@ -1585,7 +1988,26 @@ def _make_agent_timeline_tracker(
     def timeline_snapshot() -> list[AgentTimelineItem]:
         return _timeline_snapshot_items(items)
 
-    return callback, tool_snapshot, timeline_snapshot, tick
+    def typewriter_pending() -> bool:
+        return _timeline_typewriter_pending(items)
+
+    def snap_typewriter() -> None:
+        """Cancel in-flight domain typing and paint the full text now."""
+        if not _snap_timeline_typewriter(items):
+            return
+        _mark_structure_dirty()
+        if any(_timeline_item_is_visible(item) for item in items):
+            _rebuild_structure()
+
+    return (
+        callback,
+        tool_snapshot,
+        timeline_snapshot,
+        tick,
+        typewriter_pending,
+        snap_typewriter,
+    )
+
 
 
 def _is_node_progress_event(evt: dict) -> bool:
@@ -1813,7 +2235,7 @@ def _node_results_from_timeline(
         if not isinstance(item, dict) or item.get("kind") != "text":
             continue
         domain = str(item.get("domain") or "").strip()
-        message = _compact_domain_result_text(str(item.get("message") or ""))
+        message = str(item.get("message") or "").strip()
         if domain and message:
             out.append({"domain": domain, "message": message})
     return out
@@ -1981,11 +2403,17 @@ def _make_streaming_event_handler(
     Callable[[], list[str]],
     Callable[[], list[AgentTimelineItem]],
     Callable[[], None],
+    Callable[[], None],
     Callable[[], ToolArtifacts],
 ]:
-    timeline_tracker, tool_snapshot, timeline_snapshot, tool_tick = (
-        _make_agent_timeline_tracker(layout.tools_placeholder)
-    )
+    (
+        timeline_tracker,
+        tool_snapshot,
+        timeline_snapshot,
+        tool_tick,
+        _domain_typewriter_pending,
+        domain_typewriter_snap,
+    ) = _make_agent_timeline_tracker(layout.tools_placeholder)
     node_start_tracker, node_start_snapshot = _make_live_node_start_updater(
         layout.node_starts_placeholder
     )
@@ -2038,6 +2466,7 @@ def _make_streaming_event_handler(
         node_start_snapshot,
         timeline_snapshot,
         tool_tick,
+        domain_typewriter_snap,
         artifacts_snapshot,
     )
 
@@ -2821,6 +3250,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     node_start_snapshot,
                     timeline_snapshot,
                     tool_tick,
+                    domain_typewriter_snap,
                     artifacts_snapshot,
                 ) = _make_streaming_event_handler(layout=layout)
                 try:
@@ -2833,6 +3263,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         tools_callback=tools_callback,
                         nodes_callback=nodes_callback,
                         tools_tick=tool_tick,
+                        domain_typewriter_snap=domain_typewriter_snap,
                         artifacts_snapshot=artifacts_snapshot,
                         trace_callback=trace_callback,
                         thinking_callback=thinking_callback,
@@ -3153,6 +3584,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                     node_start_snapshot,
                     timeline_snapshot,
                     tool_tick,
+                    domain_typewriter_snap,
                     artifacts_snapshot,
                 ) = _make_streaming_event_handler(layout=layout)
                 try:
@@ -3162,6 +3594,7 @@ if isinstance(pending, dict) and pending.get("needs_input"):
                         tools_callback=tools_callback,
                         nodes_callback=nodes_callback,
                         tools_tick=tool_tick,
+                        domain_typewriter_snap=domain_typewriter_snap,
                         artifacts_snapshot=artifacts_snapshot,
                         trace_callback=trace_callback,
                         thinking_callback=thinking_callback,
@@ -3516,6 +3949,7 @@ if user_input:
             node_start_snapshot,
             timeline_snapshot,
             tool_tick,
+            domain_typewriter_snap,
             artifacts_snapshot,
         ) = _make_streaming_event_handler(layout=layout)
 
@@ -3538,6 +3972,7 @@ if user_input:
                 tools_callback=tools_callback,
                 nodes_callback=nodes_callback,
                 tools_tick=tool_tick,
+                domain_typewriter_snap=domain_typewriter_snap,
                 artifacts_snapshot=artifacts_snapshot,
                 trace_callback=trace_callback,
                 thinking_callback=thinking_callback,
@@ -3614,7 +4049,9 @@ if user_input:
                     tool_calls=tool_snapshot(),
                     node_start_lines=_turn_node_start_lines(node_start_snapshot),
                     agent_timeline=_turn_agent_timeline(timeline_snapshot),
-                    node_result_lines=_node_results_from_timeline(agent_timeline),
+                    node_result_lines=_node_results_from_timeline(
+                        _turn_agent_timeline(timeline_snapshot)
+                    ),
                 )
             )
             st.session_state.messages_en.append(

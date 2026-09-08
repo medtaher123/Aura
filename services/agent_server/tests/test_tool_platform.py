@@ -394,6 +394,7 @@ def test_discover_native_tools_scans_package():
         "request_bounding_box_user_input",
         "request_location_user_input",
         "request_multiple_choice_user_input",
+        "wait",
     ]
 
 
@@ -411,8 +412,14 @@ async def test_build_default_native_provider_registers_discovered_tools():
         "request_bounding_box_user_input",
         "request_location_user_input",
         "request_multiple_choice_user_input",
+        "wait",
     }
 
     result = await provider.invoke("calculator", {"expression": "2+3"})
     assert result.error is False
     assert result.message == "5"
+
+    waited = await provider.invoke("wait", {"seconds": 0})
+    assert waited.error is False
+    assert waited.data["seconds"] == 0
+    assert "Waited 0" in waited.message

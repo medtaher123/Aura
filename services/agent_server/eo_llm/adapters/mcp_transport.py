@@ -9,8 +9,17 @@ from typing import Any, Optional
 from src.config import get_config
 
 
-def mcp_streamable_http_url(base_url: str | None = None) -> str:
-    """Normalize configured MCP base URL to the Streamable HTTP endpoint (…/mcp)."""
+def mcp_streamable_http_url(
+    base_url: str | None = None,
+    *,
+    append_mcp_path: bool = True,
+) -> str:
+    """Normalize configured MCP base URL to the Streamable HTTP endpoint.
+
+    Most servers expose MCP at ``{base}/mcp``. Pass ``append_mcp_path=False``
+    when ``base_url`` is already the complete endpoint (e.g. Pappers
+    ``https://mcp.pappers.fr/{api_key}``).
+    """
     if base_url is None:
         try:
             base_url = get_config().mcp_server_url.strip()
@@ -20,7 +29,7 @@ def mcp_streamable_http_url(base_url: str | None = None) -> str:
         base_url = (os.getenv("MCP_SERVER_URL") or "http://localhost:8000").strip()
 
     base = base_url.rstrip("/")
-    if base.endswith("/mcp"):
+    if not append_mcp_path or base.endswith("/mcp"):
         return base
     return f"{base}/mcp"
 

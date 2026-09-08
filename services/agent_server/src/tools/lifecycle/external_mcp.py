@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import yaml
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import AgentServerConfig, get_config
@@ -91,6 +92,9 @@ def load_external_mcp_config(path: Path | None = None) -> dict[str, Any]:
         raise FileNotFoundError(
             f"External MCP config file not found: {config_path}"
         )
+    # YAML ``${VAR}`` expansion reads the process env; load the service .env
+    # so keys that are not pydantic Settings fields (e.g. PAPPERS_API_KEY) exist.
+    load_dotenv(Path(__file__).resolve().parents[3] / ".env")
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(
@@ -250,6 +254,8 @@ class ExternalMcpReconciler:
             display_name = str(entry.get("display_name") or slug)
             auth_headers = dict(entry.get("auth_headers") or {})
             config_enabled = bool(entry.get("enabled", True))
+            if entry.get("append_mcp_path") is False:
+                stdio_config["append_mcp_path"] = False
 
             existing = await servers_repo.get_by_slug(slug)
             if existing is None:

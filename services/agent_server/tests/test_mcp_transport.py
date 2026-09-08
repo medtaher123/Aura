@@ -24,6 +24,16 @@ def test_mcp_streamable_http_url_preserves_mcp_suffix():
     )
 
 
+def test_mcp_streamable_http_url_skips_append_when_disabled():
+    assert (
+        mcp_streamable_http_url(
+            "https://mcp.pappers.fr/abc",
+            append_mcp_path=False,
+        )
+        == "https://mcp.pappers.fr/abc"
+    )
+
+
 def test_tool_input_schema_prefers_snake_case():
     tool = SimpleNamespace(
         input_schema={"type": "object", "properties": {"lat": {"type": "number"}}},

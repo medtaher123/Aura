@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -108,17 +109,23 @@ class DomainToolAgent:
                     error=True,
                 )
 
-            for call in turn.tool_calls:
-                record = await self._invoke_tool(
-                    call=call,
-                    turn_index=turn_index,
-                    allowed=allowed,
-                    runtime_args_by_tool=runtime_args_by_tool,
-                    gateway=gateway,
-                    domain=domain,
-                    execution_context=execution_context,
-                )
-                records.append(record)
+            # Same-turn tool calls run concurrently; order matches the LLM list.
+            batch = await asyncio.gather(
+                *[
+                    self._invoke_tool(
+                        call=call,
+                        turn_index=turn_index,
+                        allowed=allowed,
+                        runtime_args_by_tool=runtime_args_by_tool,
+                        gateway=gateway,
+                        domain=domain,
+                        execution_context=execution_context,
+                    )
+                    for call in turn.tool_calls
+                ]
+            )
+            records.extend(batch)
+            for record in batch:
                 if record.result and self._pause_needs(record.result):
                     return DomainAgentRunResult(
                         domain=domain,
