@@ -92,7 +92,7 @@ async def test_maxar_imagery_tool_empty_country(mcp_client):
 @pytest.mark.asyncio
 async def test_maxar_imagery_tool_invalid_year(mcp_client):
     """Framework rejects non-integer year (Pydantic validation)."""
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     with pytest.raises(ToolError) as exc_info:
         await mcp_client.call_tool(
@@ -118,9 +118,9 @@ def _make_fake_child_catalog_with_item():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@patch("tools.maxar_open_data._fetch_stac_with_requests")
-@patch("tools.maxar_open_data._open_event_collection")
-@patch("tools.maxar_open_data.pystac.Catalog.from_file")
+@patch("modules.imagery.maxar_open_data._fetch_stac_with_requests")
+@patch("modules.imagery.maxar_open_data._open_event_collection")
+@patch("modules.imagery.maxar_open_data.pystac.Catalog.from_file")
 async def test_maxar_imagery_tool_mocked(mock_from_file, mock_open_collection, mock_fetch_stac, mcp_client):
     """Imagery tool returns events and artifacts for country + year (pystac mocked)."""
     mock_from_file.return_value = _make_fake_root_catalog()
@@ -154,7 +154,7 @@ async def test_maxar_imagery_tool_mocked(mock_from_file, mock_open_collection, m
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@patch("tools.maxar_open_data.pystac.Catalog.from_file")
+@patch("modules.imagery.maxar_open_data.pystac.Catalog.from_file")
 async def test_maxar_imagery_tool_no_match(mock_from_file, mcp_client):
     """Imagery tool returns no events when country/year match nothing."""
     mock_from_file.return_value = _make_fake_root_catalog()
@@ -171,7 +171,7 @@ async def test_maxar_imagery_tool_no_match(mock_from_file, mcp_client):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@patch("tools.maxar_open_data.pystac.Catalog.from_file")
+@patch("modules.imagery.maxar_open_data.pystac.Catalog.from_file")
 async def test_maxar_imagery_tool_catalog_unavailable(mock_from_file, mcp_client):
     """When catalog load fails, tool returns no events."""
     mock_from_file.side_effect = Exception("timeout")
@@ -188,9 +188,9 @@ async def test_maxar_imagery_tool_catalog_unavailable(mock_from_file, mcp_client
 @pytest.mark.unit
 def test_get_event_ids_by_location_and_date():
     """Normal function returns matching event IDs (pystac root mocked)."""
-    from tools.maxar_open_data import get_event_ids_by_location_and_date
+    from modules.imagery.maxar_open_data import get_event_ids_by_location_and_date
 
-    with patch("tools.maxar_open_data.pystac.Catalog.from_file") as mock_from_file:
+    with patch("modules.imagery.maxar_open_data.pystac.Catalog.from_file") as mock_from_file:
         mock_from_file.return_value = _make_fake_root_catalog()
         ids = get_event_ids_by_location_and_date("Brazil", 2024)
         assert "Brazil-Flooding-May24" in ids

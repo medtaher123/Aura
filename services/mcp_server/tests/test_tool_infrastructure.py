@@ -5,7 +5,7 @@ Tests for infrastructure query tool.
 import pytest
 
 from utils.bbox_service import LocationAmbiguousError
-from tools import infrastructure as infra
+from modules.geospatial import infrastructure as infra
 
 
 class FakeAthenaClient:
@@ -71,6 +71,7 @@ async def test_infrastructure_tool_exists(mcp_client):
     tools = await mcp_client.list_tools()
     tool_names = [t["name"] for t in tools]
     assert "infrastructure_query_tool" in tool_names
+    assert "bdtopo_buildings_by_cleabs_tool" in tool_names
 
 
 @pytest.mark.unit
@@ -231,3 +232,230 @@ async def test_infrastructure_tool_hospitals_near_paris_group_breakdown(
         f"group_breakdown should be {{'hospital': {{'hospital': 33}}}}, "
         f"got {group_breakdown}"
     )
+
+
+@pytest.mark.unit
+def test_bdtopo_buildings_by_cleabs_single(monkeypatch):
+    def fake_get_batiment_columns():
+        return {
+            "cleabs",
+            "nature",
+            "usage_1",
+            "nombre_d_etages",
+            "hauteur",
+            "geometrie",
+        }
+
+    def fake_run_query(_sql_query, params=()):
+        requested, _order, _limit = params
+        assert requested == ["BATIMENT0001"]
+        return [
+            {
+                "cleabs": "BATIMENT0001",
+                "nature": "Indifferencie",
+                "usage_1": "Residentiel",
+                "nombre_d_etages": 3,
+                "hauteur": 11.5,
+            }
+        ]
+
+    monkeypatch.setattr(infra, "_get_batiment_columns", fake_get_batiment_columns)
+    monkeypatch.setattr(infra, "_run_bdtopo_query", fake_run_query)
+
+    result = infra.bdtopo_buildings_by_cleabs_tool("BATIMENT0001")
+
+    assert result.tool_name == "bdtopo_buildings_by_cleabs_tool"
+    assert result.error is False
+    assert result.coordinates is None
+    assert result.data["found_cleabs"] == ["BATIMENT0001"]
+    assert result.data["missing_cleabs"] == []
+    assert result.data["include_geometry"] is False
+    assert len(result.data["matches"]) == 1
+    assert result.data["matches"][0]["label"] == "BATIMENT0001"
+    assert result.data["matches"][0]["source_table"] == "bdtopo_raw.batiment"
+    assert result.artifacts.maps == []
+
+
+@pytest.mark.unit
+def test_bdtopo_buildings_by_cleabs_projects_available_attributes(monkeypatch):
+    captured = {}
+    available = {
+        "cleabs",
+        "identifiants_rnb",
+        "nature",
+        "usage_1",
+        "usage_2",
+        "etat_de_l_objet",
+        "nombre_d_etages",
+        "nombre_de_logements",
+        "hauteur",
+        "altitude_minimale_sol",
+        "altitude_maximale_toit",
+        "materiaux_des_murs",
+        "materiaux_de_la_toiture",
+        "origine_du_batiment",
+        "geometrie",
+        "fid",
+        "loaded_at",
+        "source_file",
+    }
+
+    def fake_run_query(sql_query, params=()):
+        captured["sql"] = str(sql_query)
+        return [{"cleabs": "BATIMENT0001", "identifiants_rnb": "RNB-1"}]
+
+    monkeypatch.setattr(infra, "_get_batiment_columns", lambda: available)
+    monkeypatch.setattr(infra, "_run_bdtopo_query", fake_run_query)
+
+    result = infra.bdtopo_buildings_by_cleabs_tool("BATIMENT0001")
+
+    sql = captured["sql"]
+    assert "identifiants_rnb" in sql
+    assert "nombre_de_logements" in sql
+    assert "materiaux_des_murs" in sql
+    assert "altitude_minimale_sol" in sql
+    assert "loaded_at" not in sql
+    assert "source_file" not in sql
+    assert result.data["matches"][0]["identifiants_rnb"] == "RNB-1"
+
+
+@pytest.mark.unit
+def test_bdtopo_buildings_by_cleabs_multiple_with_missing(monkeypatch):
+    def fake_get_batiment_columns():
+        return {"cleabs", "nature", "usage_1", "geometrie"}
+
+    def fake_run_query(_sql_query, params=()):
+        requested, _order, limit = params
+        assert requested == ["BATIMENT0001", "BATIMENT0002", "BATIMENT0003"]
+        assert limit == 3
+        return [
+            {
+                "cleabs": "BATIMENT0002",
+                "nature": "Indifferencie",
+                "usage_1": "Residentiel",
+                "feature_lat": 43.2965,
+                "feature_lon": 5.3698,
+                "geom_geojson": {
+                    "type": "Polygon",
+                    "coordinates": [[[5.36, 43.29], [5.37, 43.29], [5.37, 43.30], [5.36, 43.30], [5.36, 43.29]]],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(infra, "_get_batiment_columns", fake_get_batiment_columns)
+    monkeypatch.setattr(infra, "_run_bdtopo_query", fake_run_query)
+
+    result = infra.bdtopo_buildings_by_cleabs_tool(
+        ["BATIMENT0001", "BATIMENT0002", "BATIMENT0002", "BATIMENT0003"]
+    )
+
+    assert result.error is False
+    assert result.data["requested_cleabs"] == [
+        "BATIMENT0001",
+        "BATIMENT0002",
+        "BATIMENT0003",
+    ]
+    assert result.data["found_cleabs"] == ["BATIMENT0002"]
+    assert result.data["missing_cleabs"] == ["BATIMENT0001", "BATIMENT0003"]
+    assert "Missing: BATIMENT0001, BATIMENT0003." in result.message
+
+
+@pytest.mark.unit
+def test_bdtopo_buildings_by_cleabs_requires_values():
+    result = infra.bdtopo_buildings_by_cleabs_tool(["", "   "])
+    assert result.error is True
+    assert result.data["requested_cleabs"] == []
+
+
+@pytest.mark.unit
+def test_bdtopo_buildings_by_cleabs_without_geometry(monkeypatch):
+    captured = {}
+
+    def fake_get_batiment_columns():
+        return {
+            "cleabs",
+            "nature",
+            "usage_1",
+            "geometrie",
+        }
+
+    def fake_run_query(sql_query, params=()):
+        captured["sql"] = str(sql_query)
+        requested, _order, _limit = params
+        assert requested == ["BATIMENT0001"]
+        return [
+            {
+                "cleabs": "BATIMENT0001",
+                "nature": "Indifferencie",
+                "usage_1": "Residentiel",
+            }
+        ]
+
+    monkeypatch.setattr(infra, "_get_batiment_columns", fake_get_batiment_columns)
+    monkeypatch.setattr(infra, "_run_bdtopo_query", fake_run_query)
+
+    result = infra.bdtopo_buildings_by_cleabs_tool(
+        "BATIMENT0001",
+        include_geometry=False,
+    )
+
+    assert result.error is False
+    assert "ST_AsGeoJSON" not in captured["sql"]
+    assert "ST_PointOnSurface" not in captured["sql"]
+    assert result.coordinates is None
+    assert result.artifacts.maps == []
+    assert result.data["include_geometry"] is False
+    assert result.data["matches"][0].get("geom_geojson") is None
+
+
+@pytest.mark.unit
+def test_bdtopo_buildings_by_cleabs_with_geometry(monkeypatch):
+    def fake_get_batiment_columns():
+        return {
+            "cleabs",
+            "nature",
+            "usage_1",
+            "nombre_d_etages",
+            "hauteur",
+            "geometrie",
+        }
+
+    def fake_run_query(_sql_query, params=()):
+        requested, _order, _limit = params
+        assert requested == ["BATIMENT0001"]
+        return [
+            {
+                "cleabs": "BATIMENT0001",
+                "nature": "Indifferencie",
+                "usage_1": "Residentiel",
+                "nombre_d_etages": 3,
+                "hauteur": 11.5,
+                "feature_lat": 48.8567,
+                "feature_lon": 2.3523,
+                "geom_geojson": {
+                    "type": "Polygon",
+                    "coordinates": [[[2.35, 48.85], [2.36, 48.85], [2.36, 48.86], [2.35, 48.86], [2.35, 48.85]]],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(infra, "_get_batiment_columns", fake_get_batiment_columns)
+    monkeypatch.setattr(infra, "_run_bdtopo_query", fake_run_query)
+
+    result = infra.bdtopo_buildings_by_cleabs_tool(
+        "BATIMENT0001",
+        include_geometry=True,
+    )
+
+    assert result.coordinates is not None
+    assert result.coordinates.model_dump() == {
+        "lat": 48.8567,
+        "lon": 2.3523,
+        "zoom": None,
+    }
+    assert result.data["include_geometry"] is True
+    assert result.artifacts.maps[0]["tooltip"]["text"].startswith("CLEABS: {cleabs}")
+    view_state = result.artifacts.maps[0]["view_state"]
+    assert abs(view_state["latitude"] - 48.855) < 0.01
+    assert abs(view_state["longitude"] - 2.355) < 0.01
+    assert view_state["zoom"] >= 16.0

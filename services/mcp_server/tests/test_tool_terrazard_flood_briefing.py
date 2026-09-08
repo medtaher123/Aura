@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools.terrazard.briefing_service import FloodBriefing
+from modules.flood.terrazard.briefing_service import FloodBriefing
 from utils.contracts import ToolArtifacts, ToolCoordinates
 
 
@@ -18,7 +18,7 @@ async def test_terrazard_flood_briefing_tool_exists(mcp_client):
 
 @pytest.mark.unit
 def test_flood_briefing_tool_requires_dates():
-    from tools.terrazard.terrazard_flood_briefing import get_terrazard_flood_briefing_tool
+    from modules.flood.terrazard.terrazard_flood_briefing import get_terrazard_flood_briefing_tool
 
     result = get_terrazard_flood_briefing_tool(
         start_date="",
@@ -31,7 +31,7 @@ def test_flood_briefing_tool_requires_dates():
 
 @pytest.mark.unit
 def test_flood_briefing_tool_success(monkeypatch):
-    from tools.terrazard import terrazard_flood_briefing as mod
+    from modules.flood.terrazard import terrazard_flood_briefing as mod
 
     monkeypatch.setattr(
         mod,

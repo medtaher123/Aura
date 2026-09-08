@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from tools.terrazard.errors import TerrazardDataError
-from tools.terrazard.repository import MapStats
-from tools.terrazard.tile_url_builder import HazardLayerTileBuilder
+from modules.flood.terrazard.errors import TerrazardDataError
+from modules.flood.terrazard.repository import MapStats
+from modules.flood.terrazard.tile_url_builder import HazardLayerTileBuilder
 
 
 @pytest.mark.unit

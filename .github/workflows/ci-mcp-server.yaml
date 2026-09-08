@@ -40,8 +40,10 @@ jobs:
 
             - name: Run tests with pytest and coverage
               working-directory: services/mcp_server
+              env:
+                  PYTHONPATH: .
               run: |
-                  pytest -v -m 'not integration' --cov=. --cov-report=xml --cov-report=html --cov-report=term
+                  pytest --rootdir=. -c pytest.ini -v -m 'not integration' --cov=. --cov-report=xml --cov-report=html --cov-report=term
 
             - name: Upload test results
               if: always()

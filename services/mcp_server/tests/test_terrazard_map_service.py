@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from tools.terrazard.errors import TerrazardDataError
-from tools.terrazard.map_service import TerrazardMapService
-from tools.terrazard.repository import MapStats
-from tools.terrazard.tile_url_builder import HazardLayerTileBuilder, VectorLayerConfig
+from modules.flood.terrazard.errors import TerrazardDataError
+from modules.flood.terrazard.map_service import TerrazardMapService
+from modules.flood.terrazard.repository import MapStats
+from modules.flood.terrazard.tile_url_builder import HazardLayerTileBuilder, VectorLayerConfig
 from utils.contracts import ToolCoordinates
 
 

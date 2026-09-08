@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tools.terrazard.briefing_service import BriefingService
-from tools.terrazard.repository import (
+from modules.flood.terrazard.briefing_service import BriefingService
+from modules.flood.terrazard.repository import (
     AreaStats,
     DepthProfile,
     MapStats,
@@ -39,8 +39,8 @@ class StubRepository:
 
 class StubMapService:
     def build_single_date_map(self, **kwargs):
-        from tools.terrazard.map_service import TerrazardMapConfig
-        from tools.terrazard.tile_url_builder import VectorLayerConfig
+        from modules.flood.terrazard.map_service import TerrazardMapConfig
+        from modules.flood.terrazard.tile_url_builder import VectorLayerConfig
 
         return TerrazardMapConfig(
             title="Map",
@@ -75,4 +75,8 @@ def test_briefing_service_builds_agent_briefing():
     assert briefing.agent_briefing["depth_profile"]["median_depth_m"] == 0.8
     assert briefing.agent_briefing["extent"]["flooded_km2"] == 12.3
     assert briefing.artifacts.maps
+    map_spec = briefing.artifacts.maps[0]
+    assert map_spec["bbox"] == [48.8, 48.9, 2.2, 2.5]
+    assert map_spec["box"]["geometry"]["type"] == "Polygon"
+    assert map_spec["box"]["properties"]["kind"] == "treated_area_bbox"
     assert "TerraZard flood briefing" in briefing.message

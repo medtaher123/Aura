@@ -3,7 +3,7 @@ Tests for individual MCP tools.
 """
 
 import pytest
-from tools.simple_tools import get_time, get_date, calculator
+from modules.utility.simple_tools import get_time, get_date, calculator
 from utils.contracts import ToolResponse
 
 

@@ -2,14 +2,33 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
-from tools.terrazard.errors import TerrazardDataError
-from tools.terrazard.spatial import (
+from modules.flood.terrazard.errors import TerrazardDataError
+from modules.flood.terrazard.spatial import (
+    format_terrazard_date,
     normalize_terrazard_date,
+    parse_terrazard_date,
     validate_dates,
     validate_observation_date,
 )
+
+
+@pytest.mark.unit
+def test_parse_terrazard_date_compact():
+    assert parse_terrazard_date("20240315") == date(2024, 3, 15)
+
+
+@pytest.mark.unit
+def test_parse_terrazard_date_iso():
+    assert parse_terrazard_date("2024-03-15") == date(2024, 3, 15)
+
+
+@pytest.mark.unit
+def test_format_terrazard_date():
+    assert format_terrazard_date(date(2024, 3, 15)) == "20240315"
 
 
 @pytest.mark.unit
@@ -38,3 +57,9 @@ def test_validate_dates_accepts_iso():
 def test_normalize_terrazard_date_rejects_invalid():
     with pytest.raises(TerrazardDataError, match="must be YYYYMMDD or YYYY-MM-DD"):
         normalize_terrazard_date("15/03/2024", field_name="observation_date")
+
+
+@pytest.mark.unit
+def test_parse_terrazard_date_rejects_impossible_day():
+    with pytest.raises(TerrazardDataError, match="must be YYYYMMDD or YYYY-MM-DD"):
+        parse_terrazard_date("20240230", field_name="observation_date")

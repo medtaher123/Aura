@@ -15,7 +15,7 @@ async def test_terrazard_hazard_map_tool_exists(mcp_client):
 
 @pytest.mark.unit
 def test_hazard_map_tool_requires_observation_date():
-    from tools.terrazard.terrazard_hazard_map import get_terrazard_hazard_map_tool
+    from modules.flood.terrazard.terrazard_hazard_map import get_terrazard_hazard_map_tool
 
     result = get_terrazard_hazard_map_tool(
         observation_date="",
@@ -28,16 +28,16 @@ def test_hazard_map_tool_requires_observation_date():
 
 @pytest.mark.unit
 def test_hazard_map_tool_requires_location():
-    from tools.terrazard.terrazard_hazard_map import get_terrazard_hazard_map_tool
+    from modules.flood.terrazard.terrazard_hazard_map import get_terrazard_hazard_map_tool
 
     result = get_terrazard_hazard_map_tool(observation_date="20240315")
     assert result.error is True
-    assert "location or lat/lon" in result.message
+    assert "location" in result.message.lower() and "lat/lon" in result.message.lower()
 
 
 @pytest.mark.unit
 def test_hazard_map_tool_location_ambiguity(monkeypatch):
-    from tools.terrazard import terrazard_hazard_map as mod
+    from modules.flood.terrazard import terrazard_hazard_map as mod
     from utils.bbox_service import LocationAmbiguousError
 
     def _raise_ambiguity(*_args, **_kwargs):
@@ -58,9 +58,9 @@ def test_hazard_map_tool_location_ambiguity(monkeypatch):
 
 @pytest.mark.unit
 def test_hazard_map_tool_success(monkeypatch):
-    from tools.terrazard import terrazard_hazard_map as mod
-    from tools.terrazard.map_service import TerrazardMapConfig
-    from tools.terrazard.tile_url_builder import VectorLayerConfig
+    from modules.flood.terrazard import terrazard_hazard_map as mod
+    from modules.flood.terrazard.map_service import TerrazardMapConfig
+    from modules.flood.terrazard.tile_url_builder import VectorLayerConfig
     from utils.contracts import ToolCoordinates
 
     monkeypatch.setattr(
@@ -116,9 +116,9 @@ def test_hazard_map_tool_success(monkeypatch):
 
 @pytest.mark.unit
 def test_hazard_map_tool_accepts_iso_observation_date(monkeypatch):
-    from tools.terrazard import terrazard_hazard_map as mod
-    from tools.terrazard.map_service import TerrazardMapConfig
-    from tools.terrazard.tile_url_builder import VectorLayerConfig
+    from modules.flood.terrazard import terrazard_hazard_map as mod
+    from modules.flood.terrazard.map_service import TerrazardMapConfig
+    from modules.flood.terrazard.tile_url_builder import VectorLayerConfig
     from utils.contracts import ToolCoordinates
 
     monkeypatch.setattr(
@@ -170,8 +170,8 @@ def test_hazard_map_tool_accepts_iso_observation_date(monkeypatch):
 
 @pytest.mark.unit
 def test_hazard_map_tool_empty_data(monkeypatch):
-    from tools.terrazard import terrazard_hazard_map as mod
-    from tools.terrazard.errors import TerrazardDataError
+    from modules.flood.terrazard import terrazard_hazard_map as mod
+    from modules.flood.terrazard.errors import TerrazardDataError
     from utils.contracts import ToolCoordinates
 
     monkeypatch.setattr(

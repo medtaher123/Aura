@@ -2,7 +2,22 @@
 Pytest configuration and shared fixtures for streamlit service tests.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
+
+_SRC = Path(__file__).resolve().parents[1]
+_ROOT = _SRC.parent
+
+# CI collects from the repo root pyproject.toml, which also puts
+# services/agent_server on pythonpath. Insert this service first so
+# ``src.core.memory`` resolves here instead of agent_server's ``src``.
+for path in (str(_ROOT), str(_SRC)):
+    if path in sys.path:
+        sys.path.remove(path)
+sys.path.insert(0, str(_SRC))
+sys.path.insert(0, str(_ROOT))
 
 from models import ToolCoordinates, ToolResponse, ToolArtifacts
 from clients import ChatMessage

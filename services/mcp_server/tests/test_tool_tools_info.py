@@ -3,7 +3,7 @@ Tests for tools_info_tool
 """
 
 import pytest
-from tools.tools_info import tools_info_tool
+from modules.utility.tools_info import tools_info_tool
 from utils.contracts import ToolResponse
 
 
@@ -133,7 +133,7 @@ def test_query_list_all_variant():
 
 def test_query_what_tools_about_floods():
     """Scoped tool questions should search, not dump the full catalog."""
-    result = tools_info_tool(query="what tools do you have about floods")
+    result = tools_info_tool(query="what tools do you have about flood")
 
     assert result.error is False
     assert "relevant_tools" in result.data
@@ -194,6 +194,7 @@ def test_infrastructure_category():
     assert "Infrastructure & Geography" in result.data["category"]
     assert "infrastructure_query_tool" in result.data["tools"]
     assert "bdtopo_query_tool" in result.data["tools"]
+    assert "bdtopo_buildings_by_cleabs_tool" in result.data["tools"]
     assert "bdtopo_intersection_tool" in result.data["tools"]
     assert "bdtopo_coverage_quality_tool" in result.data["tools"]
     assert "bdtopo_change_snapshot_tool" in result.data["tools"]
@@ -207,6 +208,14 @@ def test_bdtopo_tool_info():
     assert result.error is False
     assert "BDTOPO PostGIS Query Tool" in result.message
     assert "query_type" in result.message
+
+
+def test_bdtopo_buildings_by_cleabs_tool_info():
+    result = tools_info_tool(tool_name="bdtopo_buildings_by_cleabs_tool")
+
+    assert result.error is False
+    assert "BDTOPO Buildings By Cleabs Tool" in result.message
+    assert "cleabs" in result.message
 
 
 def test_utilities_category():

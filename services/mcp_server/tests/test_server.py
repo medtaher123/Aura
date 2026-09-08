@@ -8,7 +8,7 @@ from config import get_config
 
 @pytest.mark.unit
 def test_mcp_server_exists(mcp_server):
-    """Test FastMCP server is properly initialized."""
+    """Test MCPServer is properly initialized."""
     assert mcp_server is not None
     config = get_config()
     assert mcp_server.name == config.name

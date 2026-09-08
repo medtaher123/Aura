@@ -1,10 +1,16 @@
 """Pytest configuration and fixtures for MCP server tests."""
 
 import os
+import sys
 import asyncio
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
+
+_SERVICE_ROOT = Path(__file__).resolve().parents[1]
+if str(_SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SERVICE_ROOT))
 
 
 # Ensure required settings are present during tests.
@@ -38,25 +44,18 @@ class MockMCPClient:
 
     def __init__(self, mcp_instance):
         self.mcp = mcp_instance
-        # Import tools to ensure they're registered
-        import tools  # noqa: F401
 
     async def call_tool(self, tool_name: str, arguments: dict = None):
         """Call a tool by name with given arguments."""
         if arguments is None:
             arguments = {}
 
-        # Use FastMCP's built-in call_tool method
-        # Returns a list of TextContent objects (most tools)
-        # OR a tuple ([TextContent...], dict) for some tools like geoserver
         result = await self.mcp.call_tool(tool_name, arguments)
 
-        # Handle tuple case (geoserver_risk_mask_tool returns tuple)
         if isinstance(result, tuple) and len(result) == 2:
             text_contents, result_dict = result
             return result_dict
 
-        # Handle list of TextContent objects (most tools)
         import json
 
         if result and len(result) > 0 and hasattr(result[0], "text"):
@@ -66,10 +65,8 @@ class MockMCPClient:
 
     async def list_tools(self):
         """List all available tools."""
-        # Use FastMCP's built-in list_tools method
         tools_result = await self.mcp.list_tools()
 
-        # tools_result is already a list of Tool objects
         tools_list = []
         for tool in tools_result:
             tools_list.append(
@@ -81,18 +78,23 @@ class MockMCPClient:
         return tools_list
 
 
+@pytest.fixture(scope="session")
+def bootstrapped_app():
+    """Import main to run module discovery + tool registration once per session."""
+    import main
+
+    return main.app
+
+
 @pytest.fixture
-def mcp_client():
+def mcp_client(bootstrapped_app):
     """MCP client fixture for testing tools."""
     return MockMCPClient(mcp)
 
 
 @pytest.fixture
-def mcp_server():
-    """FastMCP server instance fixture."""
-    # Import tools to ensure they're registered
-    import tools  # noqa: F401
-
+def mcp_server(bootstrapped_app):
+    """MCPServer instance fixture."""
     return mcp
 
 
@@ -111,15 +113,13 @@ def sample_tool_call():
 @pytest.fixture
 def sample_city_bbox_call():
     """Sample bbox tool call for testing."""
-    return {"name": "infrastructure_query_tool", "arguments": {"location": "Paris", "radius_km": 10}}
+    return {
+        "name": "infrastructure_query_tool",
+        "arguments": {"location": "Paris", "radius_km": 10},
+    }
 
 
 @pytest.fixture
-def client():
-    """HTTP test client for testing FastMCP HTTP endpoints."""
-    # Import server to ensure routes are registered
-    import server  # noqa: F401
-
-    # Get the ASGI app from FastMCP (call the method)
-    app = mcp.streamable_http_app()
-    return TestClient(app)
+def client(bootstrapped_app):
+    """HTTP test client for management API + Streamable HTTP."""
+    return TestClient(bootstrapped_app)

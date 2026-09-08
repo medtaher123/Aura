@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from tools.terrazard.analytics_service import (
+from modules.flood.terrazard.analytics_service import (
     DateSelectionPolicy,
     assess_data_quality,
     classify_severity,
     compute_temporal_context,
 )
-from tools.terrazard.repository import WaterDateCount
+from modules.flood.terrazard.repository import WaterDateCount
 
 
 @pytest.mark.unit

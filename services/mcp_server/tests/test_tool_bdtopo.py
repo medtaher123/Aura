@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools import bdtopo as bd
+from modules.geospatial import bdtopo as bd
 
 
 @pytest.mark.unit
@@ -56,7 +56,7 @@ def test_bdtopo_admin_lookup_success(monkeypatch):
 
 @pytest.mark.unit
 def test_bdtopo_missing_database(monkeypatch):
-    from tools import bdtopo_common
+    from modules.geospatial import bdtopo_common
     monkeypatch.setattr(bdtopo_common, "resolve_database_url", lambda: "")
     result = bd.bdtopo_query_tool(
         query_type="named_places",
@@ -65,4 +65,39 @@ def test_bdtopo_missing_database(monkeypatch):
     )
     assert result.error is True
     assert "BDTOPO database is not configured" in result.message
+
+
+@pytest.mark.unit
+def test_bdtopo_admin_lookup_without_geometry(monkeypatch):
+    captured = {}
+
+    def fake_run_query(sql, _params):
+        captured["sql"] = str(sql)
+        return [
+            {
+                "source_table": "commune",
+                "object_id": "abc123",
+                "label": "Paris",
+                "code_insee": "75056",
+                "population": 2000000,
+                "feature_lat": 48.8566,
+                "feature_lon": 2.3522,
+                "geom_geojson": None,
+            }
+        ]
+
+    monkeypatch.setattr(bd, "_run_query", fake_run_query)
+    result = bd.bdtopo_query_tool(
+        query_type="admin_lookup",
+        lat=48.8566,
+        lon=2.3522,
+        include_geometry=False,
+    )
+
+    assert result.error is False
+    assert "NULL::text AS geom_geojson" in captured["sql"]
+    assert "ST_AsGeoJSON" not in captured["sql"]
+    assert result.artifacts.maps == []
+    assert result.artifacts.urls
+    assert result.data["matches"][0]["geom_geojson"] is None
 

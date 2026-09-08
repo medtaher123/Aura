@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools import flood_damage_city as fdc
+from modules.flood import flood_damage_city as fdc
 
 
 # ----- Helper unit tests -----
