@@ -58,24 +58,19 @@ def create_app(
 
     @app.get("/health")
     async def health_check() -> JSONResponse:
-        """Thin ECS/ALB health check."""
-        try:
-            tools = await mcp.list_tools()
-            uptime = (datetime.now(timezone.utc) - _start_time).total_seconds()
-            return JSONResponse(
-                {
-                    "status": "healthy",
-                    "service": "mcp-server",
-                    "tools_loaded": len(tools),
-                    "uptime_seconds": uptime,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-        except Exception as exc:
-            logger.error("Health check failed: %s", exc)
-            return JSONResponse(
-                {"status": "unhealthy", "error": str(exc)}, status_code=503
-            )
+        """Liveness only. Do not probe tools here — ALB uses this path and a
+        slow or failing list_tools() marks the target unhealthy (HTTP 503).
+        Use /api/health for module probes.
+        """
+        uptime = (datetime.now(timezone.utc) - _start_time).total_seconds()
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "service": "mcp-server",
+                "uptime_seconds": uptime,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     @app.get("/api/health")
     async def api_health(request: Request) -> dict[str, Any]:

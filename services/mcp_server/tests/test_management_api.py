@@ -8,7 +8,7 @@ def test_health_endpoint(client):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "healthy"
-    assert body["tools_loaded"] > 0
+    assert body["service"] == "mcp-server"
 
 
 def test_api_dashboard(client):
