@@ -27,7 +27,4 @@ Data/
 src/maps/RiskMask_*.html
 
 test.ipynb
-*.html
-# Agent-server admin UI is source, not generated output.
-!services/agent_server/static/**/*.html
 **/fixtures/*

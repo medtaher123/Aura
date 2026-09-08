@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Metaplanet MCP Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0e1210;
+      --bg-elev: #161c19;
+      --bg-row: #1b2320;
+      --line: #2a3530;
+      --text: #e7efe9;
+      --muted: #8aa094;
+      --ok: #3dd68c;
+      --ok-dim: rgba(61, 214, 140, 0.12);
+      --bad: #ff6b5a;
+      --bad-dim: rgba(255, 107, 90, 0.12);
+      --warn: #e6b84d;
+      --warn-dim: rgba(230, 184, 77, 0.12);
+      --accent: #7ee0b0;
+      --radius: 10px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(126, 224, 176, 0.08), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(255, 107, 90, 0.05), transparent 45%),
+        var(--bg);
+      color: var(--text);
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .shell {
+      width: min(1100px, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 2rem 0 3rem;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      font-family: Syne, system-ui, sans-serif;
+      font-weight: 800;
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      letter-spacing: -0.03em;
+      line-height: 1;
+      margin: 0;
+    }
+
+    .brand span { color: var(--accent); }
+
+    .sub {
+      margin: 0.45rem 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    button, select {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--bg-elev);
+      color: var(--text);
+      font: inherit;
+      padding: 0.55rem 0.9rem;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    button:hover, select:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: wait; }
+
+    .rate-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .rate-wrap label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    select#refresh-rate {
+      padding-right: 1.6rem;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position:
+        calc(100% - 14px) calc(50% - 2px),
+        calc(100% - 9px) calc(50% - 2px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+    .pill .dot {
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    .pill.ok { color: var(--ok); border-color: rgba(61, 214, 140, 0.35); background: var(--ok-dim); }
+    .pill.ok .dot { background: var(--ok); }
+    .pill.bad { color: var(--bad); border-color: rgba(255, 107, 90, 0.35); background: var(--bad-dim); }
+    .pill.bad .dot { background: var(--bad); }
+    .pill.warn { color: var(--warn); border-color: rgba(230, 184, 77, 0.35); background: var(--warn-dim); }
+    .pill.warn .dot { background: var(--warn); }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.85rem;
+      margin-bottom: 1.75rem;
+    }
+    @media (max-width: 800px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    .metric {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 1rem 1.05rem;
+      min-height: 5.2rem;
+    }
+    .metric .label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.55rem;
+    }
+    .metric .value {
+      font-family: Syne, system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 1.65rem;
+      letter-spacing: -0.02em;
+    }
+    .metric .hint {
+      margin-top: 0.25rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .section-title {
+      font-family: Syne, system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 1.05rem;
+      margin: 0 0 0.85rem;
+      letter-spacing: -0.01em;
+    }
+
+    .modules {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    details.module {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    details.module[open] { border-color: rgba(126, 224, 176, 0.28); }
+
+    summary {
+      list-style: none;
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.85rem;
+      align-items: center;
+      padding: 0.95rem 1.05rem;
+    }
+    summary::-webkit-details-marker { display: none; }
+
+    .summary-badges {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.4rem;
+    }
+
+    .mod-name {
+      font-family: Syne, system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 1.05rem;
+    }
+    .mod-meta {
+      color: var(--muted);
+      font-size: 0.78rem;
+      margin-top: 0.2rem;
+    }
+
+    .body {
+      border-top: 1px solid var(--line);
+      padding: 0.95rem 1.05rem 1.15rem;
+      background: var(--bg-row);
+      display: grid;
+      gap: 1rem;
+    }
+
+    .block h4 {
+      margin: 0 0 0.55rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 500;
+    }
+
+    .conn-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .conn-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.75rem;
+      align-items: center;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.7rem 0.85rem;
+    }
+    .conn-row.ok { border-color: rgba(61, 214, 140, 0.35); }
+    .conn-row.bad { border-color: rgba(255, 107, 90, 0.45); background: rgba(255, 107, 90, 0.06); }
+    .conn-row.warn { border-color: rgba(230, 184, 77, 0.35); }
+
+    .conn-name {
+      font-family: Syne, system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 0.92rem;
+    }
+    .conn-msg {
+      color: var(--muted);
+      font-size: 0.72rem;
+      margin-top: 0.2rem;
+      word-break: break-word;
+    }
+    .conn-kind {
+      display: inline-block;
+      margin-left: 0.4rem;
+      font-size: 0.65rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-family: "IBM Plex Mono", monospace;
+      font-weight: 400;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      background: var(--bg);
+      border-radius: 6px;
+      padding: 0.28rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text);
+    }
+    .chip.optional { opacity: 0.7; }
+    .muted-empty { color: var(--muted); font-size: 0.78rem; }
+
+    .error-banner {
+      display: none;
+      margin-bottom: 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: var(--radius);
+      border: 1px solid rgba(255, 107, 90, 0.4);
+      background: var(--bad-dim);
+      color: #ffc2ba;
+    }
+    .error-banner.show { display: block; }
+
+    footer {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1 class="brand">Metaplanet <span>MCP</span></h1>
+        <p class="sub">Module health, live connections, and registered tools</p>
+      </div>
+      <div class="actions">
+        <div id="status-pill" class="pill"><span class="dot"></span><span>loading</span></div>
+        <div class="rate-wrap">
+          <label for="refresh-rate">Refresh</label>
+          <select id="refresh-rate" aria-label="Auto-refresh interval">
+            <option value="5000">5s</option>
+            <option value="10000" selected>10s</option>
+            <option value="15000">15s</option>
+            <option value="30000">30s</option>
+            <option value="60000">60s</option>
+            <option value="0">Off</option>
+          </select>
+        </div>
+        <button id="refresh-btn" type="button">Refresh now</button>
+      </div>
+    </header>
+
+    <div id="error" class="error-banner"></div>
+
+    <section class="metrics" id="metrics" aria-label="Summary metrics">
+      <div class="metric"><div class="label">Tools</div><div class="value" id="m-tools">—</div><div class="hint">registered</div></div>
+      <div class="metric"><div class="label">Modules</div><div class="value" id="m-modules">—</div><div class="hint" id="m-modules-hint">healthy / total</div></div>
+      <div class="metric"><div class="label">Connections</div><div class="value" id="m-conn">—</div><div class="hint" id="m-conn-hint">live probes</div></div>
+      <div class="metric"><div class="label">Uptime</div><div class="value" id="m-uptime">—</div><div class="hint" id="m-path">since process start</div></div>
+    </section>
+
+    <h2 class="section-title">Modules</h2>
+    <div class="modules" id="modules"></div>
+
+    <footer>
+      <span id="updated">Awaiting first fetch…</span>
+      <span>
+        <a href="/api/dashboard">/api/dashboard</a>
+        ·
+        <a href="/api/dashboard/modules">/api/dashboard/modules</a>
+        ·
+        <a href="/api/health">/api/health</a>
+      </span>
+    </footer>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "mcp-dashboard-refresh-ms";
+    const DEFAULT_REFRESH_MS = 10000;
+    const el = (id) => document.getElementById(id);
+
+    let refreshTimer = null;
+
+    function readRefreshMs() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw === null) return DEFAULT_REFRESH_MS;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= 0 ? n : DEFAULT_REFRESH_MS;
+    }
+
+    function scheduleRefresh(ms) {
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+      if (ms > 0) {
+        refreshTimer = setInterval(loadDashboard, ms);
+      }
+    }
+
+    function formatUptime(seconds) {
+      const s = Math.max(0, Math.floor(Number(seconds) || 0));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const r = s % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${r}s`;
+      return `${r}s`;
+    }
+
+    function setPill(tone, label) {
+      const pill = el("status-pill");
+      pill.className = `pill ${tone}`;
+      pill.innerHTML = `<span class="dot"></span><span>${label}</span>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function statusTone(item) {
+      const status = item.status || "";
+      if (status === "ok" || status === "configured") return "ok";
+      if (status === "unhealthy" || status === "missing" || status === "error") return "bad";
+      if (status === "not_configured" || status === "unknown") return "warn";
+      return item.healthy === true ? "ok" : item.healthy === false ? "bad" : "warn";
+    }
+
+    function statusLabel(item) {
+      const status = item.status || "";
+      if (status === "ok") return "healthy";
+      if (status === "configured") return "configured";
+      if (status === "unhealthy") return "unhealthy";
+      if (status === "not_configured") return "not configured";
+      if (status === "missing") return "missing";
+      if (status === "error") return "error";
+      return item.healthy === true ? "healthy" : item.healthy === false ? "unhealthy" : "unknown";
+    }
+
+    function requirementRows(items) {
+      if (!items.length) return `<div class="muted-empty">None</div>`;
+      return `<div class="conn-list">${items.map((item) => {
+        const tone = statusTone(item);
+        const label = escapeHtml(item.label || item.name || "?");
+        const msg = escapeHtml(item.message || "");
+        const optional = item.required === false ? " · optional" : "";
+        return `
+          <div class="conn-row ${tone}">
+            <div>
+              <div class="conn-name">${label}<span class="conn-kind">${escapeHtml(item.kind || "")}${optional}</span></div>
+              ${msg ? `<div class="conn-msg">${msg}</div>` : ""}
+            </div>
+            <div class="pill ${tone}"><span class="dot"></span><span>${statusLabel(item)}</span></div>
+          </div>
+        `;
+      }).join("")}</div>`;
+    }
+
+    function chip(text, cls = "") {
+      return `<span class="chip ${cls}">${escapeHtml(text)}</span>`;
+    }
+
+    function isOptionalIssue(item) {
+      return item && item.required === false && statusTone(item) !== "ok";
+    }
+
+    function optionalWarnings(mod) {
+      const items = mod.requirements || [
+        ...(mod.connections || []),
+        ...(mod.configs || []),
+        ...(mod.module_dependencies || []),
+      ];
+      return items.filter(isOptionalIssue);
+    }
+
+    function renderModules(modules) {
+      const root = el("modules");
+      if (!modules.length) {
+        root.innerHTML = `<div class="metric"><div class="label">Empty</div><div class="hint">No modules discovered</div></div>`;
+        return;
+      }
+
+      root.innerHTML = modules.map((mod) => {
+        const healthy = mod.healthy === true;
+        const tools = mod.registered_tools || [];
+        const connections = mod.connections || [];
+        const configs = mod.configs || [];
+        const moduleDeps = mod.module_dependencies || [];
+        const connBad = connections.filter((c) => c.status === "unhealthy").length;
+        const connOk = connections.filter((c) => c.status === "ok").length;
+        const warnings = optionalWarnings(mod);
+        const toolChips = tools.length
+          ? tools.map((t) => chip(t)).join("")
+          : chip("no tools registered");
+
+        let connHint = "no connections";
+        if (connections.length) {
+          connHint = `${connOk} healthy · ${connBad} unhealthy · ${connections.length} total`;
+        }
+
+        const warnTitle = warnings
+          .map((w) => `${w.label || w.name}: ${statusLabel(w)}`)
+          .join(" · ");
+        const warnPill = warnings.length
+          ? `<div class="pill warn" title="${escapeHtml(warnTitle)}"><span class="dot"></span><span>${warnings.length} optional warn${warnings.length === 1 ? "" : "s"}</span></div>`
+          : "";
+
+        return `
+          <details class="module">
+            <summary>
+              <div>
+                <div class="mod-name">${escapeHtml(mod.name)}</div>
+                <div class="mod-meta">v${escapeHtml(mod.version || "?")} · ${escapeHtml(mod.state || "unknown")} · ${tools.length} tool${tools.length === 1 ? "" : "s"} · ${connHint}</div>
+              </div>
+              <div class="summary-badges">
+                ${warnPill}
+                <div class="pill ${healthy ? "ok" : "bad"}"><span class="dot"></span><span>${healthy ? "healthy" : "unhealthy"}</span></div>
+              </div>
+            </summary>
+            <div class="body">
+              <div class="block">
+                <h4>Connections <span style="text-transform:none;letter-spacing:0;color:var(--muted)">(probed on refresh)</span></h4>
+                ${requirementRows(connections)}
+              </div>
+              <div class="block">
+                <h4>Configuration</h4>
+                ${requirementRows(configs)}
+              </div>
+              <div class="block">
+                <h4>Module dependencies</h4>
+                ${requirementRows(moduleDeps)}
+              </div>
+              <div class="block">
+                <h4>Registered tools</h4>
+                <div class="chips">${toolChips}</div>
+              </div>
+              ${mod.error ? `<div class="block"><h4>Error</h4><div class="conn-msg">${escapeHtml(String(mod.error))}</div></div>` : ""}
+            </div>
+          </details>
+        `;
+      }).join("");
+    }
+
+    async function loadDashboard() {
+      const btn = el("refresh-btn");
+      btn.disabled = true;
+      try {
+        // Modules first: triggers live connection probes.
+        const modulesRes = await fetch("/api/dashboard/modules", { cache: "no-store" });
+        if (!modulesRes.ok) throw new Error(`/api/dashboard/modules → ${modulesRes.status}`);
+        const modulesPayload = await modulesRes.json();
+        const modules = modulesPayload.modules || [];
+
+        const summaryRes = await fetch("/api/dashboard", { cache: "no-store" });
+        if (!summaryRes.ok) throw new Error(`/api/dashboard → ${summaryRes.status}`);
+        const summary = await summaryRes.json();
+
+        el("error").classList.remove("show");
+        el("m-tools").textContent = String(summary.tools_registered ?? "—");
+        el("m-modules").textContent = `${summary.modules_healthy ?? 0}/${summary.modules_total ?? 0}`;
+        el("m-modules-hint").textContent = `${summary.modules_unhealthy ?? 0} unhealthy`;
+        el("m-conn").textContent = `${summary.connections_healthy ?? 0}/${summary.connections_total ?? 0}`;
+        el("m-conn-hint").textContent =
+          `${summary.connections_unhealthy ?? 0} unhealthy · live probes`;
+        el("m-uptime").textContent = formatUptime(summary.uptime_seconds);
+        el("m-path").textContent = summary.mcp_path || "/mcp";
+
+        const degraded =
+          (summary.modules_unhealthy || 0) > 0 || (summary.connections_unhealthy || 0) > 0;
+        setPill(degraded ? "bad" : "ok", degraded ? "degraded" : "all systems go");
+        renderModules(modules);
+
+        const stamp = modulesPayload.timestamp || summary.timestamp || new Date().toISOString();
+        el("updated").textContent = `Updated ${new Date(stamp).toLocaleString()}`;
+      } catch (err) {
+        el("error").textContent = `Failed to load dashboard: ${err.message || err}`;
+        el("error").classList.add("show");
+        setPill("bad", "unreachable");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    const rateSelect = el("refresh-rate");
+    const initialMs = readRefreshMs();
+    if ([...rateSelect.options].some((o) => Number(o.value) === initialMs)) {
+      rateSelect.value = String(initialMs);
+    } else {
+      rateSelect.value = String(DEFAULT_REFRESH_MS);
+    }
+
+    rateSelect.addEventListener("change", () => {
+      const ms = Number(rateSelect.value);
+      localStorage.setItem(STORAGE_KEY, String(ms));
+      scheduleRefresh(ms);
+    });
+
+    el("refresh-btn").addEventListener("click", loadDashboard);
+    loadDashboard();
+    scheduleRefresh(Number(rateSelect.value));
+  </script>
+</body>
+</html>
