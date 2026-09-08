@@ -1,18 +1,15 @@
-"""Tools module - MCP client integration."""
+"""Tools package: contracts, providers, runtime, lifecycle."""
 
-from .contracts import (
-    ToolResponse,
-    ToolArtifacts,
-    ToolCoordinates,
-)
-from .tools import get_all_tools
-from .mcp_remote_tools import MCPRemoteTool, get_mcp_tools
+from src.tools.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
+from src.tools.lifecycle.bootstrap import ToolPlatformBootstrap, get_tool_platform
+from src.tools.runtime.gateway import ToolGateway, get_tool_gateway
 
 __all__ = [
     "ToolResponse",
     "ToolArtifacts",
     "ToolCoordinates",
-    "get_all_tools",
-    "MCPRemoteTool",
-    "get_mcp_tools",
+    "ToolGateway",
+    "get_tool_gateway",
+    "ToolPlatformBootstrap",
+    "get_tool_platform",
 ]

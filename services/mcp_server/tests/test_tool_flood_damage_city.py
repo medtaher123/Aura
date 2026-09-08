@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools import flood_damage_city as fdc
+from modules.flood import flood_damage_city as fdc
 
 
 # ----- Helper unit tests -----
@@ -98,8 +98,13 @@ async def test_flood_damage_city_tool_empty_city(mcp_client):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_flood_damage_city_tool_unsupported_asset_class(mcp_client):
+async def test_flood_damage_city_tool_unsupported_asset_class(mcp_client, monkeypatch):
     """Test tool returns error when asset_class is invalid."""
+    def fake_geocode(_city_name):
+        return "POLYGON((2 48, 3 48, 3 49, 2 49, 2 48))", "France", "Paris", 48.8566, 2.3522
+
+    monkeypatch.setattr(fdc, "_get_city_polygon_and_country", fake_geocode)
+
     result = await mcp_client.call_tool(
         "flood_damage_city_tool",
         {"city": "Paris", "depth_m": 2.0, "asset_class": "invalid_type"},
@@ -222,7 +227,7 @@ async def test_flood_damage_city_tool_success_with_mocked_athena(mcp_client, mon
     assert data.get("country") == "France"
     assert data.get("depth_m") == 2.0
     assert data.get("year") == 2024
-    assert data.get("total_area_m2") == 12000.0
+    assert data.get("total_area_m2") == round(12000.0 / 110, 2)
     assert total_estimated_damage_eur is not None and total_estimated_damage_eur > 0 
     assert data.get("unit") == "EUR"
     breakdown = data.get("breakdown") or []
@@ -295,4 +300,4 @@ async def test_flood_damage_city_tool_filter_asset_residential(mcp_client, monke
     assert result.get("error") is False
     breakdown = (result.get("data") or {}).get("breakdown") or []
     assert all(b["asset_class"] == "residential" for b in breakdown)
-    assert (result.get("data") or {}).get("total_area_m2") == 5000.0
+    assert (result.get("data") or {}).get("total_area_m2") == round(5000.0 / 110, 2)

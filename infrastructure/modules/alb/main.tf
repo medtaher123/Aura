@@ -6,8 +6,8 @@ resource "aws_lb" "streamlit" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.subnet_ids
 
-  enable_deletion_protection = false
-  enable_http2              = true
+  enable_deletion_protection       = false
+  enable_http2                     = true
   enable_cross_zone_load_balancing = true
 
   tags = {
@@ -80,11 +80,91 @@ resource "aws_lb_target_group" "streamlit" {
   }
 }
 
-# HTTP Listener
+# HTTP Listener: forwards to the app when HTTPS is off, redirects to HTTPS when on.
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.streamlit.arn
   port              = 80
   protocol          = "HTTP"
+
+  dynamic "default_action" {
+    for_each = var.enable_https ? [1] : []
+    content {
+      type = "redirect"
+      redirect {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = var.enable_https ? [] : [1]
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.streamlit.arn
+    }
+  }
+}
+
+# --------------------------------------------------------------------------
+# HTTPS via ACM + Route53 (optional, gated on var.enable_https)
+# --------------------------------------------------------------------------
+data "aws_route53_zone" "this" {
+  count = var.enable_https ? 1 : 0
+
+  name         = var.route53_zone_name
+  private_zone = false
+}
+
+resource "aws_acm_certificate" "this" {
+  count = var.enable_https ? 1 : 0
+
+  domain_name       = var.alb_domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = {
+    Name        = "${var.project_name}-streamlit-cert"
+    Environment = var.environment
+  }
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = var.enable_https ? {
+    for dvo in aws_acm_certificate.this[0].domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  } : {}
+
+  allow_overwrite = true
+  zone_id         = data.aws_route53_zone.this[0].zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+}
+
+resource "aws_acm_certificate_validation" "this" {
+  count = var.enable_https ? 1 : 0
+
+  certificate_arn         = aws_acm_certificate.this[0].arn
+  validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+}
+
+resource "aws_lb_listener" "https" {
+  count = var.enable_https ? 1 : 0
+
+  load_balancer_arn = aws_lb.streamlit.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate_validation.this[0].certificate_arn
 
   default_action {
     type             = "forward"
@@ -92,16 +172,17 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# TODO: HTTPS Listener (must have a certificate ARN)
-# resource "aws_lb_listener" "https" {
-#   load_balancer_arn = aws_lb.streamlit.arn
-#   port              = 443
-#   protocol          = "HTTPS"
-#   ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01"
-#   certificate_arn   = var.certificate_arn
-#
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.streamlit.arn
-#   }
-# }
+# DNS alias: alb_domain_name -> ALB
+resource "aws_route53_record" "alb_alias" {
+  count = var.enable_https ? 1 : 0
+
+  zone_id = data.aws_route53_zone.this[0].zone_id
+  name    = var.alb_domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.streamlit.dns_name
+    zone_id                = aws_lb.streamlit.zone_id
+    evaluate_target_health = true
+  }
+}

@@ -3,6 +3,8 @@ MCP Server - Official FastMCP SDK Implementation
 Designed for AWS Fargate deployment with MCP protocol support
 """
 
+import os
+
 from mcp_singleton import mcp
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -13,6 +15,26 @@ from config import get_config
 
 logger = get_logger(__name__)
 config = get_config()
+
+
+if os.getenv("DEBUG", "false").lower() == "true":
+    import debugpy
+
+    try:
+        # Listen on 0.0.0.0 so it's accessible from outside the container
+        debugpy.listen(("0.0.0.0", 5678))
+        print("✨ debugpy is listening on port 5678...")
+
+        # Optional: Pause execution until the debugger attaches
+        if os.getenv("DEBUG_WAIT_FOR_CLIENT", "false").lower() == "true":
+            print("⏳ Waiting for debugger to attach...")
+            debugpy.wait_for_client()
+    except RuntimeError as e:
+        # Catch the "Address already in use" error gracefully
+        if "Address already in use" in str(e):
+            print("⚡ debugpy is already active in the parent process. Skipping dual-binding.")
+        else:
+            raise e
 
 # Initialize FastMCP server (exported for tools to use)
 # mcp = get_server_instance()

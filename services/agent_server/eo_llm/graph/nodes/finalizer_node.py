@@ -1,0 +1,93 @@
+"""Finalizer node: builds final answer text via Bedrock streaming."""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+
+from eo_llm.adapters.bedrock.llm_model_router import LLMModelRouter
+from eo_llm.adapters.bedrock.chat_history_context import get_chat_history
+from eo_llm.graph.nodes.base import GraphNode
+from eo_llm.graph.state import GraphState, dump_state, GraphStateModel
+from eo_llm.prompts import get_finalizer_prompt
+from src.core.event_emitter import TokenStreamEvent, emit_event
+
+logger = logging.getLogger("eo_llm.finalizer")
+
+
+def _fallback_answer(user_q: str, exc: Exception) -> str:
+    """User-facing message when Bedrock final-answer composition fails."""
+    detail = str(exc).strip() or type(exc).__name__
+    prefix = f"I wasn't able to produce an answer for: {user_q}." if user_q else "I wasn't able to produce an answer."
+    return f"{prefix} The reasoning service returned an error: {detail}"
+
+
+class FinalizerNode(GraphNode):
+    node_name = "finalizer"
+    status_stage = "analyzing"
+    status_message = "Composing the final answer..."
+
+    async def run(self, s: GraphStateModel) -> GraphState:
+        # A direct answer was already produced upstream (e.g. orchestrator handling
+        # empty input or tools_info). Preserve it verbatim instead of re-composing.
+        if s.next_step == "finalize_direct" and s.final_answer.strip():
+            emit_event(TokenStreamEvent(content=s.final_answer))
+            return dump_state(s)
+
+        source = s.answer_source or "domain_tools"
+        evidence = s.aggregated_evidence or "No evidence."
+
+        try:
+            s.final_answer = await self._stream_final_answer(
+                answer_source=source,
+                aggregated_evidence=evidence,
+                domain_results=dict(s.domain_results),
+                web_results=list(s.web_results),
+            )
+        except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "final answer streaming failed (%s: %s)",
+                type(exc).__name__,
+                str(exc)[:300],
+            )
+            user_q = (s.user_query or "").strip() or (s.query or "").strip()
+            s.final_answer = _fallback_answer(user_q, exc)
+            emit_event(TokenStreamEvent(content=s.final_answer))
+        return dump_state(s)
+
+    async def _stream_final_answer(
+        self,
+        *,
+        answer_source: str,
+        aggregated_evidence: str,
+        domain_results: dict,
+        web_results: list,
+    ) -> str:
+        today_utc = datetime.now(timezone.utc).date().isoformat()
+        system_prompt = get_finalizer_prompt(
+            today_utc=today_utc,
+            answer_source=answer_source,
+            aggregated_evidence=aggregated_evidence,
+            domain_results_json=json.dumps(domain_results, default=str)[:6000],
+            web_results_json=json.dumps(web_results, default=str)[:2500],
+        )
+
+        parts: list[str] = []
+        async for chunk in LLMModelRouter().call_stream(
+            system_prompt=system_prompt,
+            max_tokens=900,
+            chat_history=get_chat_history(),
+        ):
+            if not chunk:
+                continue
+            parts.append(chunk)
+            emit_event(TokenStreamEvent(content=chunk))
+
+        final_answer = "".join(parts).strip()
+        if not final_answer:
+            raise RuntimeError("Bedrock finalizer returned empty answer.")
+        return final_answer
+
+
+finalizer_node = FinalizerNode()

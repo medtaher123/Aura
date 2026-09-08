@@ -1,7 +1,7 @@
 """Geocoding helpers (Nominatim) used across tools.
 
-This module intentionally keeps the legacy `get_city_bbox(city_name)` API stable,
-while also supporting disambiguation flows via `LocationAmbiguousError`.
+Supports city geocoding via `get_city_bbox(city_name)` and disambiguation
+via `LocationAmbiguousError`.
 
 """
 
@@ -215,7 +215,7 @@ def get_city_bbox(
     """Legacy helper returning (bbox, lat, lon, name).
 
     - bbox: list[str] from Nominatim (kept for backward compatibility)
-    - lat/lon: strings or None (legacy)
+    - lat/lon: strings or None
     - name: short label
     """
 

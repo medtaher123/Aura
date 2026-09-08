@@ -76,7 +76,12 @@ output "agent_cloudwatch_log_group" {
 # ALB Outputs
 output "streamlit_url" {
   description = "Public URL for Streamlit service"
-  value       = "http://${module.alb.alb_dns_name}"
+  value       = var.cloudfront_enabled ? one(module.cloudfront[*].url) : module.alb.app_url
+}
+
+output "cloudfront_domain" {
+  description = "CloudFront distribution domain (*.cloudfront.net), null when CloudFront is disabled"
+  value       = one(module.cloudfront[*].domain_name)
 }
 
 output "alb_dns_name" {

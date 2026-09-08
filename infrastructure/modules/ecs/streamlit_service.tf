@@ -1,6 +1,13 @@
 # Streamlit Service Configuration
 
 locals {
+  streamlit_cognito_secrets = var.cognito_client_secret_arn != "" ? [
+    {
+      name      = "COGNITO_CLIENT_SECRET"
+      valueFrom = "${var.cognito_client_secret_arn}:COGNITO_CLIENT_SECRET::"
+    }
+  ] : []
+
   streamlit_container_definitions = [
     {
       name      = "streamlit"
@@ -21,22 +28,50 @@ locals {
           value = "1"
         },
         {
+          name  = "DEBUG"
+          value = var.debug_enabled ? "true" : "false"
+        },
+        {
           name  = "AGENT_SERVER_URL"
           value = var.agent_server_url
         },
         {
           name  = "FIRE_ARCHIVE_DIR"
           value = var.fire_archive_dir
+        },
+        {
+          name  = "COGNITO_AUTH_ENABLED"
+          value = var.auth_enabled
+        },
+        {
+          name  = "COGNITO_DOMAIN"
+          value = var.cognito_domain
+        },
+        {
+          name  = "COGNITO_CLIENT_ID"
+          value = var.cognito_app_client_id
+        },
+        {
+          name  = "COGNITO_REDIRECT_URI"
+          value = var.cognito_redirect_uri
+        },
+        {
+          name  = "COGNITO_LOGOUT_REDIRECT_URI"
+          value = var.cognito_logout_redirect_uri
+        },
+        {
+          name  = "COGNITO_SCOPES"
+          value = var.cognito_scopes
         }
       ]
 
-      secrets = [
+      secrets = concat([
         {
-          name      = "MAPTILER_API_KEY"
+          name = "MAPTILER_API_KEY"
           # Inject only the JSON key from SecretString, not the full object.
           valueFrom = "${var.maptiler_api_key_arn}:MAPTILER_API_KEY::"
         }
-      ]
+      ], local.streamlit_cognito_secrets)
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -92,6 +127,8 @@ resource "aws_ecs_service" "streamlit" {
   desired_count    = var.streamlit_desired_count
   launch_type      = "FARGATE"
   platform_version = "LATEST"
+
+  enable_execute_command = var.debug_enabled
 
   network_configuration {
     subnets          = var.subnet_ids

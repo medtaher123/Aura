@@ -1,0 +1,9 @@
+{
+  "name": "node-mcp",
+  "private": true,
+  "description": "Node MCP servers exposed over Streamable HTTP for agent-server",
+  "dependencies": {
+    "mcp-immo-france": "^0.2.0",
+    "supergateway": "^3.4.3"
+  }
+}

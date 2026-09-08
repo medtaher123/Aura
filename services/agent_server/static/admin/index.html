@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Metaplanet Tool Platform Admin</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --card: #141c2f;
+      --text: #edf2ff;
+      --muted: #9aa7bf;
+      --ok: #34d399;
+      --bad: #f87171;
+      --border: #243049;
+      --accent: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.2rem; }
+    main { padding: 1.25rem; max-width: 1200px; margin: 0 auto; }
+    section { margin-bottom: 1.5rem; }
+    h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.875rem;
+    }
+    .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; }
+    .value { font-size: 1.35rem; font-weight: 700; margin-top: 0.2rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 0.5rem 0.35rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .pill {
+      display: inline-block;
+      font-size: 0.72rem;
+      border-radius: 999px;
+      padding: 0.1rem 0.45rem;
+      border: 1px solid var(--border);
+    }
+    .pill.ok { color: var(--ok); }
+    .pill.bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+    .error { color: var(--bad); }
+    .hint { color: var(--muted); font-size: 0.8rem; margin: 0 0 0.75rem; }
+    input[type="password"], input[type="text"] {
+      width: min(420px, 100%);
+      padding: 0.45rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f1526;
+      color: var(--text);
+    }
+    button {
+      background: var(--accent);
+      color: #081021;
+      border: none;
+      border-radius: 8px;
+      padding: 0.45rem 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    a { color: var(--accent); }
+    a.tool-link {
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a.tool-link:hover { color: var(--accent); text-decoration: underline; }
+    tr.tool-row { cursor: pointer; }
+    tr.tool-row:hover td { background: rgba(96, 165, 250, 0.06); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Metaplanet Tool Platform</h1>
+      <div class="muted">MCP servers and tool catalog</div>
+    </div>
+    <div class="muted" id="updatedAt">—</div>
+  </header>
+  <main>
+    <section>
+      <div class="toolbar">
+        <label class="muted" for="token">Bearer token</label>
+        <input id="token" type="password" placeholder="Paste Cognito JWT (optional if auth disabled)" />
+        <button id="refreshBtn" type="button">Refresh</button>
+      </div>
+      <div id="error" class="error"></div>
+    </section>
+
+    <section>
+      <h2>Overview</h2>
+      <div class="grid" id="overview"></div>
+    </section>
+
+    <section>
+      <h2>MCP Servers</h2>
+      <p class="hint">Metaplanet MCP comes from app config; additional servers from <code>config/external_mcp_servers.yaml</code>. Here you can only enable or disable a server.</p>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Server</th>
+              <th>Health</th>
+              <th>Enabled</th>
+              <th>Tools</th>
+              <th>URL / Command</th>
+              <th>Dashboard</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="serversBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Tools Catalog</h2>
+      <p class="hint">Click a tool to open its detail page (description, schema, provider).</p>
+      <div class="card">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Source</th><th>Provider</th><th>Enabled</th></tr>
+          </thead>
+          <tbody id="toolsBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const tokenInput = document.getElementById('token');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const errorEl = document.getElementById('error');
+    const overviewEl = document.getElementById('overview');
+    const serversBody = document.getElementById('serversBody');
+    const toolsBody = document.getElementById('toolsBody');
+    const updatedAtEl = document.getElementById('updatedAt');
+
+    const TOKEN_KEY = 'metaplanet_admin_token';
+    const saved = sessionStorage.getItem(TOKEN_KEY);
+    if (saved) tokenInput.value = saved;
+
+    function authHeaders() {
+      const token = tokenInput.value.trim();
+      if (token) sessionStorage.setItem(TOKEN_KEY, token);
+      else sessionStorage.removeItem(TOKEN_KEY);
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        ...options,
+        headers: {
+          ...authHeaders(),
+          Accept: 'application/json',
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(options.headers || {}),
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`${path} → ${res.status}: ${text}`);
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    function statusPill(healthy) {
+      if (healthy === true) return '<span class="pill ok">healthy</span>';
+      if (healthy === false) return '<span class="pill bad">unhealthy</span>';
+      return '<span class="pill muted">unknown</span>';
+    }
+
+    function renderOverview(dashboard) {
+      overviewEl.innerHTML = [
+        ['MCP Servers', dashboard.mcp_servers.length],
+        ['Tools', dashboard.tools_total],
+        ['Native Tools', dashboard.tools_native],
+        ['MCP Tools', dashboard.tools_mcp],
+      ].map(([label, value]) => `
+        <div class="card">
+          <div class="label">${label}</div>
+          <div class="value">${value}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderServers(servers) {
+      serversBody.innerHTML = servers.map(s => {
+        const health = s.last_health_status || {};
+        const toggleLabel = s.enabled ? 'Disable' : 'Enable';
+        const isStdio = s.transport === 'stdio';
+        const endpoint = isStdio
+          ? `<code>${escapeHtml(stdioLaunch(s))}</code>`
+          : `<code>${escapeHtml(s.base_url)}</code>`;
+        const dashCell = isStdio
+          ? '<span class="muted">—</span>'
+          : `<a href="${s.base_url.replace(/\/$/, '')}/dashboard" target="_blank" rel="noopener">Open</a>`;
+        return `<tr data-server-id="${s.id}">
+          <td><strong>${escapeHtml(s.display_name)}</strong><div class="muted">${escapeHtml(s.slug)} · ${escapeHtml(s.transport)}</div></td>
+          <td>${statusPill(health.healthy)}<div class="muted">${escapeHtml(health.message || '')}</div></td>
+          <td>${s.enabled ? '<span class="pill ok">on</span>' : '<span class="pill bad">off</span>'}</td>
+          <td>${s.tool_count}</td>
+          <td>${endpoint}</td>
+          <td>${dashCell}</td>
+          <td>
+            <button
+              type="button"
+              class="secondary toggle-enabled"
+              data-server-id="${s.id}"
+              data-enabled="${s.enabled}"
+            >${toggleLabel}</button>
+          </td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="7" class="muted">No MCP servers</td></tr>';
+
+      serversBody.querySelectorAll('button.toggle-enabled').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-server-id');
+          const currentlyEnabled = btn.getAttribute('data-enabled') === 'true';
+          btn.disabled = true;
+          errorEl.textContent = '';
+          try {
+            await api(`/admin/mcp-servers/${id}/enabled`, {
+              method: 'PATCH',
+              body: JSON.stringify({ enabled: !currentlyEnabled }),
+            });
+            await refresh();
+          } catch (err) {
+            errorEl.textContent = err.message;
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+
+    function stdioLaunch(server) {
+      const cfg = server.stdio_config || {};
+      const parts = [cfg.command || 'stdio'].concat(cfg.args || []);
+      return parts.join(' ');
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderTools(tools) {
+      toolsBody.innerHTML = tools.slice(0, 200).map(t => `<tr class="tool-row" data-tool-id="${t.id}">
+        <td><a class="tool-link" href="/admin/ui/tools/${t.id}">${t.name}</a></td>
+        <td>${t.source}</td>
+        <td>${t.provider_slug}</td>
+        <td>${t.enabled ? 'yes' : 'no'}</td>
+      </tr>`).join('') || '<tr><td colspan="4" class="muted">No tools</td></tr>';
+
+      toolsBody.querySelectorAll('tr.tool-row').forEach(row => {
+        row.addEventListener('click', (ev) => {
+          if (ev.target.closest('a')) return;
+          const id = row.getAttribute('data-tool-id');
+          if (id) window.location.href = `/admin/ui/tools/${id}`;
+        });
+      });
+    }
+
+    async function refresh() {
+      errorEl.textContent = '';
+      try {
+        const [dashboard, tools] = await Promise.all([
+          api('/admin/dashboard'),
+          api('/admin/tools'),
+        ]);
+        renderOverview(dashboard);
+        renderServers(dashboard.mcp_servers || []);
+        renderTools(tools || []);
+        updatedAtEl.textContent = `Updated ${new Date(dashboard.timestamp).toLocaleString()}`;
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    refreshBtn.addEventListener('click', refresh);
+    tokenInput.addEventListener('change', refresh);
+    refresh();
+    setInterval(refresh, 30000);
+  </script>
+</body>
+</html>

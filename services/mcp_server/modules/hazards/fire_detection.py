@@ -1,0 +1,706 @@
+# fire_detection.py
+from datetime import datetime, timedelta, date
+from pathlib import Path
+import io
+import math
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
+from core.logger import get_logger
+from config import get_config
+from utils.bbox_service import LocationAmbiguousError, get_city_bbox, reverse_geocode
+
+from utils.map_view_service import (
+    view_state_from_bbox,
+    view_state_from_points,
+)
+from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
+
+
+def _debug_treated_bbox_layer(bbox: list[float]) -> dict:
+    """TEMPORARY: Pydeck PolygonLayer outlining the treated AOI bbox."""
+    min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+    ring = [
+        [min_lon, min_lat],
+        [max_lon, min_lat],
+        [max_lon, max_lat],
+        [min_lon, max_lat],
+        [min_lon, min_lat],
+    ]
+    return {
+        "type": "PolygonLayer",
+        "data": [{"polygon": ring, "name": "Treated area (debug)"}],
+        "get_polygon": "polygon",
+        "stroked": True,
+        "filled": True,
+        "get_fill_color": [230, 126, 34, 40],
+        "get_line_color": [230, 126, 34, 230],
+        "line_width_min_pixels": 2,
+        "get_line_width": 2,
+        "pickable": False,
+    }
+
+
+def _bbox_from_radius_km(lat: float, lon: float, radius_km: float) -> list[float]:
+    """Approximate search AOI as [min_lat, max_lat, min_lon, max_lon]."""
+    dlat = radius_km / 111.0
+    cos_lat = max(math.cos(math.radians(lat)), 1e-6)
+    dlon = radius_km / (111.0 * cos_lat)
+    return [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+
+
+def _treated_area_box_geojson(bbox: list[float]) -> dict:
+    """GeoJSON Feature for the treated AOI bbox ``[min_lat, max_lat, min_lon, max_lon]``."""
+    min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+    return {
+        "type": "Feature",
+        "properties": {
+            "name": "Treated area (debug)",
+            "kind": "treated_area_bbox",
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [min_lon, min_lat],
+                    [max_lon, min_lat],
+                    [max_lon, max_lat],
+                    [min_lon, max_lat],
+                    [min_lon, min_lat],
+                ]
+            ],
+        },
+    }
+
+logger = get_logger(__name__)
+config = get_config()
+
+# Use centralized config for API key and archive directory
+MAP_KEY = (config.map_key or "").strip()
+if not MAP_KEY:
+    logger.error("MAP_KEY is not set")
+elif MAP_KEY != (config.map_key or ""):
+    # Some secret stores append trailing newlines; FIRMS rejects those keys.
+    logger.warning("MAP_KEY had surrounding whitespace and was trimmed")
+ARCHIVE_DIR = config.fire_archive_dir
+MAPS_DIR = Path(__file__).resolve().parents[1] / "maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
+
+# ARCHIVE_DIR = r"C:\MEPDev\LLM_Demo\langgraph_project\Data"
+
+class FireArchiveMissingError(RuntimeError):
+    pass
+
+class FireDataUnavailableError(RuntimeError):
+    pass
+
+def _is_s3_path(path: str) -> bool:
+    return isinstance(path, str) and path.startswith("s3://")
+
+def _parse_s3_uri(uri: str) -> tuple[str, str]:
+    stripped = uri.replace("s3://", "", 1)
+    if "/" not in stripped:
+        return stripped, ""
+    bucket, prefix = stripped.split("/", 1)
+    return bucket, prefix
+
+def _s3_object_exists(bucket: str, key: str) -> bool:
+    import boto3
+
+    s3 = boto3.client("s3")
+    try:
+        logger.debug(f"Checking if S3 object exists: {bucket}/{key}")
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except Exception as e:
+        logger.error(f"Error checking if S3 object exists: {bucket}/{key}")
+        logger.error(e)
+        return False
+
+def _read_s3_csv(s3_uri: str):
+    import boto3
+    import pandas as pd
+
+    bucket, key = _parse_s3_uri(s3_uri)
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    body = obj["Body"].read()
+    return pd.read_csv(io.BytesIO(body))
+
+# Calculate the great-circle distance between two points on the Earth (Haversine formula)
+def haversine(lat1, lon1, lat2, lon2):
+    """Great-circle distance (km) using the Haversine formula.
+
+    Accepts scalars or numpy arrays/Series. Inputs are coerced to float.
+    """
+    import numpy as np
+
+    lat1 = np.asarray(lat1, dtype="float64")
+    lon1 = np.asarray(lon1, dtype="float64")
+    lat2 = np.asarray(lat2, dtype="float64")
+    lon2 = np.asarray(lon2, dtype="float64")
+
+    R = 6371.0
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlambda = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+class GeocodingError(RuntimeError):
+    pass
+
+# Find the archive file(s) that contain data for the given date range
+def find_archive_files_for_range(start_date_obj, end_date_obj):
+    if not _is_s3_path(ARCHIVE_DIR):
+        raise FireArchiveMissingError(
+            "FIRE_ARCHIVE_DIR must be set to an S3 URI (e.g., s3://bucket/prefix)."
+        )
+
+    bucket, prefix = _parse_s3_uri(ARCHIVE_DIR)
+    prefix = prefix.rstrip("/")
+
+    start_year = start_date_obj.year
+    end_year = end_date_obj.year
+
+    s3_uris = []
+    for year in range(start_year, end_year + 1):
+        filename = f"{year}.csv"
+        key = f"{prefix}/{filename}" if prefix else filename
+        s3_uri = f"s3://{bucket}/{key}"
+        print("Checking archive file:", s3_uri)
+        if _s3_object_exists(bucket, key):
+            s3_uris.append(s3_uri)
+
+    return s3_uris
+
+# Recent queries use NASA FIRMS NRT; older ranges use yearly S3 archives.
+# When a range spans both, load and merge both sources.
+# FIRMS area API day_range is limited to [1..5].
+RECENT_DAYS = 5
+FIRMS_NRT_DAYS = 5
+FIRMS_NRT_DAY_RANGE_MAX = 5
+FIRMS_NRT_SOURCES = (
+    "VIIRS_NOAA20_NRT",
+    "VIIRS_SNPP_NRT",
+    "VIIRS_NOAA21_NRT",
+)
+FIRMS_API_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+
+
+def _recent_cutoff(today: date | None = None) -> date:
+    return (today or date.today()) - timedelta(days=RECENT_DAYS)
+
+
+def _needs_archive(start_date_obj: date, today: date | None = None) -> bool:
+    return start_date_obj < _recent_cutoff(today)
+
+
+def _needs_api(end_date_obj: date, today: date | None = None) -> bool:
+    return end_date_obj >= _recent_cutoff(today)
+
+
+def should_use_api(
+    start_date: str, end_date: str, today: date | None = None
+) -> bool:
+    """Return True when the query should include NASA FIRMS NRT data."""
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+    return _needs_api(end_date_obj, today=today)
+
+
+def should_use_archive(
+    start_date: str, end_date: str, today: date | None = None
+) -> bool:
+    """Return True when the query should include archived FIRMS CSV data."""
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+    return _needs_archive(start_date_obj, today=today)
+
+
+def _read_firms_api_csv(url: str) -> str:
+    try:
+        with urlopen(url, timeout=30) as response:
+            body = response.read()
+        return body.decode("utf-8", errors="replace")
+    except HTTPError as e:
+        if e.code in (401, 403):
+            raise FireDataUnavailableError(
+                "NASA FIRMS API rejected the MAP key (unauthorized). "
+                "Verify the MAP_KEY secret value in production and remove any extra whitespace."
+            ) from e
+        raise FireDataUnavailableError(
+            f"NASA FIRMS API HTTP error ({e.code}). Please retry."
+        ) from e
+    except URLError as e:
+        raise FireDataUnavailableError(
+            "Could not reach NASA FIRMS API. Please retry."
+        ) from e
+
+
+def _validate_firms_csv_text(csv_text: str) -> None:
+    if not csv_text.strip():
+        raise FireDataUnavailableError("NASA FIRMS API returned an empty response.")
+    lowered = csv_text.strip().lower()
+    if "invalid map_key" in lowered:
+        raise FireDataUnavailableError(
+            "NASA FIRMS API rejected the MAP key (Invalid MAP_KEY). "
+            "Verify the MAP_KEY secret value in production and remove any extra whitespace."
+        )
+
+
+def _read_firms_api_dataframe(source: str, day_range: int = FIRMS_NRT_DAYS):
+    import pandas as pd
+
+    if not MAP_KEY:
+        raise FireDataUnavailableError(
+            "MAP_KEY is not configured in the MCP server environment."
+        )
+
+    clamped_days = max(1, min(int(day_range), FIRMS_NRT_DAY_RANGE_MAX))
+    url = (
+        f"{FIRMS_API_BASE}/{MAP_KEY}/{source}/world/{clamped_days}"
+    )
+    csv_text = _read_firms_api_csv(url)
+    _validate_firms_csv_text(csv_text)
+    df = pd.read_csv(io.StringIO(csv_text))
+    if len(df.columns) == 1 and "invalid map_key" in str(df.columns[0]).lower():
+        raise FireDataUnavailableError(
+            "NASA FIRMS API rejected the MAP key (Invalid MAP_KEY). "
+            "Verify the MAP_KEY secret value in production and remove any extra whitespace."
+        )
+    return df
+
+
+def _load_firms_nrt_dataframe(day_range: int = FIRMS_NRT_DAYS):
+    import pandas as pd
+
+    frames = []
+    for source in FIRMS_NRT_SOURCES:
+        try:
+            frames.append(_read_firms_api_dataframe(source, day_range=day_range))
+        except FireDataUnavailableError:
+            raise
+        except Exception as e:
+            logger.warning(f"Skipping FIRMS source {source}: {e}")
+
+    if not frames:
+        raise FireDataUnavailableError(
+            "Could not load NASA FIRMS near-real-time fire data."
+        )
+    return _dedupe_fire_dataframe(
+        pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    )
+
+
+def _load_archive_dataframe(start_date_obj: date, end_date_obj: date):
+    import pandas as pd
+
+    file_paths = find_archive_files_for_range(start_date_obj, end_date_obj)
+    logger.info(f"Using archive files for fire data: {', '.join(file_paths)}")
+    if not file_paths:
+        logger.error("No fire archive CSV found for the requested date range.")
+        raise FireDataUnavailableError(
+            "No fire archive CSV found for the requested date range. "
+            f"Checked location: '{ARCHIVE_DIR}'. "
+            "Add the required FIRMS archive CSV files there (or set FIRE_ARCHIVE_DIR)."
+        )
+    frames = [_read_s3_csv(path) for path in file_paths]
+    return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+
+
+def _dedupe_fire_dataframe(df):
+    if df.empty:
+        return df
+
+    dedupe_cols = [
+        col
+        for col in ("latitude", "longitude", "acq_date", "acq_time", "satellite")
+        if col in df.columns
+    ]
+    if not dedupe_cols:
+        return df
+    return df.drop_duplicates(subset=dedupe_cols, keep="first").copy()
+
+
+def _load_fire_dataframe(start_date_obj: date, end_date_obj: date, today: date | None = None):
+    import pandas as pd
+
+    use_archive = _needs_archive(start_date_obj, today=today)
+    use_api = _needs_api(end_date_obj, today=today)
+    frames = []
+
+    if use_archive:
+        logger.info("Loading archived FIRMS data for historical portion of date range")
+        frames.append(_load_archive_dataframe(start_date_obj, end_date_obj))
+    if use_api:
+        logger.info("Loading NASA FIRMS NRT data for recent portion of date range")
+        frames.append(_load_firms_nrt_dataframe())
+
+    if not frames:
+        raise FireDataUnavailableError(
+            "No FIRMS data source available for the requested date range."
+        )
+
+    df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    return _dedupe_fire_dataframe(df)
+
+
+# Detect fires near a city for a given date and radius (km)
+def detect_fire_near_city(
+    start_date,
+    end_date,
+    city_name: str = "",
+    radius_km: float = 100,
+    lat=None,
+    lon=None,
+):
+    city_name = str(city_name).strip() or ""
+    logger.info(f"Detecting fires near city: {city_name}")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    bbox_norm = None
+    if lat is not None and lon is not None:
+        try:
+            lat_city_f = float(lat)
+            lon_city_f = float(lon)
+        except (TypeError, ValueError):
+            logger.error(f"Invalid coordinates: lat={lat}, lon={lon}")
+            raise GeocodingError(f"Invalid coordinates: lat={lat}, lon={lon}")
+
+        coords = ToolCoordinates(lat=lat_city_f, lon=lon_city_f)
+        resolved_name = None
+        if not isinstance(city_name, str) or not city_name.strip():
+            try:
+                rev = reverse_geocode(lat_city_f, lon_city_f)
+                resolved_name = rev.get("city") or rev.get("country")
+            except Exception as e:
+                logger.error(f"Error reverse geocoding: {e}")
+                resolved_name = None
+        resolved_name = (
+            resolved_name or city_name or f"{lat_city_f:.4f}, {lon_city_f:.4f}"
+        )
+    else:
+        bbox, lat_city, lon_city, city_name_final = get_city_bbox(
+            city_name, require_confirmation=True
+        )
+        print("City bbox:", bbox)
+        print("City coordinates:", lat_city, lon_city)
+        if lat_city is None or lon_city is None:
+            raise GeocodingError(
+                f"Could not geocode location '{city_name}'. Try a more specific place name (e.g. 'Paris, France')."
+            )
+
+        try:
+            lat_city_f = float(lat_city)
+            lon_city_f = float(lon_city)
+        except (TypeError, ValueError):
+            raise GeocodingError(
+                f"Geocoding returned non-numeric coordinates for '{city_name}': lat={lat_city}, lon={lon_city}"
+            )
+
+        coords = ToolCoordinates(lat=lat_city_f, lon=lon_city_f)
+        resolved_name = city_name_final or city_name
+
+        if isinstance(bbox, list) and len(bbox) == 4:
+            try:
+                south, north, west, east = (float(x) for x in bbox)
+                bbox_norm = [
+                    min(south, north),
+                    max(south, north),
+                    min(west, east),
+                    max(west, east),
+                ]
+            except Exception as e:
+                logger.error(f"Error parsing bbox: {e}")
+                bbox_norm = None
+
+    import pandas as pd
+
+    df = _load_fire_dataframe(start_date_obj, end_date_obj)
+
+    # Ensure date column exists
+    if "acq_date" not in df.columns:
+        logger.error("Date column 'acq_date' not found in data.")
+        logger.error(df.columns)
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
+
+    # Ensure required coordinate columns exist and are numeric
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        print("Latitude/longitude columns not found in data.")
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
+
+    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+    df = df.dropna(subset=["latitude", "longitude"]).copy()
+
+    df["acq_date"] = pd.to_datetime(df["acq_date"]).dt.date
+    df = df[
+        (df["acq_date"] >= start_date_obj) & (df["acq_date"] <= end_date_obj)
+    ].copy()
+    if df.empty:
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
+
+    df["distance"] = haversine(
+        lat_city_f,
+        lon_city_f,
+        df["latitude"].to_numpy(),
+        df["longitude"].to_numpy(),
+    )
+    df_filtered = df[df["distance"] <= radius_km]
+
+    if df_filtered.empty:
+        return {
+            "points": [],
+            "nb_fires": 0,
+            "coords": coords,
+            "location_name": resolved_name,
+            "bbox": bbox_norm,
+        }
+
+    points = [
+        {
+            "lat": float(row["latitude"]),
+            "lon": float(row["longitude"]),
+            "brightness": float(row.get("brightness", row.get("bright_ti4", 0)) or 0),
+            "acq_date": str(row["acq_date"]),
+            "acq_time": str(row.get("acq_time", "")),
+        }
+        for _, row in df_filtered.iterrows()
+    ]
+    return {
+        "points": points,
+        "nb_fires": len(df_filtered),
+        "coords": coords,
+        "location_name": resolved_name,
+        "bbox": bbox_norm,
+    }
+
+def detect_fire_tool(
+    start_date: str,
+    end_date: str | None,
+    location: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+    radius_km: float | None = 100,
+) -> ToolResponse:
+    """
+    Tool to detect fires near a city/country for a given date range and radius.
+    Provide either a location name or lat/lon coordinates.
+    """
+    try:
+        if end_date is None or (isinstance(end_date, str) and not end_date.strip()):
+            end_date = start_date
+
+        print("Detecting fire with params:", start_date, end_date, location, radius_km)
+
+        if not start_date or (
+            not (isinstance(location, str) and location.strip())
+            and not (lat is not None and lon is not None)
+        ):
+            return ToolResponse(
+                tool_name="detect_fire_tool",
+                message=(
+                    "Please specify a city (location) or lat/lon coordinates and a start_date (YYYY-MM-DD)."
+                ),
+                start_date=start_date,
+                end_date=end_date,
+                error=True,
+            )
+
+        try:
+            radius_km_f = float(radius_km or 100.0)
+        except Exception:
+            radius_km_f = 100.0
+
+        try:
+            result = detect_fire_near_city(
+                start_date,
+                end_date,
+                location or "",
+                radius_km_f,
+                lat=lat,
+                lon=lon,
+            )
+        except FireDataUnavailableError as e:
+            return ToolResponse(
+                tool_name="detect_fire_tool",
+                message=str(e),
+                start_date=start_date,
+                end_date=end_date,
+                city=location,
+                error=True,
+            )
+        print("Detection result:", result)
+        points = result.get("points") if isinstance(result, dict) else None
+        print("points:", points)
+        nb_fires = result.get("nb_fires") if isinstance(result, dict) else None
+        coords = result.get("coords") if isinstance(result, dict) else None
+        location_name = (
+            result.get("location_name") if isinstance(result, dict) else None
+        )
+
+        display_location = (
+            location_name
+            if isinstance(location_name, str) and location_name.strip()
+            else location
+        )
+
+        # NO FIRES FOUND
+        if not nb_fires:
+            if start_date == end_date:
+                message = (
+                    f"There were no hotspots or possible fires detected near {display_location} on {start_date} "
+                    f"within a radius of {radius_km_f} km."
+                )
+            else:
+                message = (
+                    f"There were no hotspots or possible fires detected near {display_location} from {start_date} to {end_date} "
+                    f"within a radius of {radius_km_f} km."
+                )
+            return ToolResponse(
+                tool_name="detect_fire_tool",
+                message=message,
+                start_date=start_date,
+                end_date=end_date,
+                city=display_location,
+                coordinates=coords,
+                data={"radius_km": radius_km_f, "nb_fires": 0},
+                error=False,
+            )
+
+        # FIRES FOUND
+        points = points or []
+        nb_fires = int(nb_fires)
+
+        if start_date == end_date:
+            message = (
+                f"{nb_fires} fire(s) or hotspot(s) detected near {display_location} on {start_date} "
+                f"within a radius of {radius_km_f} km."
+            )
+        else:
+            message = (
+                f"{nb_fires} fire(s) or hotspot(s) detected near {display_location} from {start_date} to {end_date} "
+                f"within a radius of {radius_km_f} km."
+            )
+
+        # Build a structured map spec that the UI can render with Pydeck.
+        # Prefer bbox-based zoom when available (city/country extent), else fallback to points.
+        bbox = result.get("bbox") if isinstance(result, dict) else None
+        coords = result.get("coords") if isinstance(result, dict) else None
+        view_state = (
+            view_state_from_bbox(
+                coords,
+                padding=0.18,
+                min_zoom=5.0,
+                max_zoom=10.5,
+                radius=radius_km_f,
+            )
+            if isinstance(bbox, list) and len(bbox) == 4 and coords is not None
+            else view_state_from_points(
+                points or [],
+                padding=0.18,
+                min_zoom=5.0,
+                max_zoom=10.5,
+                radius=radius_km_f,
+            )
+        )
+
+        # TEMPORARY DEBUG: draw the search AOI (radius around center; falls
+        # back to geocoded city bbox when coords are unavailable).
+        debug_bbox = None
+        if coords is not None:
+            try:
+                debug_bbox = _bbox_from_radius_km(
+                    float(coords.lat), float(coords.lon), radius_km_f
+                )
+            except (TypeError, ValueError):
+                debug_bbox = None
+        if debug_bbox is None and isinstance(bbox, list) and len(bbox) == 4:
+            debug_bbox = list(bbox)
+
+        map_spec: dict = {
+            "title": "Fires near city",
+            "points": points,
+            "view_state": view_state,
+            "tooltip": {
+                "text": "{acq_date} {acq_time}\nBrightness: {brightness}"
+            },
+            "fill_color": [255, 0, 0, 160],
+            "radius": 5,
+            "radius_units": "pixels",
+            "radius_min_pixels": 2,
+            "radius_max_pixels": 7,
+        }
+        if debug_bbox is not None:
+            map_spec["bbox"] = debug_bbox
+            map_spec["box"] = _treated_area_box_geojson(debug_bbox)
+            map_spec["layers"] = [_debug_treated_bbox_layer(debug_bbox)]
+
+        return ToolResponse(
+            tool_name="detect_fire_tool",
+            message=message,
+            artifacts=ToolArtifacts(
+                maps=[map_spec],
+                thumbnails=[],
+                urls=[],
+            ),
+            start_date=start_date,
+            end_date=end_date,
+            city=display_location,
+            coordinates=coords,
+            data={
+                "radius_km": radius_km_f,
+                "nb_fires": nb_fires,
+                "debug_treated_bbox": debug_bbox,
+            },
+            error=False,
+        )
+
+    except GeocodingError as e:
+        return ToolResponse(
+            tool_name="detect_fire_tool",
+            message=str(e),
+            error=True,
+        )
+    except LocationAmbiguousError as e:
+        return ToolResponse(
+            tool_name="detect_fire_tool",
+            message=f"I found multiple matches for '{e.query}'. Please confirm the correct location.",
+            city=location,
+            start_date=start_date,
+            end_date=end_date,
+            data={
+                "needs_location_confirmation": True,
+                "location_query": e.query,
+                "candidates": e.candidates,
+                "resume_patch": {"field": "location"},
+            },
+            error=False,
+        )
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Unexpected error during processing: {e}")
+        logger.error(traceback.format_exc())
+        return ToolResponse(
+            tool_name="detect_fire_tool",
+            message=f"Unexpected error during processing: {str(e)}",
+            error=True,
+        )

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from tools import bdtopo_change as change_tool
-from tools import bdtopo_explain as explain_tool
-from tools import bdtopo_intersection as intersection_tool
-from tools import bdtopo_quality as quality_tool
+from modules.geospatial import bdtopo_change as change_tool
+from modules.geospatial import bdtopo_explain as explain_tool
+from modules.geospatial import bdtopo_intersection as intersection_tool
+from modules.geospatial import bdtopo_quality as quality_tool
 from utils.contracts import ToolCoordinates
 
 
@@ -20,6 +20,7 @@ async def test_grouped_bdtopo_tools_are_registered(mcp_client):
     assert "bdtopo_coverage_quality_tool" in names
     assert "bdtopo_change_snapshot_tool" in names
     assert "bdtopo_thematic_explain_tool" in names
+    assert "bdtopo_visualize_tool" in names
 
 
 @pytest.mark.unit

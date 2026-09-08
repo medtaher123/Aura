@@ -1,0 +1,267 @@
+services:
+
+  # ─── Database Server ────────────────────────────────────────────
+  # Reconstructed pgvector database service
+  db:
+    image: ankane/pgvector:latest
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=metaplanet_gis
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=secure_gis_password_2026
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d metaplanet_gis"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+  # ─── TerraZard Tile Server ─────────────────────────────────────
+  # pg_tileserv serves MVT tiles from hazard_archive PostGIS functions
+  # (e.g. public.get_hazard_layer). Set DATABASE_URL in services/mcp_server/.env
+  # to the TerraZard PostGIS connection (same value as TERRAZARD_DATABASE_URL).
+  # Streamlit loads tiles from the host-mapped port; MCP artifacts must use a
+  # browser-reachable base URL (default http://localhost:7800).
+  terrazard-tileserv:
+    image: pramsey/pg_tileserv:latest
+    ports:
+      - "7800:7800"
+    env_file:
+      - ./services/mcp_server/.env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$TERRAZARD_DATABASE_URL" ]; then
+          echo "TERRAZARD_DATABASE_URL is not set in services/mcp_server/.env" >&2
+          exit 1
+        fi
+        export DATABASE_URL="$$TERRAZARD_DATABASE_URL"
+        exec /app/pg_tileserv
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+  # pg_tileserv for BDTOPO raw layers (bdtopo_raw.*).
+  # Maps BDTOPO_DATABASE_URL from the MCP .env onto DATABASE_URL (what pg_tileserv reads).
+  # Optional override: set BDTOPO_TILESERV_DATABASE_URL for a reachable DB
+  # (e.g. postgresql://bdtopo:bdtopo@bdtopo-postgis:5432/bdtopo) when AWS RDS
+  # is not reachable from Docker.
+  bdtopo-tileserv:
+    image: pramsey/pg_tileserv:latest
+    ports:
+      - "7801:7800"
+    env_file:
+      - ./services/mcp_server/.env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        DB_URL="$${BDTOPO_TILESERV_DATABASE_URL:-$$BDTOPO_DATABASE_URL}"
+        if [ -z "$$DB_URL" ]; then
+          echo "BDTOPO_DATABASE_URL (or BDTOPO_TILESERV_DATABASE_URL) is not set in services/mcp_server/.env" >&2
+          exit 1
+        fi
+        export DATABASE_URL="$$DB_URL"
+        exec /app/pg_tileserv
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7800/index.json || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+  # ─── MCP Server ─────────────────────────────────────────────────
+  # Geospatial tool execution layer (MCP SDK v2 Streamable HTTP at /mcp)
+  # Must be healthy before agent-server starts.
+  mcp-server:
+    user: "${UID}:${GID}"
+    build:
+      context: ./services/mcp_server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+      - "5677:5678" 
+    env_file:
+      - ./services/mcp_server/.env
+    environment:
+      - LOG_LEVEL=${MCP_LOG_LEVEL:-debug}
+      - WORKERS=1
+      - TERRAZARD_TILE_SERVER_URL=${TERRAZARD_TILE_SERVER_URL:-http://localhost:7800}
+      - BDTOPO_TILE_SERVER_URL=${BDTOPO_TILE_SERVER_URL:-http://localhost:7801}
+      # Forward host AWS credentials for Athena/S3 access
+      - AWS_PROFILE=MLOps-963275461308
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
+      # Override the IMDS-only cred settings from .env so local AWS creds work
+      # - AWS_SHARED_CREDENTIALS_FILE=
+      # - AWS_CONFIG_FILE=
+      - HOME=/tmp
+    volumes:
+      - mcp-fire-archive:/app/fire_archive
+      - ~/.aws:/tmp/.aws:ro
+      #- ~/.aws/config:/tmp/.aws/config:ro
+      #- ~/.aws/credentials:/tmp/.aws/credentials:ro
+      #- aws-sso-cache:/tmp/.aws/sso/cache
+      - ./services/mcp_server:/app
+    depends_on:
+      terrazard-tileserv:
+        condition: service_started
+      bdtopo-tileserv:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+  # ─── Node MCP servers ───────────────────────────────────────────
+  # Runs Node/stdio MCP packages (e.g. mcp-immo-france) behind
+  # Streamable HTTP so agent-server can treat them like other MCP URLs.
+  node-mcp:
+    build:
+      context: ./services/node_mcp
+      dockerfile: Dockerfile
+    ports:
+      - "8101:8101"
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8101/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+  # ─── Agent Server ───────────────────────────────────────────────
+  # LLM orchestration backend (FastAPI + WebSocket)
+  # Connects to MCP Server for tool discovery/execution and AWS Bedrock for LLM.
+  agent-server:
+    user: "${UID}:${GID}"
+    build:
+      context: ./services/agent_server
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "5678:5678"
+    env_file:
+      - ./services/agent_server/.env
+    environment:
+      - DEBUG=true
+      - DEV_MODE=true
+      - MCP_SERVER_URL=http://mcp-server:8000
+      - NODE_MCP_URL=http://node-mcp
+      - HOST=0.0.0.0
+      - PORT=8080
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-info}
+      - WORKERS=1
+      # AWS Bedrock credockerdentials (forwarded from host)
+      - AWS_PROFILE=MLOps-963275461308
+      - AWS_REGION=${AWS_REGION:-eu-west-3}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-eu-west-3}
+
+      - BEDROCK_REGION=${BEDROCK_REGION:-eu-west-3}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-eu.anthropic.claude-sonnet-4-5-20250929-v1:0}
+      - HOME=/tmp
+      - WS_PING_INTERVAL=30
+      - WS_PING_TIMEOUT=300
+    volumes:
+      - ~/.aws:/tmp/.aws:ro
+      #- ~/.aws/config:/tmp/.aws/config:ro
+      #- ~/.aws/credentials:/tmp/.aws/credentials:ro
+      #- aws-sso-cache:/tmp/.aws/sso/cache
+      - ./services/agent_server:/app
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+      node-mcp:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+  # ─── Streamlit UI ───────────────────────────────────────────────
+  # Web chat interface — connects to Agent Server via WebSocket.
+  streamlit:
+    build:
+      context: ./services/streamlit
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+      - "5679:5678" 
+    env_file:
+      - ./services/streamlit/.env
+    environment:
+      - DEBUG=true
+      - AGENT_SERVER_URL=ws://agent-server:8080
+      - MAPTILER_API_KEY=${MAPTILER_API_KEY:-}
+      - MAPBOX_API_KEY=${MAPBOX_API_KEY:-}
+    depends_on:
+      agent-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/health"]
+      interval: 20s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - eo-agent
+    volumes:
+      - ./services/streamlit:/app
+
+  # ─── PostGIS (optional) ────────────────────────────────────────
+  # Only needed if you want BDTOPO tools in MCP Server.
+  # Uncomment this block and set BDTOPO_DATABASE_URL in mcp_server/.env
+  
+  bdtopo-postgis:
+    image: postgis/postgis:16-3.4
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=bdtopo
+      - POSTGRES_PASSWORD=bdtopo
+      - POSTGRES_DB=bdtopo
+    volumes:
+      - pgdata_bdtopo:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bdtopo -d bdtopo"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - eo-agent
+
+volumes:
+  mcp-fire-archive:
+  pgdata:
+  aws-sso-cache:
+  pgdata_bdtopo:
+  
+networks:
+  eo-agent:
+    driver: bridge

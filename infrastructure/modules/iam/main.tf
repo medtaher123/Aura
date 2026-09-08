@@ -1,7 +1,7 @@
 # ECS Task Execution Role (shared)
 # Used by ECS to pull images, write logs, and access secrets
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecsTaskExecutionRole"
+  name = var.execution_role_name
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -17,7 +17,7 @@ resource "aws_iam_role" "ecs_task_execution_role" {
   })
 
   tags = {
-    Name        = "ecsTaskExecutionRole"
+    Name        = var.execution_role_name
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
@@ -45,7 +45,8 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
           var.opentopo_api_key_arn,
           var.map_key_arn,
           var.maptiler_api_key_arn,
-          var.bdtopo_database_url_secret_arn
+          var.bdtopo_database_url_secret_arn,
+          var.cognito_client_secret_arn
         ])
       },
       {
@@ -102,6 +103,20 @@ locals {
         "ecs:DescribeTasks"
       ]
       Resource = "*"
+    },
+    {
+      # Required for ECS Exec / SSM port-forwarding (remote debugging).
+      # These actions do not support resource-level scoping; the SSM channel
+      # only exists when enable_execute_command is set on the service.
+      Sid    = "ECSExecSSMMessages"
+      Effect = "Allow"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ]
+      Resource = "*"
     }
   ]
 }
@@ -141,6 +156,25 @@ resource "aws_iam_role_policy" "mcp_task_role_policy" {
           "arn:aws:s3:::metaplanet-*/*",
           "arn:aws:s3:::${var.project_name}-*",
           "arn:aws:s3:::${var.project_name}-*/*"
+        ]
+      },
+      {
+        # Read-only access to public AWS Open Data buckets that Athena/tools
+        # query directly (Daylight OSM for flood_damage_city, GDFC for
+        # floods_and_droughts). Athena reads source S3 as the task role, so
+        # these must be explicitly allowed even though the buckets are public.
+        Sid    = "PublicOpenDataRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation"
+        ]
+        Resource = [
+          "arn:aws:s3:::daylight-openstreetmap",
+          "arn:aws:s3:::daylight-openstreetmap/*",
+          "arn:aws:s3:::global-drought-flood-catalogue",
+          "arn:aws:s3:::global-drought-flood-catalogue/*"
         ]
       },
       {
@@ -295,9 +329,9 @@ resource "aws_iam_role_policy" "eventbridge_scheduler_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "RunTask"
-        Effect = "Allow"
-        Action = "ecs:RunTask"
+        Sid      = "RunTask"
+        Effect   = "Allow"
+        Action   = "ecs:RunTask"
         Resource = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${var.project_name}-bdtopo-pipeline:*"
         Condition = {
           ArnEquals = {

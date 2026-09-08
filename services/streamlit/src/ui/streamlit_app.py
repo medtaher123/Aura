@@ -4,16 +4,25 @@ Renders assistant responses, including map artifacts (HTML or Pydeck specs).
 """
 
 import io
+import html
 import os
+import queue
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Optional
 from urllib.parse import urlparse
-from typing_extensions import TypedDict
 
+import base64
 import numpy as np
 import streamlit as st
 import pydeck as pdk
+import folium
+from folium.plugins import Draw, VectorGridProtobuf
+from streamlit_folium import st_folium
+import requests
 from PIL import Image
 from dotenv import load_dotenv
 from streamlit.delta_generator import DeltaGenerator
@@ -24,17 +33,64 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.ui.bbox_input import (  # noqa: E402
+    bounding_box_attachment,
+    bbox_from_folium_draw_output,
+)
+from src.ui.conversation_history import (  # noqa: E402
+    AgentTimelineItem,
+    AssistantMessage,
+    Message,
+    ToolCallRecord,
+    ToolRunStatus,
+    UserMessage,
+    conversation_messages_to_chat_state as _conversation_messages_to_chat_state,
+    pending_from_conversation_messages as _pending_from_conversation_messages,
+)
+from src.ui.file_input import (  # noqa: E402
+    FileUploadError,
+    file_attachment,
+    upload_file_to_agent,
+)
+from src.ui.location_input import (  # noqa: E402
+    location_attachment,
+    search_location_candidates,
+)
+from src.ui.multiple_choice_input import (  # noqa: E402
+    OTHER_OPTION_ID,
+    multiple_choice_attachment,
+    offered_options_from_payload,
+)
+from src.ui.multiple_choice_ui import render_multiple_choice_ui  # noqa: E402
+
 # Load local env vars (e.g., MAPTILER_API_KEY) from repo `.env`.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from src.clients.agent_ws_client import LocationOption, get_osm_type_prefix  # noqa: E402
+# Reload client modules on each Streamlit rerun so protocol changes apply
+# without requiring a full process restart during development.
+import importlib
+import src.clients.agent_ws_client as _agent_ws_client_module
+import src.clients.agent_adapter as _agent_adapter_module
+
+importlib.reload(_agent_ws_client_module)
+importlib.reload(_agent_adapter_module)
+
+from src.clients.agent_ws_client import LocationOption, get_osm_type_prefix, WS_PROTOCOL_VERSION  # noqa: E402
 from src.clients.agent_adapter import (  # noqa: E402
     get_shared_agent_adapter,
+    reset_shared_agent_adapter,
     AgentResponse,
     ToolArtifacts,
 )
 from src.core.logger import get_logger  # noqa: E402
 from src.services.document_service import extract_text_from_pdf_bytes  # noqa: E402
+from src.auth import (  # noqa: E402
+    auth_enabled,
+    render_login_gate,
+    render_logout_control,
+)
+from src.ui.terrazard_map_styles import get_style_options  # noqa: E402
+from src.ui.terrazard_reference_layers import add_reference_layers  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -123,52 +179,232 @@ from src.services import detect_and_translate_to_english, translate_from_english
 logger.info("Streamlit app starting...")
 
 
-# Type definitions for chat messages
-class UserMessage(TypedDict):
-    """User message in chat history."""
-
-    role: Literal["user"]
-    content: str
+# Type definitions for chat messages live in ``conversation_history``.
 
 
-class AssistantMessage(TypedDict):
-    """Assistant message in chat history."""
+def _confirmed_location_from_cache(display: str, token: Optional[str]) -> dict:
+    """Build a location attachment from a cached disambiguation token.
 
-    role: Literal["assistant"]
-    content: str
-    artifacts: ToolArtifacts
-    error: bool
+    Tokens look like ``@osm_id:R4479752`` or ``@place_id:397136633``. Parsing the
+    identifier lets the backend match it against the fresh candidate list when
+    auto-confirming a previously chosen location.
+    """
+    loc: dict = {
+        "type": "location",
+        "name": display or "",
+        "coordinates": [0, 0],
+    }
+    if not isinstance(token, str):
+        return loc
+    if token.startswith("@osm_id:") and len(token) > len("@osm_id:"):
+        rest = token[len("@osm_id:") :]
+        prefix, digits = rest[:1], rest[1:]
+        osm_types = {"R": "relation", "W": "way", "N": "node"}
+        if prefix in osm_types and digits.isdigit():
+            loc["osm_id"] = int(digits)
+            loc["osm_type"] = osm_types[prefix]
+            loc["osm_type_prefix"] = prefix
+    elif token.startswith("@place_id:"):
+        digits = token[len("@place_id:") :]
+        if digits.isdigit():
+            loc["place_id"] = int(digits)
+    return loc
 
 
-# Union type for all message types
-Message = UserMessage | AssistantMessage
+def _location_attachment_from_option(choice: "LocationOption") -> dict:
+    return {
+        "type": "location",
+        "name": choice.name,
+        "coordinates": choice.coordinates,
+        "place_id": choice.place_id,
+        "osm_id": choice.osm_id,
+        "osm_type": choice.osm_type,
+        "osm_type_prefix": choice.osm_type_prefix,
+    }
+
+
+def _pending_from_agent_result(result: AgentResponse) -> dict | None:
+    needs_input = getattr(result, "needs_input", None) or {}
+    if not needs_input:
+        return None
+    return {
+        "needs_input": needs_input,
+        "pause": result.pause_state or {},
+    }
+
+
+def _location_query_from_needs_input(needs_input: dict) -> Optional[str]:
+    payload = needs_input.get("location") if isinstance(needs_input, dict) else None
+    if isinstance(payload, dict):
+        q = payload.get("location_query")
+        if isinstance(q, str) and q.strip():
+            return q.strip()
+    return None
 
 
 def _invoke_agent_unified(
     executor,
     english_query: str,
-    chat_history=None,
     resume=None,
-    confirmed_location=None,
+    attachments=None,
+    conversation_id=None,
     stream_callback=None,
     language=None,
-    document_context=None,
 ) -> AgentResponse:
-    """
-    Invoke the remote agent via WebSocket.
-
-    Returns AgentResponse with: message, artifacts, error, needs_location_confirmation,
-    location_options, pause_state, raw_data
-    """
+    """Invoke the remote agent via WebSocket."""
     return executor.invoke(
         message=english_query,
-        chat_history=chat_history,
-        document_context=document_context,
         resume=resume,
-        confirmed_location=confirmed_location,
+        attachments=attachments,
+        conversation_id=conversation_id,
         stream_callback=stream_callback,
         language=language,
     )
+
+
+# Separate typewriter speeds (chars/sec). Tune these independently.
+# Domain stays lower/smoother; finalizer is faster (longer answers).
+DOMAIN_TYPEWRITER_CPS = 320.0
+DOMAIN_TYPEWRITER_MAX_CHARS_PER_TICK = 15
+FINALIZER_TYPEWRITER_CPS = 520.0
+FINALIZER_TYPEWRITER_MAX_CHARS_PER_TICK = 18
+TYPEWRITER_TICK_INTERVAL_S = 0.008
+
+
+def _invoke_agent_with_streaming_display(
+    executor,
+    *,
+    layout: "StreamingTurnLayout",
+    tools_callback: Callable[[dict], None] | None = None,
+    nodes_callback: Callable[[dict], None] | None = None,
+    tools_tick: Callable[[], None] | None = None,
+    domain_typewriter_snap: Callable[[], None] | None = None,
+    artifacts_snapshot: Callable[[], ToolArtifacts] | None = None,
+    trace_callback: Callable[[dict], None] | None = None,
+    thinking_callback: Callable[[dict], None] | None = None,
+    english_query: str = "",
+    resume=None,
+    attachments=None,
+    conversation_id=None,
+    language=None,
+) -> AgentResponse:
+    """Run the agent on a worker thread and render stream events on the main thread."""
+    event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+
+    def stream_callback(evt: dict) -> None:
+        if not isinstance(evt, dict):
+            return
+        if evt.get("type") == "token":
+            content = evt.get("content")
+            if isinstance(content, str) and content:
+                event_queue.put(("token", content))
+            return
+        event_queue.put(("event", evt))
+
+    def run_agent() -> AgentResponse:
+        return _invoke_agent_unified(
+            executor,
+            english_query,
+            resume=resume,
+            attachments=attachments,
+            conversation_id=conversation_id,
+            stream_callback=stream_callback,
+            language=language,
+        )
+
+    def drain_events() -> None:
+        nonlocal streamed_target
+        while True:
+            try:
+                kind, payload = event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "token" and isinstance(payload, str):
+                # Buffer only — typewriter reveal happens on the tick below.
+                streamed_target += payload
+            elif kind == "event" and isinstance(payload, dict):
+                if payload.get("type") == "thinking" and thinking_callback:
+                    thinking_callback(payload)
+                elif nodes_callback and _is_node_progress_event(payload):
+                    nodes_callback(payload)
+                elif tools_callback and _is_tool_progress_event(payload):
+                    tools_callback(payload)
+                elif trace_callback:
+                    trace_callback(payload)
+
+    def advance_answer_typewriter(*, chars: int = 1) -> bool:
+        """Reveal up to ``chars`` of the finalizer buffer. Returns if progressed."""
+        nonlocal streamed_shown
+        if chars <= 0 or len(streamed_shown) >= len(streamed_target):
+            return False
+        streamed_shown = streamed_target[: len(streamed_shown) + chars]
+        layout.set_message(streamed_shown, cursor=True)
+        return True
+
+    streamed_target = ""
+    streamed_shown = ""
+    last_answer_typewriter = time.monotonic()
+    domain_snapped_for_finalizer = False
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(run_agent)
+        while True:
+            drain_events()
+            # Final answer started → cancel domain typewriter and show full text.
+            if streamed_target and not domain_snapped_for_finalizer:
+                if domain_typewriter_snap:
+                    domain_typewriter_snap()
+                domain_snapped_for_finalizer = True
+            if tools_tick:
+                tools_tick()
+            now = time.monotonic()
+            dt = max(0.0, now - last_answer_typewriter)
+            last_answer_typewriter = now
+            chars = int(dt * FINALIZER_TYPEWRITER_CPS)
+            if chars < 1 and len(streamed_shown) < len(streamed_target):
+                chars = 1
+            chars = min(chars, FINALIZER_TYPEWRITER_MAX_CHARS_PER_TICK)
+            advance_answer_typewriter(chars=chars)
+            if future.done():
+                drain_events()
+                if streamed_target and not domain_snapped_for_finalizer:
+                    if domain_typewriter_snap:
+                        domain_typewriter_snap()
+                    domain_snapped_for_finalizer = True
+                # Catch up remaining finalizer text.
+                while True:
+                    if tools_tick:
+                        tools_tick()
+                    now2 = time.monotonic()
+                    dt2 = max(0.0, now2 - last_answer_typewriter)
+                    last_answer_typewriter = now2
+                    chars2 = int(dt2 * FINALIZER_TYPEWRITER_CPS)
+                    if chars2 < 1 and len(streamed_shown) < len(streamed_target):
+                        chars2 = 1
+                    chars2 = min(chars2, FINALIZER_TYPEWRITER_MAX_CHARS_PER_TICK)
+                    advance_answer_typewriter(chars=chars2)
+                    if len(streamed_shown) >= len(streamed_target):
+                        break
+                    time.sleep(TYPEWRITER_TICK_INTERVAL_S)
+                break
+            time.sleep(TYPEWRITER_TICK_INTERVAL_S)
+
+        result = future.result()
+
+    final_text = (result.message or streamed_target).strip()
+    if final_text:
+        layout.set_message(final_text)
+    else:
+        layout.set_message("")
+
+    # Only paint at end if nothing was shown live — remounting pydeck causes a flash.
+    live = artifacts_snapshot() if artifacts_snapshot else ToolArtifacts()
+    if not _artifacts_need_columns(live):
+        arts = result.artifacts or ToolArtifacts()
+        if _artifacts_need_columns(arts):
+            layout.paint_artifacts(arts)
+
+    return result
 
 
 def _default_pydeck_map_style() -> str:
@@ -198,6 +434,9 @@ def _coerce_view_state(view_state: dict) -> pdk.ViewState:
     )
 
 
+_MAP_DEFAULT_HEIGHT = 450
+_VECTOR_TILE_MAP_HEIGHT = 600
+
 def _render_pydeck_map_spec(item: dict) -> None:
     view_state_raw = item.get("view_state") or {}
     if not isinstance(view_state_raw, dict):
@@ -205,7 +444,7 @@ def _render_pydeck_map_spec(item: dict) -> None:
 
     layers: list[pdk.Layer] = []
 
-    # Backwards-compatible shorthand: {points: [...], ...}
+    # Shorthand form: {points: [...], ...}
     points = item.get("points")
     if isinstance(points, list):
         layers.append(
@@ -255,7 +494,382 @@ def _render_pydeck_map_spec(item: dict) -> None:
         map_style=item.get("map_style") or _default_pydeck_map_style(),
         tooltip=tooltip,  # type: ignore
     )
-    st.pydeck_chart(deck, use_container_width=True, height=item.get("height", 450))
+    st.pydeck_chart(deck, use_container_width=True, height=item.get("height", _MAP_DEFAULT_HEIGHT))
+
+
+_VECTOR_TILE_BASEMAPS: tuple[dict[str, str | bool], ...] = (
+    {
+        "name": "Streets",
+        "tiles": "OpenStreetMap",
+        "attr": "© OpenStreetMap contributors",
+        "default": True,
+    },
+    {
+        "name": "Light",
+        "tiles": "CartoDB positron",
+        "attr": "© OpenStreetMap © CARTO",
+        "default": False,
+    },
+    {
+        "name": "Dark",
+        "tiles": "CartoDB dark_matter",
+        "attr": "© OpenStreetMap © CARTO",
+        "default": False,
+    },
+    {
+        "name": "Topographic",
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attr": "Tiles © Esri",
+        "default": False,
+    },
+    {
+        "name": "Satellite",
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attr": "Tiles © Esri",
+        "default": False,
+    },
+)
+
+
+def _add_vector_tile_basemaps(folium_map: folium.Map) -> None:
+    """Attach switchable base layers (Streets / Light / Dark / Topo / Satellite)."""
+    for basemap in _VECTOR_TILE_BASEMAPS:
+        folium.TileLayer(
+            tiles=str(basemap["tiles"]),
+            attr=str(basemap["attr"]),
+            name=str(basemap["name"]),
+            overlay=False,
+            control=True,
+            show=bool(basemap["default"]),
+        ).add_to(folium_map)
+
+
+def _treated_area_bounds(item: dict) -> list[list[float]] | None:
+    """Return Folium rectangle bounds ``[[min_lat, min_lon], [max_lat, max_lon]]``."""
+    box = item.get("box")
+    if isinstance(box, dict):
+        geometry = box.get("geometry") if box.get("type") == "Feature" else box
+        if isinstance(geometry, dict) and geometry.get("type") == "Polygon":
+            coords = geometry.get("coordinates")
+            if (
+                isinstance(coords, list)
+                and coords
+                and isinstance(coords[0], list)
+                and len(coords[0]) >= 4
+            ):
+                ring = coords[0]
+                try:
+                    lons = [float(pt[0]) for pt in ring if isinstance(pt, (list, tuple))]
+                    lats = [float(pt[1]) for pt in ring if isinstance(pt, (list, tuple))]
+                except (TypeError, ValueError, IndexError):
+                    lons, lats = [], []
+                if lats and lons:
+                    return [[min(lats), min(lons)], [max(lats), max(lons)]]
+
+    bbox = item.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4:
+        try:
+            min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            return None
+        return [[min_lat, min_lon], [max_lat, max_lon]]
+    return None
+
+
+def _add_treated_area_box(folium_map: folium.Map, item: dict) -> None:
+    """Draw the treated-area bounding box when present on a vector-tile map artifact."""
+    bounds = _treated_area_bounds(item)
+    if bounds is None:
+        return
+    folium.Rectangle(
+        bounds=bounds,
+        color="#e67e22",
+        weight=2,
+        fill=False,
+        opacity=0.9,
+        name="Treated area",
+    ).add_to(folium_map)
+
+
+def _add_geojson_overlays(folium_map: folium.Map, item: dict) -> None:
+    """Draw optional GeoJSON overlays (e.g. flood-touched buildings) on vector-tile maps."""
+    overlays = item.get("geojson_overlays")
+    if not isinstance(overlays, list):
+        return
+
+    for overlay in overlays:
+        if not isinstance(overlay, dict):
+            continue
+        data = overlay.get("data")
+        if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
+            continue
+        features = data.get("features")
+        if not isinstance(features, list) or not features:
+            continue
+
+        style = overlay.get("style") if isinstance(overlay.get("style"), dict) else {}
+        fill_color = str(style.get("fillColor") or "#FF6D00")
+        color = str(style.get("color") or "#E65100")
+        try:
+            fill_opacity = float(style.get("fillOpacity", 0.65))
+        except (TypeError, ValueError):
+            fill_opacity = 0.65
+        try:
+            weight = float(style.get("weight", 1.5))
+        except (TypeError, ValueError):
+            weight = 1.5
+        layer_name = str(overlay.get("name") or "Overlay")
+
+        def _style_fn(_feature, *, fc=fill_color, c=color, fo=fill_opacity, w=weight):
+            return {
+                "fillColor": fc,
+                "color": c,
+                "fillOpacity": fo,
+                "weight": w,
+            }
+
+        folium.GeoJson(
+            data,
+            name=layer_name,
+            style_function=_style_fn,
+            tooltip=folium.GeoJsonTooltip(
+                fields=[
+                    "land_type",
+                    "asset_class",
+                    "representative_depth_m",
+                    "intersection_area_m2",
+                    "damage_eur",
+                ],
+                aliases=[
+                    "Land type",
+                    "Asset class",
+                    "Depth (m)",
+                    "Intersected area (m²)",
+                    "Damage (€)",
+                ],
+                sticky=False,
+            ),
+        ).add_to(folium_map)
+
+
+def _render_vector_tile_map_spec(item: dict) -> None:
+    """Render a TerraZard / BDTOPO vector-tile map artifact via Folium."""
+    view_state_raw = item.get("view_state") or {}
+    if not isinstance(view_state_raw, dict):
+        view_state_raw = {}
+
+    latitude = float(view_state_raw.get("latitude", 0.0) or 0.0)
+    longitude = float(view_state_raw.get("longitude", 0.0) or 0.0)
+    zoom = int(float(view_state_raw.get("zoom", 10.0) or 10.0))
+    height = int(item.get("height", _VECTOR_TILE_MAP_HEIGHT))
+
+    title = item.get("title")
+    if isinstance(title, str) and title.strip():
+        st.caption(title)
+
+    folium_map = folium.Map(
+        location=[latitude, longitude],
+        zoom_start=zoom,
+        tiles=None,
+        control_scale=True,
+    )
+    _add_vector_tile_basemaps(folium_map)
+
+    add_reference_layers(folium_map, item.get("reference_layers"))
+
+    vector_layers = item.get("vector_layers")
+    if isinstance(vector_layers, list):
+        for layer_spec in vector_layers:
+            if not isinstance(layer_spec, dict):
+                continue
+            if layer_spec.get("visible") is False:
+                continue
+
+            tile_url = layer_spec.get("tile_url")
+            if not isinstance(tile_url, str) or not tile_url.strip():
+                continue
+
+            layer_name = layer_spec.get("name") or "Hazard layer"
+            style_key = layer_spec.get("style")
+            minzoom_int: int | None = None
+            minzoom = layer_spec.get("minzoom")
+            if minzoom is not None:
+                try:
+                    minzoom_int = int(minzoom)
+                except (TypeError, ValueError):
+                    minzoom_int = None
+
+            style_options = get_style_options(
+                style_key if isinstance(style_key, str) else "",
+                latitude=latitude,
+                stroke_width_m=0.5,
+                min_zoom=minzoom_int,
+            )
+            # Dict presets (TerraZard) may still need minZoom injected.
+            if isinstance(style_options, dict) and minzoom_int is not None:
+                style_options = dict(style_options)
+                style_options["minZoom"] = minzoom_int
+
+            VectorGridProtobuf(
+                tile_url,
+                name=str(layer_name),
+                options=style_options,
+            ).add_to(folium_map)
+
+    _add_geojson_overlays(folium_map, item)
+    _add_treated_area_box(folium_map, item)
+
+    folium.LayerControl(collapsed=True).add_to(folium_map)
+    map_html = folium_map.get_root().render()
+
+    b64 = base64.b64encode(map_html.encode('utf-8')).decode('utf-8')
+
+    st.markdown(
+        f'<iframe src="data:text/html;base64,{b64}" '
+        f'style="width: 100%; height: {height}px; border: none;" '
+        f'scrolling="no"></iframe>',
+        unsafe_allow_html=True,
+    )
+    
+
+    stats = item.get("stats")
+    if isinstance(stats, dict):
+        cols = st.columns(3)
+        observation_date = stats.get("observation_date")
+        if isinstance(observation_date, str) and len(observation_date) == 8:
+            iso_date = (
+                f"{observation_date[:4]}-{observation_date[4:6]}-"
+                f"{observation_date[6:8]}"
+            )
+            cols[0].metric("Active Date", iso_date)
+        else:
+            cols[0].metric("Active Date", str(observation_date or "—"))
+        cols[1].metric("Flood Polygons", int(stats.get("water_count", 0) or 0))
+        cols[2].metric("Cloud Polygons", int(stats.get("cloud_count", 0) or 0))
+
+
+def _render_map_artifact_item(item: dict) -> None:
+    """Dispatch map artifact rendering based on renderer type."""
+    if item.get("renderer") == "vector_tile":
+        _render_vector_tile_map_spec(item)
+        return
+    _render_pydeck_map_spec(item)
+
+
+def _is_displayable_image_url(url: str) -> bool:
+    """True if the URL points to an image format browsers can display (not COG/GeoTIFF)."""
+    u = url.lower().split("?")[0]
+    return u.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+
+
+def _is_cog_url(url: str) -> bool:
+    """True if the URL is likely a Cloud-Optimized GeoTIFF we can preview."""
+    u = url.lower().split("?")[0]
+    return u.endswith(".tif") or u.endswith(".tiff")
+
+
+def _render_thumbnail_or_link(url: str) -> None:
+    if not url.startswith("http://") and not url.startswith("https://"):
+        st.caption(f"Image: {url}")
+        return
+    if _is_displayable_image_url(url):
+        st.image(url, width=300)
+    elif _is_cog_url(url):
+        png_bytes = _cog_url_to_png_bytes(url)
+        if png_bytes:
+            st.image(png_bytes, width=300)
+            st.caption("Preview (COG). [Open full COG in viewer](%s)" % url)
+        else:
+            st.markdown(f"[Open image/COG in viewer]({url})")
+            st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
+    else:
+        st.markdown(f"[Open image/COG in viewer]({url})")
+        st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
+
+
+def _artifact_item_key(item: object) -> str:
+    import json
+
+    if isinstance(item, str):
+        return f"s:{item}"
+    try:
+        return f"j:{json.dumps(item, sort_keys=True, default=str)}"
+    except (TypeError, ValueError):
+        return f"r:{repr(item)}"
+
+
+def _extend_artifacts_unique(
+    target: ToolArtifacts, incoming: dict | ToolArtifacts | None
+) -> bool:
+    """Merge incoming artifacts into target; return True if anything new was added."""
+    if incoming is None:
+        return False
+    if isinstance(incoming, ToolArtifacts):
+        maps = list(incoming.maps or [])
+        thumbnails = list(incoming.thumbnails or [])
+        urls = list(incoming.urls or [])
+    elif isinstance(incoming, dict):
+        maps = list(incoming.get("maps") or [])
+        thumbnails = [t for t in (incoming.get("thumbnails") or []) if isinstance(t, str)]
+        urls = [u for u in (incoming.get("urls") or []) if isinstance(u, str)]
+    else:
+        return False
+
+    added = False
+    seen_maps = {_artifact_item_key(m) for m in target.maps}
+    for item in maps:
+        key = _artifact_item_key(item)
+        if key in seen_maps:
+            continue
+        seen_maps.add(key)
+        target.maps.append(item)
+        added = True
+
+    seen_thumbs = set(target.thumbnails)
+    for url in thumbnails:
+        if url in seen_thumbs:
+            continue
+        seen_thumbs.add(url)
+        target.thumbnails.append(url)
+        added = True
+
+    seen_urls = set(target.urls)
+    for url in urls:
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        target.urls.append(url)
+        added = True
+
+    return added
+
+
+def _render_artifacts_panel(artifacts: ToolArtifacts) -> None:
+    """Render maps/thumbnails for progressive streaming or history replay."""
+    maps = artifacts.maps if hasattr(artifacts, "maps") else []
+    thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
+    has_map = any(
+        isinstance(x, dict) and isinstance(x.get("view_state"), dict)
+        for x in maps
+    )
+    if not has_map and not thumbnails:
+        return
+
+    for item in maps:
+        if isinstance(item, dict) and isinstance(item.get("view_state"), dict):
+            _render_map_artifact_item(item)
+
+    if thumbnails:
+        st.write("### Satellite Images:")
+        for url in thumbnails:
+            if isinstance(url, str) and url:
+                _render_thumbnail_or_link(url)
 
 
 def _shorten(text: str, *, max_len: int = 220) -> str:
@@ -265,6 +879,1618 @@ def _shorten(text: str, *, max_len: int = 220) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 1].rstrip() + "…"
+
+
+_TOOL_STATUS_CSS = """
+@keyframes metaplanet-tool-spin {
+  to { transform: rotate(360deg); }
+}
+.metaplanet-tool-spin {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #22c55e;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: metaplanet-tool-spin 0.85s linear infinite;
+  vertical-align: middle;
+}
+.metaplanet-tool-dot-success {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: #22c55e;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.metaplanet-tool-dot-error {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: #ef4444;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.metaplanet-tool-dot-skipped {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: #f59e0b;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+/* Dense domain-result markdown (tables/headings), not pre-wrap plaintext. */
+.agent-domain-box {
+  background: #f7f8fa;
+  color: inherit;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.3rem;
+  margin: 0.15rem 0;
+  font-size: 0.88rem;
+  line-height: 1.3;
+  overflow-x: auto;
+}
+.agent-domain-cursor {
+  display: inline;
+  margin-left: 0.05em;
+  opacity: 0.75;
+}
+.agent-domain-box > :first-child { margin-top: 0 !important; }
+.agent-domain-box > :last-child { margin-bottom: 0 !important; }
+.agent-domain-box p {
+  margin: 0.2em 0 !important;
+  line-height: 1.3 !important;
+}
+.agent-domain-box h1,
+.agent-domain-box h2,
+.agent-domain-box h3,
+.agent-domain-box h4 {
+  margin: 0.4em 0 0.15em !important;
+  line-height: 1.2 !important;
+}
+.agent-domain-box h1 { font-size: 1.1rem !important; }
+.agent-domain-box h2 { font-size: 1.02rem !important; }
+.agent-domain-box h3,
+.agent-domain-box h4 { font-size: 0.95rem !important; }
+.agent-domain-box ul,
+.agent-domain-box ol {
+  margin: 0.15em 0 !important;
+  padding-left: 1.15em !important;
+}
+.agent-domain-box li {
+  margin: 0.05em 0 !important;
+  line-height: 1.3 !important;
+}
+.agent-domain-box table {
+  margin: 0.25em 0 !important;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+.agent-domain-box th,
+.agent-domain-box td {
+  border: 1px solid #d0d5dd;
+  padding: 0.18rem 0.4rem !important;
+  vertical-align: top;
+}
+.agent-domain-box th {
+  background: #eef1f5;
+}
+.agent-domain-box hr {
+  margin: 0.35em 0 !important;
+  border: none;
+  border-top: 1px solid #d0d5dd;
+}
+.agent-domain-box blockquote {
+  margin: 0.2em 0 !important;
+  padding-left: 0.6em;
+  border-left: 3px solid #d0d5dd;
+}
+.agent-domain-box pre {
+  margin: 0.2em 0 !important;
+  padding: 0.35em 0.5em;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+"""
+
+@dataclass
+class _ToolCallState:
+    key: str
+    tool_name: str
+    status: ToolRunStatus = "running"
+    step_id: str | None = None
+    domain: str | None = None
+    execution_time_seconds: float | None = None
+    started_at: float | None = None
+    detail: str | None = None
+    result: dict | None = None
+    arguments: dict | None = None
+    order: int = 0
+
+
+def _format_execution_time(seconds: float | int | None) -> str | None:
+    if seconds is None:
+        return None
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if value < 1:
+        return f"{value:.2f}s"
+    return f"{value:.1f}s"
+
+
+def _resolve_tool_step_id(evt: dict) -> str | None:
+    step_id = evt.get("step_id")
+    if isinstance(step_id, str) and step_id.strip():
+        return step_id.strip()
+    tool_input = evt.get("tool_input")
+    if isinstance(tool_input, dict):
+        nested = tool_input.get("step_id")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _resolve_tool_domain(evt: dict) -> str | None:
+    domain = evt.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        return domain.strip()
+    tool_input = evt.get("tool_input")
+    if isinstance(tool_input, dict):
+        nested = tool_input.get("domain")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _tool_arguments_from_event(evt: dict) -> dict | None:
+    raw_args = evt.get("tool_input") or evt.get("arguments")
+    if not isinstance(raw_args, dict):
+        return None
+    return {
+        key: value
+        for key, value in raw_args.items()
+        if key not in {"step_id", "domain"}
+    }
+
+
+def _tool_call_key(evt: dict, *, order: int) -> str:
+    step_id = _resolve_tool_step_id(evt)
+    if step_id:
+        return step_id
+    tool_name = str(evt.get("tool_name") or "tool")
+    return f"{tool_name}:{order}"
+
+
+def _tool_status_from_event(evt: dict) -> ToolRunStatus:
+    phase = evt.get("phase")
+    status = evt.get("status")
+    if phase == "running":
+        return "running"
+    if status == "skipped":
+        return "skipped"
+    if bool(evt.get("error")) or status == "error":
+        return "error"
+    return "success"
+
+
+def _tool_status_meta(tool: _ToolCallState, *, now: float | None = None) -> str:
+    if tool.status == "running":
+        if tool.started_at is not None:
+            elapsed = max(0.0, (now or time.monotonic()) - tool.started_at)
+            return _format_execution_time(elapsed) or "0.00s"
+        return "0.00s"
+    if tool.status == "success":
+        return _format_execution_time(tool.execution_time_seconds) or "Done"
+    if tool.status == "error":
+        return "Error"
+    return "Skipped"
+
+
+def _tool_status_icon_html(status: ToolRunStatus) -> str:
+    if status == "running":
+        return '<span class="metaplanet-tool-spin"></span>'
+    if status == "success":
+        return '<span class="metaplanet-tool-dot-success"></span>'
+    if status == "error":
+        return '<span class="metaplanet-tool-dot-error"></span>'
+    return '<span class="metaplanet-tool-dot-skipped"></span>'
+
+
+def _tool_call_to_record(tool: _ToolCallState) -> ToolCallRecord:
+    record = ToolCallRecord(
+        tool_name=tool.tool_name,
+        status=tool.status,
+        step_id=tool.step_id,
+        domain=tool.domain,
+        execution_time_seconds=tool.execution_time_seconds,
+        detail=tool.detail,
+    )
+    if tool.result is not None:
+        record["result"] = tool.result
+    if tool.arguments is not None:
+        record["arguments"] = tool.arguments
+    return record
+
+
+def _record_to_tool_call(record: ToolCallRecord) -> _ToolCallState:
+    tool_name = record.get("tool_name") or "tool"
+    return _ToolCallState(
+        key=record.get("step_id") or tool_name,
+        tool_name=tool_name,
+        status=record.get("status", "success"),
+        step_id=record.get("step_id"),
+        domain=record.get("domain"),
+        execution_time_seconds=record.get("execution_time_seconds"),
+        detail=record.get("detail"),
+        result=record.get("result"),
+        arguments=record.get("arguments"),
+    )
+
+
+def _is_tool_progress_event(evt: dict) -> bool:
+    event_type = evt.get("type")
+    if event_type == "data_agent_step":
+        return True
+    if event_type == "stage" and evt.get("stage") in {"tool_call", "data_agent"}:
+        return True
+    return False
+
+
+def _normalize_tool_progress_event(evt: dict) -> dict | None:
+    event_type = evt.get("type")
+    if event_type == "data_agent_step":
+        return evt
+    if event_type == "stage" and evt.get("stage") in {"tool_call", "data_agent"}:
+        return {
+            "type": "data_agent_step",
+            "phase": "running",
+            "tool_name": "tools",
+            "step_id": "__pending__",
+        }
+    return None
+
+
+def _domain_markdown_renderer():
+    """Lazy MarkdownIt instance (GFM tables) for domain result HTML."""
+    renderer = getattr(_domain_markdown_renderer, "_cached", None)
+    if renderer is not None:
+        return renderer
+    from markdown_it import MarkdownIt
+
+    renderer = MarkdownIt("commonmark", {"html": False}).enable("table")
+    _domain_markdown_renderer._cached = renderer  # type: ignore[attr-defined]
+    return renderer
+
+
+def _append_domain_streaming_cursor(body: str) -> str:
+    """Insert the typewriter cursor inside the last text-bearing block.
+
+    Appending after ``</p>`` / ``</table>`` puts the caret on its own line.
+    """
+    cursor = "<span class='agent-domain-cursor'>▌</span>"
+    trimmed = body.rstrip()
+    # Prefer hosts that visually end the typed content.
+    host_tags = (
+        "td",
+        "th",
+        "li",
+        "p",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "pre",
+        "blockquote",
+        "code",
+    )
+    best = -1
+    for tag in host_tags:
+        needle = f"</{tag}>"
+        idx = trimmed.rfind(needle)
+        if idx > best:
+            best = idx
+    if best >= 0:
+        return f"{trimmed[:best]}{cursor}{trimmed[best:]}"
+    return f"{trimmed}{cursor}"
+
+
+def _domain_result_html(message: str, *, streaming: bool = False) -> str:
+    """Render domain text for the Agent panel as dense Markdown HTML.
+
+    Streaming uses the same renderer as the completed result; only a cursor is
+    inserted at the end of the last text block while typing.
+    """
+    text = str(message or "")
+    if not text.strip():
+        if not streaming:
+            return ""
+        return (
+            "<div class='agent-domain-box'>"
+            "<span class='agent-domain-cursor'>▌</span>"
+            "</div>"
+        )
+    body = _domain_markdown_renderer().render(text)
+    if streaming:
+        body = _append_domain_streaming_cursor(body)
+    return f"<div class='agent-domain-box'>{body}</div>"
+
+
+def _render_tool_row(tool: _ToolCallState, *, now: float | None = None) -> None:
+    """One compact tool row (icon / name / meta + optional payload expander)."""
+    display_now = now if now is not None else time.monotonic()
+    subtitle_parts: list[str] = []
+    if tool.domain:
+        subtitle_parts.append(tool.domain)
+    if tool.step_id and tool.step_id != "__pending__":
+        subtitle_parts.append(tool.step_id)
+    if tool.detail and tool.status in {"error", "skipped"}:
+        subtitle_parts.append(_shorten(tool.detail, max_len=80))
+    subtitle = " · ".join(subtitle_parts)
+    meta = html.escape(_tool_status_meta(tool, now=display_now))
+    subtitle_html = (
+        f"<span style='opacity:0.65;font-weight:400;'> · {html.escape(subtitle)}</span>"
+        if subtitle
+        else ""
+    )
+    st.markdown(
+        (
+            "<div style='display:flex;align-items:center;gap:0.45rem;"
+            "margin:0.1rem 0;padding:0.15rem 0;line-height:1.2;"
+            "font-size:0.88rem;'>"
+            f"<span style='flex:0 0 auto;line-height:1;'>{_tool_status_icon_html(tool.status)}</span>"
+            "<span style='flex:1 1 auto;min-width:0;overflow:hidden;"
+            "text-overflow:ellipsis;white-space:nowrap;'>"
+            f"<strong>{html.escape(tool.tool_name)}</strong>{subtitle_html}"
+            "</span>"
+            f"<span style='flex:0 0 auto;opacity:0.75;font-size:0.8rem;'>{meta}</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+    if tool.arguments is not None or tool.result is not None:
+        with st.expander("Payload", expanded=False):
+            if tool.arguments is not None:
+                st.caption("arguments")
+                st.json(tool.arguments)
+            if tool.result is not None:
+                st.caption("result")
+                st.json(tool.result)
+
+
+def _timeline_text_block_html(
+    message: str, *, streaming: bool = False
+) -> str:
+    """HTML for a domain text chip (markdown when complete)."""
+    return _domain_result_html(message, streaming=streaming)
+
+
+def _render_timeline_text_block(
+    message: str, *, domain: str | None = None, streaming: bool = False
+) -> None:
+    block = _timeline_text_block_html(message, streaming=streaming)
+    if not block:
+        return
+    st.markdown(block, unsafe_allow_html=True)
+
+
+def _render_tool_status_box(
+    tools: list[_ToolCallState], *, now: float | None = None
+) -> None:
+    if not tools:
+        return
+
+    display_now = now if now is not None else time.monotonic()
+
+    with st.container(border=True):
+        st.markdown("**Tools**")
+        for index, tool in enumerate(sorted(tools, key=lambda item: item.order)):
+            if index > 0:
+                st.markdown(
+                    "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                    unsafe_allow_html=True,
+                )
+            _render_tool_row(tool, now=display_now)
+
+
+def _timeline_item_is_visible(item: dict) -> bool:
+    kind = item.get("kind")
+    if kind == "text":
+        if item.get("open"):
+            return True
+        return bool(str(item.get("message") or "").strip())
+    if kind == "tool":
+        return bool(str(item.get("tool_name") or "").strip())
+    return False
+
+
+def _timeline_text_display(item: dict) -> tuple[str, bool]:
+    """Return (text_to_show, streaming_cursor) for a timeline text item."""
+    full = str(item.get("message") or "")
+    open_ = bool(item.get("open"))
+    if not open_:
+        return full, False
+    shown = item.get("shown")
+    if not isinstance(shown, str):
+        shown = ""
+    return shown, True
+
+
+def _render_agent_timeline(
+    items: list[dict],
+    *,
+    placeholder: DeltaGenerator | None = None,
+    now: float | None = None,
+) -> None:
+    """Chronological agent run: streamed text segments interleaved with tools."""
+    visible = [item for item in items if _timeline_item_is_visible(item)]
+    if not visible:
+        return
+
+    display_now = now if now is not None else time.monotonic()
+
+    def _paint() -> None:
+        with st.container(border=True):
+            st.markdown("**Agent**")
+            prev_kind: str | None = None
+            for item in visible:
+                kind = str(item.get("kind") or "")
+                if prev_kind is not None:
+                    st.markdown(
+                        "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                        unsafe_allow_html=True,
+                    )
+                if kind == "text":
+                    display_text, streaming = _timeline_text_display(item)
+                    if not display_text.strip() and not streaming:
+                        prev_kind = kind
+                        continue
+                    _render_timeline_text_block(
+                        display_text,
+                        domain=(
+                            str(item["domain"]).strip()
+                            if isinstance(item.get("domain"), str)
+                            else None
+                        ),
+                        streaming=streaming,
+                    )
+                    prev_kind = kind
+                    continue
+                tool = _ToolCallState(
+                    key=str(item.get("step_id") or item.get("tool_name") or "tool"),
+                    tool_name=str(item.get("tool_name") or "tool"),
+                    status=item.get("status") or "success",  # type: ignore[arg-type]
+                    step_id=item.get("step_id"),
+                    domain=item.get("domain"),
+                    execution_time_seconds=item.get("execution_time_seconds"),
+                    detail=item.get("detail"),
+                    result=item.get("result"),
+                    arguments=item.get("arguments"),
+                    started_at=item.get("started_at"),
+                )
+                _render_tool_row(tool, now=display_now)
+                prev_kind = kind
+
+    if placeholder is not None:
+        placeholder.empty()
+        with placeholder.container():
+            _paint()
+        return
+    _paint()
+
+
+def _close_open_timeline_text(items: list[dict]) -> None:
+    for item in items:
+        if item.get("kind") == "text":
+            item["open"] = False
+            item["awaiting_close"] = False
+            # Snap typewriter to the full buffer when the segment closes.
+            item["shown"] = str(item.get("message") or "")
+
+
+def _append_timeline_text_segment(
+    items: list[dict], *, domain: str | None
+) -> dict:
+    _close_open_timeline_text(items)
+    item: dict = {
+        "kind": "text",
+        "domain": domain,
+        "message": "",
+        "shown": "",
+        "open": True,
+        "awaiting_close": False,
+    }
+    items.append(item)
+    return item
+
+
+def _apply_timeline_stream_update(
+    items: list[dict],
+    *,
+    domain: str,
+    content: str,
+    reset: bool,
+) -> None:
+    """Mutate timeline for a node_token: reset starts a new text segment."""
+    domain = domain.strip()
+    if not domain:
+        return
+    if reset:
+        _append_timeline_text_segment(items, domain=domain)
+        if not content:
+            return
+    open_text = next(
+        (
+            item
+            for item in reversed(items)
+            if item.get("kind") == "text"
+            and item.get("open")
+            and item.get("domain") == domain
+        ),
+        None,
+    )
+    if open_text is None:
+        open_text = _append_timeline_text_segment(items, domain=domain)
+    if content:
+        open_text["message"] = str(open_text.get("message") or "") + content
+        if "shown" not in open_text or not isinstance(open_text.get("shown"), str):
+            open_text["shown"] = ""
+
+
+def _advance_timeline_typewriter(
+    items: list[dict], *, chars: int
+) -> bool:
+    """Reveal up to ``chars`` on text segments that are still behind. Returns if progressed."""
+    if chars <= 0:
+        return False
+    advanced = False
+    for item in items:
+        if item.get("kind") != "text":
+            continue
+        target = str(item.get("message") or "")
+        shown = item.get("shown")
+        if not isinstance(shown, str):
+            shown = ""
+        behind = len(shown) < len(target)
+        if not behind and not item.get("open"):
+            continue
+        if behind:
+            item["shown"] = target[: len(shown) + chars]
+            shown = item["shown"]
+            advanced = True
+        # Close only after the typewriter has caught up (set by node_end).
+        if (
+            item.get("awaiting_close")
+            and isinstance(shown, str)
+            and len(shown) >= len(target)
+        ):
+            item["open"] = False
+            item["awaiting_close"] = False
+            advanced = True
+    return advanced
+
+
+def _timeline_typewriter_pending(items: list[dict]) -> bool:
+    """True while any domain text still has unrevealed characters."""
+    for item in items:
+        if item.get("kind") != "text":
+            continue
+        target = str(item.get("message") or "")
+        shown = item.get("shown")
+        if not isinstance(shown, str):
+            shown = ""
+        if len(shown) < len(target):
+            return True
+    return False
+
+
+def _snap_timeline_typewriter(items: list[dict]) -> bool:
+    """Cancel domain typewriter; reveal full text immediately. Returns if changed."""
+    changed = False
+    for item in items:
+        if item.get("kind") != "text":
+            continue
+        target = str(item.get("message") or "")
+        shown = item.get("shown")
+        if not isinstance(shown, str):
+            shown = ""
+        if (
+            shown != target
+            or item.get("open")
+            or item.get("awaiting_close")
+        ):
+            item["shown"] = target
+            item["open"] = False
+            item["awaiting_close"] = False
+            changed = True
+    return changed
+
+
+def _timeline_tool_record(item: dict) -> ToolCallRecord:
+    record = ToolCallRecord(
+        tool_name=str(item.get("tool_name") or "tool"),
+        status=item.get("status") or "success",  # type: ignore[arg-type]
+        step_id=item.get("step_id"),
+        domain=item.get("domain"),
+        execution_time_seconds=item.get("execution_time_seconds"),
+        detail=item.get("detail"),
+    )
+    if item.get("result") is not None:
+        record["result"] = item["result"]
+    if item.get("arguments") is not None:
+        record["arguments"] = item["arguments"]
+    return record
+
+
+def _timeline_snapshot_items(items: list[dict]) -> list[AgentTimelineItem]:
+    out: list[AgentTimelineItem] = []
+    for item in items:
+        if not _timeline_item_is_visible(item):
+            continue
+        if item.get("kind") == "text":
+            out.append(
+                {
+                    "kind": "text",
+                    "domain": item.get("domain"),
+                    "message": str(item.get("message") or ""),
+                }
+            )
+            continue
+        tool_item: AgentTimelineItem = {
+            "kind": "tool",
+            **_timeline_tool_record(item),
+        }
+        out.append(tool_item)
+    return out
+
+
+def _make_tool_status_tracker(
+    tools_placeholder: DeltaGenerator,
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[], list[ToolCallRecord]],
+    Callable[[], None],
+]:
+    """Backward-compatible tool-only tracker (history / fallback)."""
+    tools_by_key: dict[str, _ToolCallState] = {}
+    next_order = 0
+
+    def _find_running_key(tool_name: str) -> str | None:
+        for key, tool in tools_by_key.items():
+            if tool.tool_name == tool_name and tool.status == "running":
+                return key
+        return None
+
+    def _has_running_tools() -> bool:
+        return any(tool.status == "running" for tool in tools_by_key.values())
+
+    def _render(*, now: float | None = None) -> None:
+        tools = sorted(tools_by_key.values(), key=lambda item: item.order)
+        tools_placeholder.empty()
+        if not tools:
+            return
+        with tools_placeholder.container():
+            _render_tool_status_box(tools, now=now)
+
+    def tick() -> None:
+        if _has_running_tools():
+            _render(now=time.monotonic())
+
+    def callback(evt: dict) -> None:
+        nonlocal next_order
+        normalized = _normalize_tool_progress_event(evt)
+        if normalized is None:
+            return
+
+        phase = normalized.get("phase")
+        tool_name = normalized.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return
+
+        step_id = _resolve_tool_step_id(normalized)
+        domain = _resolve_tool_domain(normalized)
+
+        if phase == "running":
+            if step_id == "__pending__" and tools_by_key:
+                return
+            next_order += 1
+            key = _tool_call_key(normalized, order=next_order)
+            tools_by_key[key] = _ToolCallState(
+                key=key,
+                tool_name=tool_name,
+                status="running",
+                step_id=step_id,
+                domain=domain,
+                started_at=time.monotonic(),
+                order=next_order,
+                arguments=_tool_arguments_from_event(normalized),
+            )
+            _render(now=time.monotonic())
+            return
+
+        if phase != "done":
+            return
+
+        if step_id == "__pending__":
+            return
+
+        key = step_id or _find_running_key(tool_name) or _tool_call_key(
+            normalized, order=next_order
+        )
+        if key not in tools_by_key:
+            next_order += 1
+            tools_by_key[key] = _ToolCallState(
+                key=key,
+                tool_name=tool_name,
+                order=next_order,
+            )
+
+        tool = tools_by_key[key]
+        if tool.step_id == "__pending__":
+            tools_by_key.pop(key, None)
+            next_order += 1
+            key = step_id or _tool_call_key(normalized, order=next_order)
+            tools_by_key[key] = _ToolCallState(
+                key=key,
+                tool_name=tool_name,
+                order=next_order,
+            )
+            tool = tools_by_key[key]
+
+        tool.tool_name = tool_name
+        tool.step_id = step_id or tool.step_id
+        tool.domain = domain or tool.domain
+        tool.status = _tool_status_from_event(normalized)
+        tool.execution_time_seconds = normalized.get("execution_time_seconds")
+        observation = normalized.get("observation")
+        if isinstance(observation, str) and observation.strip():
+            tool.detail = observation.strip()
+        elif tool.status == "skipped":
+            tool.detail = "Missing required inputs"
+        raw_result = normalized.get("result")
+        if isinstance(raw_result, dict):
+            tool.result = dict(raw_result)
+        args = _tool_arguments_from_event(normalized)
+        if args is not None:
+            tool.arguments = args
+        _render()
+
+    def snapshot() -> list[ToolCallRecord]:
+        return [
+            _tool_call_to_record(tool)
+            for tool in sorted(tools_by_key.values(), key=lambda item: item.order)
+        ]
+
+    return callback, snapshot, tick
+
+
+def _make_agent_timeline_tracker(
+    timeline_placeholder: DeltaGenerator,
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[], list[ToolCallRecord]],
+    Callable[[], list[AgentTimelineItem]],
+    Callable[[], None],
+    Callable[[], bool],
+    Callable[[], None],
+]:
+    """Track tools + domain streaming text in chronological order.
+
+    Structure (tools / closed text) rebuilds only when it changes. The open
+    streaming segment is painted into a dedicated ``st.empty`` slot so the
+    typewriter can update letter-by-letter without remounting the whole panel.
+    """
+    items: list[dict] = []
+    tools_by_key: dict[str, dict] = {}
+    next_order = 0
+    structure_dirty = False
+    live_dirty = False
+    last_structure_paint = 0.0
+    last_typewriter = time.monotonic()
+    live_slot: DeltaGenerator | None = None
+    _ELAPSED_PAINT_INTERVAL = 0.1
+
+    def _find_running_key(tool_name: str) -> str | None:
+        for key, tool in tools_by_key.items():
+            if tool.get("tool_name") == tool_name and tool.get("status") == "running":
+                return key
+        return None
+
+    def _has_running_tools() -> bool:
+        return any(tool.get("status") == "running" for tool in tools_by_key.values())
+
+    def _open_text_item() -> dict | None:
+        for item in reversed(items):
+            if item.get("kind") == "text" and item.get("open"):
+                return item
+        return None
+
+    def _paint_live_text() -> None:
+        nonlocal live_dirty
+        if live_slot is None:
+            return
+        open_item = _open_text_item()
+        if open_item is None:
+            live_slot.empty()
+            live_dirty = False
+            return
+        display_text, streaming = _timeline_text_display(open_item)
+        block = _timeline_text_block_html(display_text, streaming=streaming)
+        if not block:
+            live_slot.empty()
+        else:
+            # Replace in-place — do not empty first (avoids flicker/jumps).
+            live_slot.markdown(block, unsafe_allow_html=True)
+        live_dirty = False
+
+    def _render_completed_item(item: dict, *, now: float) -> None:
+        kind = str(item.get("kind") or "")
+        if kind == "text":
+            if item.get("open"):
+                return
+            display_text, streaming = _timeline_text_display(item)
+            if display_text.strip():
+                _render_timeline_text_block(display_text, streaming=streaming)
+            return
+        tool = _ToolCallState(
+            key=str(item.get("step_id") or item.get("tool_name") or "tool"),
+            tool_name=str(item.get("tool_name") or "tool"),
+            status=item.get("status") or "success",  # type: ignore[arg-type]
+            step_id=item.get("step_id"),
+            domain=item.get("domain"),
+            execution_time_seconds=item.get("execution_time_seconds"),
+            detail=item.get("detail"),
+            result=item.get("result"),
+            arguments=item.get("arguments"),
+            started_at=item.get("started_at"),
+        )
+        _render_tool_row(tool, now=now)
+
+    def _rebuild_structure(*, now: float | None = None) -> None:
+        nonlocal live_slot, structure_dirty, last_structure_paint, live_dirty
+        display_now = now if now is not None else time.monotonic()
+        timeline_placeholder.empty()
+        with timeline_placeholder.container():
+            with st.container(border=True):
+                st.markdown("**Agent**")
+                prev = False
+                for item in items:
+                    if not _timeline_item_is_visible(item):
+                        continue
+                    if item.get("kind") == "text" and item.get("open"):
+                        continue
+                    if prev:
+                        st.markdown(
+                            "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                            unsafe_allow_html=True,
+                        )
+                    _render_completed_item(item, now=display_now)
+                    prev = True
+                if prev:
+                    st.markdown(
+                        "<div style='height:0.2rem;margin:0;padding:0;line-height:0;'></div>",
+                        unsafe_allow_html=True,
+                    )
+                live_slot = st.empty()
+        structure_dirty = False
+        last_structure_paint = time.monotonic()
+        live_dirty = True
+        _paint_live_text()
+
+    def _mark_structure_dirty() -> None:
+        nonlocal structure_dirty
+        structure_dirty = True
+
+    def _mark_live_dirty() -> None:
+        nonlocal live_dirty
+        live_dirty = True
+
+    def tick() -> None:
+        """Advance typewriter, paint live text, or rebuild structure when needed."""
+        nonlocal last_typewriter
+        now = time.monotonic()
+        dt = max(0.0, now - last_typewriter)
+        last_typewriter = now
+        chars = int(dt * DOMAIN_TYPEWRITER_CPS)
+        pending = _timeline_typewriter_pending(items)
+        if chars < 1 and pending:
+            chars = 1
+        chars = min(chars, DOMAIN_TYPEWRITER_MAX_CHARS_PER_TICK)
+
+        before_open = _open_text_item()
+        if _advance_timeline_typewriter(items, chars=chars):
+            after_open = _open_text_item()
+            if before_open is not after_open:
+                # Segment closed (or swapped) — fold into the static panel.
+                _mark_structure_dirty()
+            else:
+                _mark_live_dirty()
+
+        if structure_dirty or live_slot is None:
+            if any(_timeline_item_is_visible(item) for item in items) or _open_text_item():
+                _rebuild_structure(now=now)
+            return
+
+        if live_dirty:
+            _paint_live_text()
+            return
+
+        if _has_running_tools() and now - last_structure_paint >= _ELAPSED_PAINT_INTERVAL:
+            _rebuild_structure(now=now)
+
+    def _apply_tool_event(normalized: dict) -> None:
+        nonlocal next_order
+        phase = normalized.get("phase")
+        tool_name = normalized.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return
+
+        step_id = _resolve_tool_step_id(normalized)
+        domain = _resolve_tool_domain(normalized)
+
+        if phase == "running":
+            if step_id == "__pending__" and tools_by_key:
+                return
+            _close_open_timeline_text(items)
+            next_order += 1
+            key = _tool_call_key(normalized, order=next_order)
+            tool_item = {
+                "kind": "tool",
+                "key": key,
+                "tool_name": tool_name,
+                "status": "running",
+                "step_id": step_id,
+                "domain": domain,
+                "started_at": time.monotonic(),
+                "order": next_order,
+                "arguments": _tool_arguments_from_event(normalized),
+                "result": None,
+                "detail": None,
+                "execution_time_seconds": None,
+            }
+            tools_by_key[key] = tool_item
+            items.append(tool_item)
+            _mark_structure_dirty()
+            return
+
+        if phase != "done":
+            return
+        if step_id == "__pending__":
+            return
+
+        key = step_id or _find_running_key(tool_name) or _tool_call_key(
+            normalized, order=next_order
+        )
+        if key not in tools_by_key:
+            _close_open_timeline_text(items)
+            next_order += 1
+            key = step_id or _tool_call_key(normalized, order=next_order)
+            tool_item = {
+                "kind": "tool",
+                "key": key,
+                "tool_name": tool_name,
+                "status": "running",
+                "step_id": step_id,
+                "domain": domain,
+                "order": next_order,
+                "arguments": None,
+                "result": None,
+                "detail": None,
+                "execution_time_seconds": None,
+                "started_at": None,
+            }
+            tools_by_key[key] = tool_item
+            items.append(tool_item)
+
+        tool = tools_by_key[key]
+        if tool.get("step_id") == "__pending__":
+            try:
+                idx = items.index(tool)
+            except ValueError:
+                idx = None
+            tools_by_key.pop(key, None)
+            next_order += 1
+            key = step_id or _tool_call_key(normalized, order=next_order)
+            tool = {
+                "kind": "tool",
+                "key": key,
+                "tool_name": tool_name,
+                "order": next_order,
+                "arguments": None,
+                "result": None,
+                "detail": None,
+                "execution_time_seconds": None,
+                "started_at": None,
+            }
+            tools_by_key[key] = tool
+            if idx is None:
+                items.append(tool)
+            else:
+                items[idx] = tool
+
+        tool["tool_name"] = tool_name
+        tool["step_id"] = step_id or tool.get("step_id")
+        tool["domain"] = domain or tool.get("domain")
+        tool["status"] = _tool_status_from_event(normalized)
+        tool["execution_time_seconds"] = normalized.get("execution_time_seconds")
+        observation = normalized.get("observation")
+        if isinstance(observation, str) and observation.strip():
+            tool["detail"] = observation.strip()
+        elif tool.get("status") == "skipped":
+            tool["detail"] = "Missing required inputs"
+        raw_result = normalized.get("result")
+        if isinstance(raw_result, dict):
+            tool["result"] = dict(raw_result)
+        args = _tool_arguments_from_event(normalized)
+        if args is not None:
+            tool["arguments"] = args
+        _mark_structure_dirty()
+
+    def callback(evt: dict) -> None:
+        stream = _agentic_node_stream_update(evt)
+        if stream is not None:
+            domain, content, reset = stream
+            before_open = _open_text_item()
+            _apply_timeline_stream_update(
+                items, domain=domain, content=content, reset=reset
+            )
+            after_open = _open_text_item()
+            if reset or before_open is not after_open:
+                _mark_structure_dirty()
+            # New target chars are revealed by the typewriter tick.
+            return
+
+        entry = _agentic_node_result_entry(evt)
+        if entry is not None:
+            domain = entry["domain"]
+            message = entry["message"]
+            target = next(
+                (
+                    item
+                    for item in reversed(items)
+                    if item.get("kind") == "text" and item.get("domain") == domain
+                ),
+                None,
+            )
+            if target is None:
+                target = _append_timeline_text_segment(items, domain=domain)
+                _mark_structure_dirty()
+            # Keep typing until shown catches the final message, then close.
+            target["message"] = message
+            target["open"] = True
+            target["awaiting_close"] = True
+            if not isinstance(target.get("shown"), str):
+                target["shown"] = ""
+            _mark_live_dirty()
+            return
+
+        normalized = _normalize_tool_progress_event(evt)
+        if normalized is not None:
+            _apply_tool_event(normalized)
+
+    def tool_snapshot() -> list[ToolCallRecord]:
+        return [
+            _timeline_tool_record(tool)
+            for tool in sorted(
+                (item for item in items if item.get("kind") == "tool"),
+                key=lambda item: int(item.get("order") or 0),
+            )
+            if str(tool.get("tool_name") or "").strip()
+            and tool.get("step_id") != "__pending__"
+        ]
+
+    def timeline_snapshot() -> list[AgentTimelineItem]:
+        return _timeline_snapshot_items(items)
+
+    def typewriter_pending() -> bool:
+        return _timeline_typewriter_pending(items)
+
+    def snap_typewriter() -> None:
+        """Cancel in-flight domain typing and paint the full text now."""
+        if not _snap_timeline_typewriter(items):
+            return
+        _mark_structure_dirty()
+        if any(_timeline_item_is_visible(item) for item in items):
+            _rebuild_structure()
+
+    return (
+        callback,
+        tool_snapshot,
+        timeline_snapshot,
+        tick,
+        typewriter_pending,
+        snap_typewriter,
+    )
+
+
+
+def _is_node_progress_event(evt: dict) -> bool:
+    return evt.get("type") == "graph_node"
+
+
+def _agentic_node_domain(evt: dict) -> str | None:
+    domain = evt.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        return domain.strip()
+    result = evt.get("result")
+    if isinstance(result, dict):
+        nested = result.get("domain")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _agentic_node_start_line(evt: dict) -> str | None:
+    """Small caption line for agentic domain node_start."""
+    if evt.get("phase") != "running":
+        return None
+    domain = _agentic_node_domain(evt)
+    if not domain:
+        return None
+    message = evt.get("message")
+    detail = (
+        message.strip()
+        if isinstance(message, str) and message.strip()
+        else "started"
+    )
+    return f"{domain} · {detail}"
+
+
+def _agentic_node_result_entry(evt: dict) -> dict[str, str] | None:
+    """Expandable result body for agentic domain node_end."""
+    if evt.get("phase") != "done":
+        return None
+    domain = _agentic_node_domain(evt)
+    result = evt.get("result")
+    if not domain or not isinstance(result, dict):
+        return None
+    if "tool_call_count" not in result and not result.get("domain"):
+        return None
+    message = result.get("message") or evt.get("message") or ""
+    if not isinstance(message, str) or not message.strip():
+        return None
+    status_like = {
+        "analyzing floods...",
+        "detecting fires...",
+        "querying infrastructure...",
+        "searching the satellite catalog...",
+        "querying disaster events...",
+        "running agentic tool loop...",
+        "started",
+    }
+    text = message.strip()
+    if text.lower() in status_like:
+        return None
+    return {"domain": domain, "message": text}
+
+
+def _agentic_node_stream_update(
+    evt: dict,
+) -> tuple[str, str, bool] | None:
+    """Parse a streaming node_token event as (domain, content, reset)."""
+    if evt.get("phase") != "streaming":
+        return None
+    domain = _agentic_node_domain(evt)
+    if not domain:
+        node_name = evt.get("node_name")
+        if isinstance(node_name, str) and node_name.strip():
+            domain = node_name.strip()
+    if not domain:
+        return None
+    reset = bool(evt.get("reset"))
+    content = evt.get("content") or ""
+    if not isinstance(content, str):
+        content = str(content)
+    return domain, content, reset
+
+
+def _upsert_streaming_node_result(
+    results: list[dict[str, str]],
+    *,
+    domain: str,
+    content: str,
+    reset: bool,
+) -> None:
+    """Mutate ``results`` for a live domain draft (reset and/or append)."""
+    domain = domain.strip()
+    if not domain:
+        return
+    idx = next(
+        (i for i, item in enumerate(results) if item.get("domain") == domain),
+        None,
+    )
+    if reset:
+        if idx is None:
+            results.append({"domain": domain, "message": ""})
+        else:
+            results[idx] = {"domain": domain, "message": ""}
+        idx = next(
+            (i for i, item in enumerate(results) if item.get("domain") == domain),
+            None,
+        )
+    if not content:
+        return
+    if idx is None:
+        results.append({"domain": domain, "message": content})
+        return
+    results[idx] = {
+        "domain": domain,
+        "message": (results[idx].get("message") or "") + content,
+    }
+
+
+def _render_node_start_lines(
+    start_lines: list[str],
+    *,
+    placeholder: DeltaGenerator | None = None,
+) -> None:
+    """Render node starts as small captions (no box)."""
+    starts = [
+        line.strip() for line in start_lines if isinstance(line, str) and line.strip()
+    ]
+    if not starts:
+        return
+
+    def _paint() -> None:
+        for line in starts[-8:]:
+            st.caption(line)
+
+    if placeholder is not None:
+        placeholder.empty()
+        with placeholder.container():
+            _paint()
+        return
+    _paint()
+
+
+def _append_turn_node_start(line: str) -> None:
+    text = (line or "").strip()
+    if not text:
+        return
+    lines = st.session_state.setdefault("turn_node_start_lines", [])
+    lines.append(text)
+
+
+def _append_turn_node_result(entry: dict[str, str]) -> None:
+    if not isinstance(entry, dict):
+        return
+    domain = str(entry.get("domain") or "").strip()
+    message = str(entry.get("message") or "").strip()
+    if not domain or not message:
+        return
+    items = st.session_state.setdefault("turn_node_result_entries", [])
+    items.append({"domain": domain, "message": message})
+
+
+def _turn_node_start_lines(*snapshots: Callable[[], list[str]]) -> list[str]:
+    merged: list[str] = list(st.session_state.get("turn_node_start_lines") or [])
+    for snapshot in snapshots:
+        for line in snapshot():
+            text = (line or "").strip()
+            if text:
+                merged.append(text)
+    return list(dict.fromkeys(merged))
+
+
+def _turn_node_result_entries(
+    *snapshots: Callable[[], list[dict[str, str]]],
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = list(
+        st.session_state.get("turn_node_result_entries") or []
+    )
+    for snapshot in snapshots:
+        for item in snapshot():
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain") or "").strip()
+            message = str(item.get("message") or "").strip()
+            if domain and message:
+                merged.append({"domain": domain, "message": message})
+    # De-dupe while preserving order.
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+    for item in merged:
+        key = (item["domain"], item["message"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _reset_turn_node_results() -> None:
+    st.session_state.turn_node_start_lines = []
+    st.session_state.turn_node_result_entries = []
+    st.session_state.turn_agent_timeline = []
+
+
+def _append_turn_agent_timeline(items: list[AgentTimelineItem]) -> None:
+    st.session_state.turn_agent_timeline = [dict(item) for item in items]
+
+
+def _turn_agent_timeline(
+    *snapshots: Callable[[], list[AgentTimelineItem]],
+) -> list[AgentTimelineItem]:
+    merged: list[AgentTimelineItem] = list(
+        st.session_state.get("turn_agent_timeline") or []
+    )
+    for snapshot in snapshots:
+        items = snapshot()
+        if items:
+            merged = [dict(item) for item in items]
+    return merged
+
+
+def _node_results_from_timeline(
+    timeline: list[AgentTimelineItem] | list[dict],
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in timeline:
+        if not isinstance(item, dict) or item.get("kind") != "text":
+            continue
+        domain = str(item.get("domain") or "").strip()
+        message = str(item.get("message") or "").strip()
+        if domain and message:
+            out.append({"domain": domain, "message": message})
+    return out
+
+
+def _make_live_node_start_updater(
+    starts_placeholder: DeltaGenerator,
+) -> tuple[Callable[[dict], None], Callable[[], list[str]]]:
+    """Captions for agentic node_start only (timeline owns streaming text)."""
+    start_lines: list[str] = []
+
+    def callback(evt: dict) -> None:
+        if not _is_node_progress_event(evt):
+            return
+        start = _agentic_node_start_line(evt)
+        if not start:
+            return
+        start_lines.append(start)
+        _append_turn_node_start(start)
+        _render_node_start_lines(start_lines, placeholder=starts_placeholder)
+
+    def start_snapshot() -> list[str]:
+        return list(start_lines)
+
+    return callback, start_snapshot
+
+
+def _render_thinking_box(
+    lines: list[str],
+    *,
+    placeholder: DeltaGenerator | None = None,
+) -> None:
+    tail = [line.strip() for line in lines if isinstance(line, str) and line.strip()]
+    if not tail:
+        return
+
+    if placeholder is not None:
+        with placeholder.container():
+            with st.container(border=True):
+                st.markdown("**Thinking**")
+                for line in tail[-6:]:
+                    st.caption(line)
+        return
+
+    with st.container(border=True):
+        st.markdown("**Thinking**")
+        for line in tail[-6:]:
+            st.caption(line)
+
+
+def _append_turn_thinking(line: str) -> None:
+    text = (line or "").strip()
+    if not text:
+        return
+    lines = st.session_state.setdefault("turn_thinking_lines", [])
+    lines.append(text)
+
+
+def _turn_thinking_lines(*snapshots: Callable[[], list[str]]) -> list[str]:
+    merged: list[str] = list(st.session_state.get("turn_thinking_lines") or [])
+    for snapshot in snapshots:
+        for line in snapshot():
+            text = (line or "").strip()
+            if text:
+                merged.append(text)
+    # Preserve order while dropping exact duplicates.
+    return list(dict.fromkeys(merged))
+
+
+def _reset_turn_thinking() -> None:
+    st.session_state.turn_thinking_lines = []
+
+
+def _artifacts_need_columns(artifacts: ToolArtifacts) -> bool:
+    """True when history/streaming should use the text|map two-column layout."""
+    maps = artifacts.maps if hasattr(artifacts, "maps") else []
+    return any(
+        isinstance(x, dict) and isinstance(x.get("view_state"), dict)
+        for x in maps
+    )
+
+
+@dataclass
+class StreamingTurnLayout:
+    """Live turn layout: full-width text until a map artifact arrives, then 2 columns."""
+
+    thinking_placeholder: DeltaGenerator
+    node_starts_placeholder: DeltaGenerator
+    tools_placeholder: DeltaGenerator
+    trace_placeholder: DeltaGenerator
+    _layout_slot: DeltaGenerator
+    message_placeholder: DeltaGenerator
+    artifacts_placeholder: DeltaGenerator | None = None
+    _split: bool = False
+    _text: str = ""
+    _show_cursor: bool = False
+
+    def set_message(self, text: str, *, cursor: bool = False) -> None:
+        self._text = text
+        self._show_cursor = cursor
+        if text:
+            self.message_placeholder.markdown(text + ("▌" if cursor else ""))
+        elif cursor:
+            self.message_placeholder.markdown("▌")
+        else:
+            self.message_placeholder.empty()
+
+    def ensure_artifact_columns(self) -> DeltaGenerator:
+        if self._split and self.artifacts_placeholder is not None:
+            return self.artifacts_placeholder
+        self._split = True
+        self._layout_slot.empty()
+        with self._layout_slot.container():
+            col_text, col_map = st.columns([2, 3], vertical_alignment="top")
+            with col_text:
+                self.message_placeholder = st.empty()
+                if self._text:
+                    self.message_placeholder.markdown(
+                        self._text + ("▌" if self._show_cursor else "")
+                    )
+            with col_map:
+                self.artifacts_placeholder = st.empty()
+        assert self.artifacts_placeholder is not None
+        return self.artifacts_placeholder
+
+    def paint_artifacts(self, artifacts: ToolArtifacts) -> None:
+        if not _artifacts_need_columns(artifacts):
+            return
+        slot = self.ensure_artifact_columns()
+        slot.empty()
+        with slot.container():
+            _render_artifacts_panel(artifacts)
+
+
+def _make_streaming_turn_placeholders() -> StreamingTurnLayout:
+    """Placeholders for a live assistant turn (full-width until maps arrive)."""
+    # Order: Thinking → Node starts → Agent timeline (text+tools) → Trace → Answer
+    thinking_placeholder = st.empty()
+    node_starts_placeholder = st.empty()
+    tools_placeholder = st.empty()
+    trace_placeholder = st.empty()
+    layout_slot = st.empty()
+    with layout_slot.container():
+        message_placeholder = st.empty()
+    return StreamingTurnLayout(
+        thinking_placeholder=thinking_placeholder,
+        node_starts_placeholder=node_starts_placeholder,
+        tools_placeholder=tools_placeholder,
+        trace_placeholder=trace_placeholder,
+        _layout_slot=layout_slot,
+        message_placeholder=message_placeholder,
+    )
+
+
+def _make_streaming_event_handler(
+    *,
+    layout: StreamingTurnLayout,
+) -> tuple[
+    Callable[[dict], None],
+    Callable[[dict], None],
+    Callable[[dict], None],
+    Callable[[dict], None],
+    Callable[[], list[str]],
+    Callable[[], list[ToolCallRecord]],
+    Callable[[], list[str]],
+    Callable[[], list[AgentTimelineItem]],
+    Callable[[], None],
+    Callable[[], None],
+    Callable[[], ToolArtifacts],
+]:
+    (
+        timeline_tracker,
+        tool_snapshot,
+        timeline_snapshot,
+        tool_tick,
+        _domain_typewriter_pending,
+        domain_typewriter_snap,
+    ) = _make_agent_timeline_tracker(layout.tools_placeholder)
+    node_start_tracker, node_start_snapshot = _make_live_node_start_updater(
+        layout.node_starts_placeholder
+    )
+    trace_updater = _make_live_trace_updater(layout.trace_placeholder)
+    thinking_updater, thinking_snapshot = _make_live_thinking_updater(
+        layout.thinking_placeholder
+    )
+    live_artifacts = ToolArtifacts()
+
+    def tools_callback(evt: dict) -> None:
+        timeline_tracker(evt)
+        if evt.get("type") != "data_agent_step" or evt.get("phase") != "done":
+            return
+        if not _extend_artifacts_unique(live_artifacts, evt.get("artifacts")):
+            return
+        layout.paint_artifacts(live_artifacts)
+
+    def nodes_callback(evt: dict) -> None:
+        node_start_tracker(evt)
+        # Streaming text + node_end finalize live in the shared timeline.
+        if evt.get("phase") in {"streaming", "done"}:
+            timeline_tracker(evt)
+
+    def trace_callback(evt: dict) -> None:
+        if evt.get("type") == "thinking":
+            return
+        if _is_tool_progress_event(evt):
+            return
+        if _is_node_progress_event(evt):
+            return
+        trace_updater(evt)
+
+    def thinking_callback(evt: dict) -> None:
+        thinking_updater(evt)
+
+    def artifacts_snapshot() -> ToolArtifacts:
+        return ToolArtifacts(
+            maps=list(live_artifacts.maps),
+            thumbnails=list(live_artifacts.thumbnails),
+            urls=list(live_artifacts.urls),
+        )
+
+    return (
+        tools_callback,
+        nodes_callback,
+        trace_callback,
+        thinking_callback,
+        thinking_snapshot,
+        tool_snapshot,
+        node_start_snapshot,
+        timeline_snapshot,
+        tool_tick,
+        domain_typewriter_snap,
+        artifacts_snapshot,
+    )
+
+
+def _make_live_thinking_updater(
+    thinking_placeholder: DeltaGenerator,
+) -> tuple[Callable[[dict], None], Callable[[], list[str]]]:
+    lines: list[str] = []
+
+    def callback(evt: dict) -> None:
+        if evt.get("type") != "thinking":
+            return
+        content = evt.get("content") or evt.get("reasoning") or ""
+        if not isinstance(content, str) or not content.strip():
+            return
+        lines.append(content.strip())
+        _append_turn_thinking(content.strip())
+        thinking_placeholder.empty()
+        _render_thinking_box(lines, placeholder=thinking_placeholder)
+
+    def snapshot() -> list[str]:
+        return list(lines)
+
+    return callback, snapshot
 
 
 def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
@@ -301,24 +2527,6 @@ def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
                 push(msg)
             return
 
-        if et == "data_agent_step":
-            phase = evt.get("phase")
-            tool_name = evt.get("tool_name")
-            commentary = evt.get("commentary")
-            tool_input = evt.get("tool_input")
-            observation = evt.get("observation")
-            error = bool(evt.get("error"))
-
-            if isinstance(commentary, str) and commentary.strip():
-                push(commentary)
-            if isinstance(tool_name, str) and tool_name.strip():
-                push(f"Action: {tool_name} ({'error' if error else phase})")
-            if tool_input is not None and phase in {"planned", "running"}:
-                push(f"Input: {_shorten(str(tool_input), max_len=180)}")
-            if observation is not None and phase == "done":
-                push(f"Observation: {_shorten(str(observation), max_len=220)}")
-            return
-
         if et == "data_agent_finalizing":
             msg = evt.get("message")
             if isinstance(msg, str) and msg.strip():
@@ -331,6 +2539,31 @@ def _make_live_trace_updater(trace_placeholder: DeltaGenerator):
 # CONFIGURATION
 # ---------------------------------------------------
 st.set_page_config(page_title="STAC & Fire Chatbot", layout="wide")
+
+# Make the whole application's font bold.
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"], [class*="st-"],
+    .stApp, .stMarkdown, .stMarkdown *,
+    p, span, div, label, li, a,
+    h1, h2, h3, h4, h5, h6,
+    button, input, textarea, select,
+    .stButton button, .stTextInput input, .stTextArea textarea,
+    .stChatMessage, .stChatMessage * {
+        font-weight: 700 !important;
+    }
+    """
+    + _TOOL_STATUS_CSS
+    + """
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Enforce Cognito Hosted UI login before rendering the app. When Cognito is
+# not configured this is a no-op so local/dev usage keeps working.
+cognito_tokens = render_login_gate()
 
 logo = Image.open(
     Path(__file__).resolve().parent / "assets" / "metaplanet_sas_logo.jpeg"
@@ -350,6 +2583,252 @@ def _augment_with_document(english_query: str) -> str:
     return english_query
 
 
+def _get_conversation_id_from_query_params() -> str | None:
+    value = st.query_params.get("conversation_id")
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _set_conversation_id_query_param(conversation_id: str) -> None:
+    if _get_conversation_id_from_query_params() == conversation_id:
+        return
+    st.query_params["conversation_id"] = conversation_id
+
+
+def _clear_conversation_id_query_param() -> None:
+    if "conversation_id" in st.query_params:
+        del st.query_params["conversation_id"]
+
+
+def _store_conversation_id(conversation_id: str | None) -> None:
+    if not conversation_id:
+        return
+    conversation_id = str(conversation_id)
+    st.session_state.conversation_id = conversation_id
+    # Mark as already loaded so the next rerun does not refetch history and wipe
+    # live ``pending_user_input`` right after a pause turn.
+    st.session_state.loaded_conversation_id = conversation_id
+    _set_conversation_id_query_param(conversation_id)
+
+
+def _sync_conversation_from_server() -> None:
+    """Force the next run to reload messages from the API.
+
+    Used after a completed (non-paused) turn so the UI matches what was
+    persisted before ``complete`` was sent — live session appends can miss
+    the final assistant message across the post-turn rerun.
+    """
+    # Node lifecycle / thinking are live-only today (not in conversation API).
+    # Stash them so the force-reload can reattach to the matching assistant turns.
+    st.session_state._preserve_ui_fields = _extract_ui_only_assistant_fields(
+        st.session_state.get("messages") or []
+    )
+    st.session_state.loaded_conversation_id = None
+    st.session_state._force_history_reload = True
+
+
+def _extract_ui_only_assistant_fields(messages: list) -> list[dict]:
+    preserved: list[dict] = []
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        node_start_lines = msg.get("node_start_lines")
+        node_result_lines = msg.get("node_result_lines")
+        agent_timeline = msg.get("agent_timeline")
+        thinking_lines = msg.get("thinking_lines")
+        if (
+            not node_start_lines
+            and not node_result_lines
+            and not agent_timeline
+            and not thinking_lines
+        ):
+            continue
+        preserved.append(
+            {
+                "content": msg.get("content") or "",
+                "node_start_lines": (
+                    list(node_start_lines)
+                    if isinstance(node_start_lines, list)
+                    else None
+                ),
+                "node_result_lines": (
+                    list(node_result_lines)
+                    if isinstance(node_result_lines, list)
+                    else None
+                ),
+                "agent_timeline": (
+                    list(agent_timeline) if isinstance(agent_timeline, list) else None
+                ),
+                "thinking_lines": (
+                    list(thinking_lines) if isinstance(thinking_lines, list) else None
+                ),
+            }
+        )
+    return preserved
+
+
+def _merge_ui_only_assistant_fields(
+    ui_messages: list, preserved: list[dict] | None
+) -> list:
+    if not preserved:
+        return ui_messages
+    # Match from the end by position: live turns are not in the conversation API yet
+    # as node/thinking lines, and UI content may be translated vs server English.
+    preserved_rev = [
+        item
+        for item in reversed(preserved)
+        if (
+            item.get("node_start_lines")
+            or item.get("node_result_lines")
+            or item.get("agent_timeline")
+            or item.get("thinking_lines")
+        )
+    ]
+    assistants = [
+        msg
+        for msg in ui_messages
+        if isinstance(msg, dict) and msg.get("role") == "assistant"
+    ]
+    for msg, item in zip(reversed(assistants), preserved_rev):
+        if item.get("node_start_lines") and not msg.get("node_start_lines"):
+            msg["node_start_lines"] = item["node_start_lines"]
+        if item.get("node_result_lines") and not msg.get("node_result_lines"):
+            msg["node_result_lines"] = item["node_result_lines"]
+        if item.get("agent_timeline") and not msg.get("agent_timeline"):
+            msg["agent_timeline"] = item["agent_timeline"]
+        if item.get("thinking_lines") and not msg.get("thinking_lines"):
+            msg["thinking_lines"] = item["thinking_lines"]
+    return ui_messages
+
+
+def _normalize_conversation_id(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _store_conversation_title(
+    conversation_id: str | None, conversation_title: str | None
+) -> None:
+    if not conversation_id or not conversation_title:
+        return
+    titles = st.session_state.get("conversation_titles")
+    if not isinstance(titles, dict):
+        titles = {}
+    titles[conversation_id] = conversation_title
+    st.session_state.conversation_titles = titles
+
+
+def _attachment_caption(attachments: list | None) -> str | None:
+    """Short UI label for attached location / bbox / file."""
+    parts: list[str] = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").strip()
+        if kind == "file":
+            parts.append(f"File: {item.get('name') or 'attached'}")
+        elif kind == "location":
+            parts.append(f"Location: {item.get('name') or 'selected'}")
+        elif kind == "bounding_box":
+            area = item.get("area") or {}
+            try:
+                parts.append(
+                    "BBox: "
+                    f"[{float(area['min_lat']):.2f}, {float(area['max_lat']):.2f}, "
+                    f"{float(area['min_lon']):.2f}, {float(area['max_lon']):.2f}]"
+                )
+            except (KeyError, TypeError, ValueError):
+                parts.append("Bounding box attached")
+        elif kind == "multiple_choice":
+            label = item.get("label") or item.get("option_id") or "selected"
+            custom = item.get("custom_text")
+            if custom:
+                parts.append(f"Choice (other): {custom}")
+            else:
+                parts.append(f"Choice: {label}")
+        elif kind:
+            parts.append(kind)
+    return " · ".join(parts) if parts else None
+
+
+def _agent_server_http_base_url(agent_url: str) -> str:
+    if "://" not in agent_url:
+        agent_url = f"http://{agent_url}"
+    parsed = urlparse(agent_url)
+    scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme or "http")
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    if path.endswith("/ws/chat"):
+        path = path[: -len("/ws/chat")]
+    return f"{scheme}://{netloc}{path}".rstrip("/")
+
+
+def _agent_server_headers(auth_token: str | None) -> dict[str, str]:
+    if not auth_token:
+        return {}
+    return {"Authorization": f"Bearer {auth_token}"}
+
+
+def _list_conversations(agent_url: str, auth_token: str | None) -> list[dict]:
+    response = requests.get(
+        f"{_agent_server_http_base_url(agent_url)}/conversations",
+        headers=_agent_server_headers(auth_token),
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _get_conversation(
+    agent_url: str, auth_token: str | None, conversation_id: str
+) -> dict | None:
+    response = requests.get(
+        f"{_agent_server_http_base_url(agent_url)}/conversations/{conversation_id}",
+        headers=_agent_server_headers(auth_token),
+        timeout=10,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else None
+
+
+def _load_conversation_into_session(
+    agent_url: str, auth_token: str | None, conversation_id: str
+) -> None:
+    conversation = _get_conversation(agent_url, auth_token, conversation_id)
+    if conversation is None:
+        st.warning("Conversation not found. Starting a new conversation.")
+        st.session_state.conversation_id = None
+        st.session_state.loaded_conversation_id = None
+        st.session_state.messages = []
+        st.session_state.messages_en = []
+        st.session_state.pending_user_input = None
+        _clear_conversation_id_query_param()
+        return
+
+    messages = conversation.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+    ui_messages, agent_messages = _conversation_messages_to_chat_state(messages)
+    preserved = st.session_state.pop("_preserve_ui_fields", None)
+    if isinstance(preserved, list):
+        ui_messages = _merge_ui_only_assistant_fields(ui_messages, preserved)
+    st.session_state.messages = ui_messages
+    st.session_state.messages_en = agent_messages
+    st.session_state.pending_user_input = _pending_from_conversation_messages(messages)
+    st.session_state.loaded_conversation_id = conversation_id
+    st.session_state.pop("_force_history_reload", None)
+
+
 # ---------------------------------------------------
 # SESSION VARIABLES (Chat history & agent)
 # ---------------------------------------------------
@@ -365,18 +2844,79 @@ if "messages_en" not in st.session_state:
     st.session_state.messages_en = messages_en
 
 if "agent_executor" not in st.session_state:
-    # Use remote Agent Server via WebSocket
     st.session_state.agent_executor = get_shared_agent_adapter()
+elif st.session_state.get("ws_protocol_version") != WS_PROTOCOL_VERSION:
+    _agent_adapter_module.reset_shared_agent_adapter()
+    st.session_state.agent_executor = _agent_adapter_module.get_shared_agent_adapter()
+st.session_state.ws_protocol_version = WS_PROTOCOL_VERSION
 
 if "last_lang" not in st.session_state:
     st.session_state.last_lang = "en"
 
-if "pending_location_confirmation" not in st.session_state:
-    st.session_state.pending_location_confirmation = None
+conversation_id_from_query = _normalize_conversation_id(
+    _get_conversation_id_from_query_params()
+)
+
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = conversation_id_from_query
+elif _normalize_conversation_id(
+    st.session_state.conversation_id
+) != conversation_id_from_query:
+    st.session_state.conversation_id = conversation_id_from_query
+    st.session_state.messages = []
+    st.session_state.messages_en = []
+    st.session_state.pending_user_input = None
+    st.session_state.loaded_conversation_id = None
+
+if "loaded_conversation_id" not in st.session_state:
+    st.session_state.loaded_conversation_id = None
+
+if "conversation_titles" not in st.session_state:
+    st.session_state.conversation_titles = {}
+
+if "pending_user_input" not in st.session_state:
+    st.session_state.pending_user_input = None
+
+if "pending_drawn_bbox" not in st.session_state:
+    st.session_state.pending_drawn_bbox = None
+
+if "bbox_picker_key" not in st.session_state:
+    # Bump to remount st_folium after clear/submit so prior drawings do not stick.
+    st.session_state.bbox_picker_key = 0
 
 if "confirmed_locations" not in st.session_state:
     # Map normalized location_query -> {"token": str, "display": str}
     st.session_state.confirmed_locations = {}
+
+if "attached_user_inputs" not in st.session_state:
+    st.session_state.attached_user_inputs = {}
+
+if "composer_attach_mode" not in st.session_state:
+    st.session_state.composer_attach_mode = None
+
+if "composer_location_candidates" not in st.session_state:
+    st.session_state.composer_location_candidates = []
+
+if "composer_attach_bbox" not in st.session_state:
+    st.session_state.composer_attach_bbox = None
+
+if "composer_bbox_picker_key" not in st.session_state:
+    st.session_state.composer_bbox_picker_key = 0
+
+if "composer_file_uploader_key" not in st.session_state:
+    st.session_state.composer_file_uploader_key = 0
+
+if "turn_thinking_lines" not in st.session_state:
+    st.session_state.turn_thinking_lines = []
+
+if "turn_node_start_lines" not in st.session_state:
+    st.session_state.turn_node_start_lines = []
+
+if "turn_node_result_entries" not in st.session_state:
+    st.session_state.turn_node_result_entries = []
+
+if "turn_agent_timeline" not in st.session_state:
+    st.session_state.turn_agent_timeline = []
 
 if "auto_confirm_attempts" not in st.session_state:
     # Map normalized location_query -> int attempts in current session
@@ -402,6 +2942,72 @@ with st.sidebar:
     st.success("Agent Mode: Remote (Agent Server)")
     agent_url = os.getenv("AGENT_SERVER_URL", "ws://localhost:8080")
     st.caption(f"Connected to: {agent_url}")
+
+    st.subheader("Agent Auth")
+    effective_auth_token = ""
+
+    if auth_enabled() and cognito_tokens:
+        # Logged in via Cognito Hosted UI: forward the access token.
+        claims = cognito_tokens.get("claims") or {}
+        user_label = (
+            claims.get("email")
+            or claims.get("cognito:username")
+            or claims.get("username")
+            or "Authenticated user"
+        )
+        st.caption(f"Signed in as: {user_label}")
+        effective_auth_token = cognito_tokens.get("access_token") or ""
+        render_logout_control()
+
+    if hasattr(agent_executor, "set_auth_token"):
+        agent_executor.set_auth_token(effective_auth_token or None)
+
+    if effective_auth_token:
+        st.caption("Agent auth token is set.")
+    else:
+        st.caption("No Agent Server auth token configured.")
+
+    st.divider()
+    st.subheader("Conversations")
+
+    if st.button("New conversation", use_container_width=True):
+        st.session_state.conversation_id = None
+        st.session_state.loaded_conversation_id = None
+        st.session_state.messages = []
+        st.session_state.messages_en = []
+        st.session_state.pending_user_input = None
+        st.session_state.pending_drawn_bbox = None
+        st.session_state.bbox_picker_key = (
+            int(st.session_state.get("bbox_picker_key") or 0) + 1
+        )
+        _clear_conversation_id_query_param()
+        st.rerun()
+
+    try:
+        conversations = _list_conversations(agent_url, effective_auth_token or None)
+        if not conversations:
+            st.caption("No conversations yet.")
+        for conversation in conversations:
+            conversation_id = str(conversation.get("id") or "")
+            if not conversation_id:
+                continue
+            title = (
+                st.session_state.conversation_titles.get(conversation_id)
+                or conversation.get("title")
+                or "New chat"
+            )
+            if st.button(
+                title,
+                key=f"conversation_{conversation_id}",
+                use_container_width=True,
+            ):
+                st.session_state.conversation_id = conversation_id
+                st.session_state.loaded_conversation_id = None
+                _set_conversation_id_query_param(conversation_id)
+                st.rerun()
+    except Exception as e:
+        logger.warning(f"Failed to load conversations: {type(e).__name__}: {e}")
+        st.caption("Could not load conversations.")
 
     st.divider()
     st.subheader("Document (PDF)")
@@ -450,6 +3056,23 @@ with st.sidebar:
         st.session_state.document_name = ""
 
 
+if (
+    st.session_state.conversation_id
+    and st.session_state.loaded_conversation_id != st.session_state.conversation_id
+):
+    try:
+        _load_conversation_into_session(
+            agent_url,
+            effective_auth_token or None,
+            st.session_state.conversation_id,
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to load conversation {st.session_state.conversation_id}: {type(e).__name__}: {e}"
+        )
+        st.warning("Could not load the selected conversation.")
+
+
 # ---------------------------------------------------
 # DISPLAY CHAT HISTORY
 # ---------------------------------------------------
@@ -462,30 +3085,63 @@ for msg in st.session_state.messages:
     is_error = False
     maps: list = []
     thumbnails: list = []
+    stored_tool_calls: list[ToolCallRecord] = []
+    stored_node_starts: list[str] = []
+    stored_node_results: list[dict[str, str]] = []
+    stored_agent_timeline: list[AgentTimelineItem] = []
+    stored_thinking: list[str] = []
 
     if role == "assistant":
         # Type narrowing: msg is AssistantMessage here
         assistant_msg: AssistantMessage = msg  # type: ignore
-        artifacts = assistant_msg["artifacts"]
-        is_error = assistant_msg["error"]
+        artifacts = assistant_msg.get("artifacts") or ToolArtifacts()
+        is_error = bool(assistant_msg.get("error", False))
         maps = artifacts.maps if hasattr(artifacts, "maps") else []
         thumbnails = artifacts.thumbnails if hasattr(artifacts, "thumbnails") else []
+        stored_tool_calls = assistant_msg.get("tool_calls") or []
+        stored_node_starts = assistant_msg.get("node_start_lines") or []
+        raw_node_results = assistant_msg.get("node_result_lines") or []
+        stored_node_results = [
+            item
+            for item in raw_node_results
+            if isinstance(item, dict)
+            and isinstance(item.get("domain"), str)
+            and isinstance(item.get("message"), str)
+        ]
+        raw_timeline = assistant_msg.get("agent_timeline") or []
+        stored_agent_timeline = [
+            item for item in raw_timeline if isinstance(item, dict) and item.get("kind")
+        ]
+        stored_thinking = assistant_msg.get("thinking_lines") or []
 
     with st.chat_message(role):
+        if role == "assistant" and stored_thinking:
+            _render_thinking_box(stored_thinking)
+        if role == "assistant" and stored_node_starts:
+            _render_node_start_lines(stored_node_starts)
+        if role == "assistant" and stored_agent_timeline:
+            _render_agent_timeline(stored_agent_timeline)
+        elif role == "assistant" and stored_tool_calls:
+            _render_tool_status_box(
+                [_record_to_tool_call(record) for record in stored_tool_calls]
+            )
+            for item in stored_node_results:
+                _render_timeline_text_block(
+                    str(item.get("message") or ""),
+                    domain=str(item.get("domain") or "") or None,
+                )
         if role == "assistant" and is_error:
             st.error(content or "An error occurred.")
         elif role != "assistant":
             st.write(content)
+            caption = _attachment_caption(msg.get("attachments"))
+            if caption:
+                st.caption(caption)
         else:
             # assistant + not error
-            # Show map if any item is a legacy HTML path or a spec with view_state
-            # (view_state alone is enough to show a basemap centered on the location)
+            # view_state alone is enough to show a basemap centered on the location
             has_map = any(
-                (isinstance(x, str) and x.endswith(".html"))
-                or (
-                    isinstance(x, dict)
-                    and isinstance(x.get("view_state"), dict)
-                )
+                isinstance(x, dict) and isinstance(x.get("view_state"), dict)
                 for x in maps
             )
 
@@ -517,7 +3173,10 @@ for msg in st.session_state.messages:
                     st.markdown(f"[Open image/COG in viewer]({url})")
                     st.caption("GeoTIFF/COG — open in QGIS or a COG-capable viewer.")
 
-            if has_map:
+            if not content and not has_map and not thumbnails and stored_tool_calls:
+                # Tool-only assistant bubble (history replay of persisted tool rows).
+                pass
+            elif has_map:
                 col_text, col_map = st.columns([2, 3], vertical_alignment="top")
                 with col_text:
                     st.write(content)
@@ -527,7 +3186,7 @@ for msg in st.session_state.messages:
                         if isinstance(item, dict) and isinstance(
                             item.get("view_state"), dict
                         ):
-                            _render_pydeck_map_spec(item)
+                            _render_map_artifact_item(item)
 
                     if thumbnails:
                         st.write("### Satellite Images:")
@@ -546,112 +3205,92 @@ for msg in st.session_state.messages:
 # ---------------------------------------------------
 # CHAT INPUT
 # ---------------------------------------------------
-pending = st.session_state.pending_location_confirmation
-if isinstance(pending, dict) and pending.get("candidates"):
-    st.info("Please confirm the intended location to continue.")
-    location_query = (
-        pending.get("location_query")
-        if isinstance(pending.get("location_query"), str)
-        else None
-    )
+pending = st.session_state.pending_user_input
+if isinstance(pending, dict) and pending.get("needs_input"):
+    needs_input = pending.get("needs_input") or {}
+    st.info("Please provide the requested input to continue.")
+
+    location_payload = needs_input.get("location") if isinstance(needs_input, dict) else None
+    bbox_payload = needs_input.get("bounding_box") if isinstance(needs_input, dict) else None
+    mc_payload = needs_input.get("multiple_choice") if isinstance(needs_input, dict) else None
+
+    location_query = _location_query_from_needs_input(needs_input)
     norm_key = (
         " ".join(location_query.lower().split())
         if isinstance(location_query, str)
         else None
     )
 
-    # If we've already confirmed this exact ambiguous query earlier in the session,
-    # auto-apply the same choice to avoid asking repeatedly (common when multiple
-    # tools need the same city).
-    cached = st.session_state.confirmed_locations.get(norm_key) if norm_key else None
-    attempts = (
-        st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
-    )
-    if (
-        isinstance(cached, dict)
-        and isinstance(cached.get("token"), str)
-        and norm_key
-        and attempts < 1
-    ):
-        pause_value = pending.get("pause")
-        resume = pause_value if isinstance(pause_value, dict) else {}
-        resume_state_value = resume.get("resume_state")
-        resume_state = (
-            resume_state_value if isinstance(resume_state_value, dict) else None
+    # Auto-confirm previously chosen location for the same ambiguous query.
+    if isinstance(location_payload, dict):
+        cached = st.session_state.confirmed_locations.get(norm_key) if norm_key else None
+        attempts = (
+            st.session_state.auto_confirm_attempts.get(norm_key, 0) if norm_key else 0
         )
-        resume_patch_value = pending.get("resume_patch")
-        resume_patch = (
-            resume_patch_value if isinstance(resume_patch_value, dict) else {}
-        )
-        field = resume_patch.get("field") if resume_patch else None
-        patched_value = cached.get("token") if cached else None
+        if (
+            isinstance(cached, dict)
+            and isinstance(cached.get("token"), str)
+            and norm_key
+            and attempts < 1
+            and "bounding_box" not in needs_input
+        ):
+            patched_value = cached.get("token")
+            st.session_state.auto_confirm_attempts[norm_key] = attempts + 1
+            st.session_state.pending_user_input = None
 
-        if isinstance(resume_state, dict):
-            next_input = resume_state.get("next_input")
-            if isinstance(field, str) and field.strip():
-                if isinstance(next_input, dict):
-                    next_input[field] = patched_value
-                else:
-                    resume_state["next_input"] = {field: patched_value}
-            else:
-                resume_state["next_input"] = patched_value
-
-            confirmed = resume_state.get("confirmed_locations")
-            if not isinstance(confirmed, dict):
-                confirmed = {}
-            confirmed[norm_key] = patched_value
-            resume_state["confirmed_locations"] = confirmed
-            resume["resume_state"] = resume_state
-
-        st.session_state.auto_confirm_attempts[norm_key] = attempts + 1
-        st.session_state.pending_location_confirmation = None
-
-        with st.chat_message("assistant"):
-            with st.spinner("Continuing..."):
-                trace_placeholder = st.empty()
-                live_callback = _make_live_trace_updater(trace_placeholder)
+            with st.chat_message("assistant"):
+                layout = _make_streaming_turn_placeholders()
+                (
+                    tools_callback,
+                    nodes_callback,
+                    trace_callback,
+                    thinking_callback,
+                    thinking_snapshot,
+                    tool_snapshot,
+                    node_start_snapshot,
+                    timeline_snapshot,
+                    tool_tick,
+                    domain_typewriter_snap,
+                    artifacts_snapshot,
+                ) = _make_streaming_event_handler(layout=layout)
                 try:
-                    english_query = resume.get("user_text") or ""
-                    english_query_augmented = _augment_with_document(english_query)
-                    logger.debug(
-                        f"Auto-confirming location, resuming with query: {english_query_augmented[:100]}..."
+                    auto_loc = _confirmed_location_from_cache(
+                        cached.get("display", ""), patched_value
                     )
-                    history_for_agent = st.session_state.messages_en
-                    auto_loc = {
-                        "name": cached.get("display", ""),
-                        "coordinates": [0, 0],
-                    }
-                    result = _invoke_agent_unified(
+                    result = _invoke_agent_with_streaming_display(
                         agent_executor,
-                        english_query_augmented,
-                        chat_history=history_for_agent,
-                        resume=resume,
-                        confirmed_location=auto_loc,
-                        stream_callback=live_callback,
+                        layout=layout,
+                        tools_callback=tools_callback,
+                        nodes_callback=nodes_callback,
+                        tools_tick=tool_tick,
+                        domain_typewriter_snap=domain_typewriter_snap,
+                        artifacts_snapshot=artifacts_snapshot,
+                        trace_callback=trace_callback,
+                        thinking_callback=thinking_callback,
+                        english_query="",
+                        resume=True,
+                        attachments=[auto_loc],
+                        conversation_id=st.session_state.conversation_id,
                     )
-                    logger.info("Auto-confirm completed successfully")
-                    logger.debug(
-                        f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+                    tool_calls = tool_snapshot()
+                    node_start_lines = _turn_node_start_lines(node_start_snapshot)
+                    agent_timeline = _turn_agent_timeline(timeline_snapshot)
+                    node_result_lines = _node_results_from_timeline(agent_timeline)
+                    _append_turn_agent_timeline(agent_timeline)
+                    _store_conversation_id(result.conversation_id)
+                    _store_conversation_title(
+                        result.conversation_id, result.conversation_title
                     )
-
-                    # Check if location confirmation is needed
-                    if result.needs_location_confirmation:
-                        logger.info("Another location confirmation needed")
-                        st.session_state.pending_location_confirmation = {
-                            "needs_location_confirmation": True,
-                            "candidates": result.location_options,
-                            "pause": result.pause_state,
-                        }
+                    pending_next = _pending_from_agent_result(result)
+                    if pending_next:
+                        st.session_state.pending_user_input = pending_next
 
                     detected_lang = st.session_state.last_lang or "en"
                     assistant_message_en = result.message or ""
                     if not isinstance(assistant_message_en, str):
                         assistant_message_en = str(assistant_message_en)
-
-                    ui_message = assistant_message_en
-                    if isinstance(ui_message, str):
-                        ui_message = translate_from_english(ui_message, detected_lang)
-
+                    ui_message = translate_from_english(assistant_message_en, detected_lang)
+                    layout.set_message(ui_message)
                     st.session_state.messages_en.append(
                         {"role": "assistant", "content": assistant_message_en}
                     )
@@ -661,195 +3300,327 @@ if isinstance(pending, dict) and pending.get("candidates"):
                             content=ui_message,
                             artifacts=result.artifacts,
                             error=result.error,
+                            tool_calls=tool_calls,
+                            node_start_lines=node_start_lines,
+                            node_result_lines=node_result_lines,
+                            agent_timeline=agent_timeline,
+                            thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
+                    if pending_next:
+                        pass
+                    else:
+                        _reset_turn_thinking()
+                        _reset_turn_node_results()
+                        _sync_conversation_from_server()
                 except Exception as e:
+                    logger.error(
+                        f"Error during auto-confirm: {type(e).__name__}: {str(e)}",
+                        exc_info=True,
+                    )
                     error_msg = f"❌ Error: {str(e)}"
+                    layout.message_placeholder.error(error_msg)
                     st.session_state.messages.append(
                         AssistantMessage(
                             role="assistant",
                             content=error_msg,
                             artifacts=ToolArtifacts(),
                             error=True,
+                            tool_calls=tool_snapshot(),
+                            node_start_lines=_turn_node_start_lines(node_start_snapshot),
+                            agent_timeline=_turn_agent_timeline(timeline_snapshot),
+                            node_result_lines=_node_results_from_timeline(
+                                _turn_agent_timeline(timeline_snapshot)
+                            ),
                         )
                     )
                     st.session_state.messages_en.append(
                         {"role": "assistant", "content": error_msg}
                     )
                 finally:
-                    trace_placeholder.empty()
+                    layout.trace_placeholder.empty()
+            st.rerun()
 
-        st.rerun()
-
-    candidates: list[LocationOption] = [
-        LocationOption(
-            name=c.name,
-            coordinates=c.coordinates,
-            place_id=c.place_id,
-            osm_id=c.osm_id,
-            osm_type=c.osm_type,
-            osm_type_prefix=c.osm_type_prefix,
-        )
-        for c in pending.get("candidates") or []
-    ]
-
-    def _candidate_label(candidate: LocationOption) -> str:
-        display = str(candidate.name)
-        lat = candidate.coordinates[0]
-        lon = candidate.coordinates[1]
-        place_id = candidate.place_id
-        return f"{display} ({float(lat):.4f}, {float(lon):.4f}) place_id={place_id}"
-
-    with st.form("location_confirmation_form"):
-        choice = st.selectbox(
-            "Select a location",
-            options=candidates,
-            format_func=_candidate_label,
-        )
-        submitted = st.form_submit_button("Confirm location")
-
-    if submitted:
-        logger.info(f"User confirmed location choice: {choice.name}")
-
-        patched_value = None
-        chosen_display = choice.name
-        if choice.osm_id is not None and choice.osm_type is not None:
-            prefix = get_osm_type_prefix(choice.osm_type)
-            patched_value = f"@osm_id:{prefix}{choice.osm_id}"
-        elif choice.place_id is not None:
-            patched_value = f"@place_id:{choice.place_id}"
-        else:
-            logger.warning("No OSM ID or place ID found for chosen location")
-            patched_value = chosen_display or ""
-
-        pause_value = pending.get("pause")
-        resume = pause_value if isinstance(pause_value, dict) else {}
-        resume_state_value = resume.get("resume_state")
-        resume_state = (
-            resume_state_value if isinstance(resume_state_value, dict) else None
-        )
-        resume_patch_value = pending.get("resume_patch")
-        resume_patch = (
-            resume_patch_value if isinstance(resume_patch_value, dict) else {}
-        )
-        field = resume_patch.get("field") if resume_patch else None
-
-        # Prefer a stable token that resolves to the exact chosen place.
-
-        # Cache confirmation for this query so other tools can reuse it.
-        if norm_key:
-            # Store under both the full query and its base token (before comma)
-            # to handle cases like "Paris" vs "Paris, France".
-            base_key = (
-                norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
-            )
-            for k in {norm_key, base_key}:
-                if k:
-                    st.session_state.confirmed_locations[k] = {
-                        "token": patched_value,
-                        "display": chosen_display or "",
-                    }
-            # Reset auto-confirm attempts after an explicit choice.
-            st.session_state.auto_confirm_attempts[norm_key] = 0
-            if base_key != norm_key:
-                st.session_state.auto_confirm_attempts[base_key] = 0
-
-        if isinstance(resume_state, dict):
-            next_input = resume_state.get("next_input")
-            if isinstance(field, str) and field.strip():
-                if isinstance(next_input, dict):
-                    next_input[field] = patched_value
-                else:
-                    resume_state["next_input"] = {field: patched_value}
-            else:
-                # Fallback: replace next_input entirely.
-                resume_state["next_input"] = patched_value
-
-            # Persist confirmed disambiguations into the agent state so later planner
-            # steps can reuse them (avoid re-asking for the same city).
-            if norm_key:
-                confirmed = resume_state.get("confirmed_locations")
-                if not isinstance(confirmed, dict):
-                    confirmed = {}
-                confirmed[norm_key] = patched_value
-                base_key = (
-                    norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+    # --- location collector ---
+    choice = None
+    if isinstance(location_payload, dict):
+        prompt = location_payload.get("prompt") or "Select a location"
+        st.write(prompt)
+        raw_candidates = location_payload.get("candidates") or []
+        candidates: list[LocationOption] = []
+        for c in raw_candidates:
+            if not isinstance(c, dict):
+                continue
+            candidates.append(
+                LocationOption(
+                    name=str(c.get("display_name") or c.get("name") or "Unknown"),
+                    coordinates=[float(c.get("lat") or 0), float(c.get("lon") or 0)],
+                    place_id=c.get("place_id"),
+                    osm_id=c.get("osm_id"),
+                    osm_type=c.get("osm_type"),
+                    osm_type_prefix=get_osm_type_prefix(c.get("osm_type") or "")
+                    or None,
                 )
-                if base_key and base_key != norm_key:
-                    confirmed[base_key] = patched_value
-                resume_state["confirmed_locations"] = confirmed
+            )
 
-            resume["resume_state"] = resume_state
+        def _candidate_label(candidate: LocationOption) -> str:
+            display = str(candidate.name)
+            lat = candidate.coordinates[0]
+            lon = candidate.coordinates[1]
+            place_id = candidate.place_id
+            return f"{display} ({float(lat):.4f}, {float(lon):.4f}) place_id={place_id}"
 
-        # Append a short confirmation message to chat history for user visibility.
-        detected_lang = st.session_state.last_lang or "en"
-        confirm_en = f"Confirmed location: {chosen_display or patched_value}"
-        confirm_ui = (
-            translate_from_english(confirm_en, detected_lang)
-            if detected_lang != "en"
-            else confirm_en
+        if candidates:
+            choice = st.selectbox(
+                "Select a location",
+                options=candidates,
+                format_func=_candidate_label,
+                key="user_input_location_choice",
+            )
+
+    # --- bounding box collector ---
+    drawn_bbox = None
+    if isinstance(bbox_payload, dict):
+        prompt = bbox_payload.get("prompt") or "Draw a bounding box on the map"
+        st.write(prompt)
+        drawn_bbox = st.session_state.pending_drawn_bbox
+
+        if drawn_bbox:
+            # Hide the map picker once an area is selected.
+            st.success(
+                f"Selected area: [{drawn_bbox[0]:.4f}, {drawn_bbox[1]:.4f}, "
+                f"{drawn_bbox[2]:.4f}, {drawn_bbox[3]:.4f}]"
+            )
+            col_continue, col_redraw = st.columns(2)
+            with col_continue:
+                submitted_bbox = st.button(
+                    "Continue",
+                    type="primary",
+                    key="user_input_bbox_continue",
+                    use_container_width=True,
+                )
+            with col_redraw:
+                if st.button(
+                    "Redraw",
+                    key="user_input_bbox_redraw",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_drawn_bbox = None
+                    st.session_state.bbox_picker_key = (
+                        int(st.session_state.get("bbox_picker_key") or 0) + 1
+                    )
+                    st.rerun()
+        else:
+            st.caption("Use the rectangle tool on the map to select an area.")
+            submitted_bbox = False
+
+            center = bbox_payload.get("map_center") or [46.5, 2.5]
+            zoom = float(bbox_payload.get("map_zoom") or 6)
+            try:
+                center_lat, center_lon = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                center_lat, center_lon = 46.5, 2.5
+            fmap = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
+            Draw(
+                export=False,
+                draw_options={
+                    "polyline": False,
+                    "polygon": False,
+                    "circle": False,
+                    "circlemarker": False,
+                    "marker": False,
+                    "rectangle": True,
+                },
+                edit_options={"edit": True},
+            ).add_to(fmap)
+            map_out = st_folium(
+                fmap,
+                key=f"user_input_bbox_picker_{st.session_state.bbox_picker_key}",
+                height=450,
+                returned_objects=["last_active_drawing", "all_drawings"],
+                use_container_width=True,
+            )
+            latest_bbox = bbox_from_folium_draw_output(map_out)
+            if latest_bbox is not None:
+                st.session_state.pending_drawn_bbox = latest_bbox
+                # Hide the map and show the selected summary + Continue.
+                st.rerun()
+    else:
+        submitted_bbox = False
+
+    # --- multiple choice collector ---
+    mc_choice_id: str | None = None
+    mc_choice_label: str | None = None
+    mc_custom_text: str | None = None
+    submitted_mc = False
+    if isinstance(mc_payload, dict):
+        mc_result = render_multiple_choice_ui(mc_payload)
+        mc_choice_id = mc_result.option_id
+        mc_choice_label = mc_result.option_label
+        mc_custom_text = mc_result.custom_text
+        submitted_mc = mc_result.submitted
+
+    # Shared confirm for location-only (or location + bbox) flows.
+    submitted_location = False
+    if isinstance(location_payload, dict) and not isinstance(bbox_payload, dict):
+        submitted_location = st.button(
+            "Continue",
+            type="primary",
+            key="user_input_location_continue",
+            use_container_width=True,
         )
-        st.session_state.messages.append(UserMessage(role="user", content=confirm_ui))
-        st.session_state.messages_en.append({"role": "user", "content": confirm_en})
+    elif isinstance(location_payload, dict) and isinstance(bbox_payload, dict):
+        # Bbox block already rendered Continue; reuse that click via session flag.
+        submitted_location = False
 
-        # Clear pending state before resuming.
-        st.session_state.pending_location_confirmation = None
+    submitted = bool(submitted_bbox or submitted_location or submitted_mc)
+    if isinstance(bbox_payload, dict):
+        drawn_bbox = st.session_state.pending_drawn_bbox
+    if submitted:
+        missing = []
+        if "location" in needs_input and choice is None:
+            missing.append("location")
+        if "bounding_box" in needs_input and drawn_bbox is None:
+            missing.append("bounding_box")
+        if "multiple_choice" in needs_input:
+            if not mc_choice_id:
+                missing.append("multiple_choice")
+            elif mc_choice_id == OTHER_OPTION_ID and not (mc_custom_text or "").strip():
+                missing.append("custom answer")
+        if missing:
+            st.warning(f"Please provide: {', '.join(missing)}")
+        else:
+            attachments_payload: list[dict] = []
+            confirmed_loc = None
+            if choice is not None:
+                patched_value = None
+                chosen_display = choice.name
+                if choice.osm_id is not None and choice.osm_type is not None:
+                    prefix = get_osm_type_prefix(choice.osm_type)
+                    patched_value = f"@osm_id:{prefix}{choice.osm_id}"
+                elif choice.place_id is not None:
+                    patched_value = f"@place_id:{choice.place_id}"
+                else:
+                    patched_value = chosen_display or ""
 
-        with st.chat_message("assistant"):
-            with st.spinner("Continuing..."):
-                trace_placeholder = st.empty()
-                live_callback = _make_live_trace_updater(trace_placeholder)
+                if norm_key:
+                    base_key = (
+                        norm_key.split(",", 1)[0].strip() if "," in norm_key else norm_key
+                    )
+                    for k in {norm_key, base_key}:
+                        if k:
+                            st.session_state.confirmed_locations[k] = {
+                                "token": patched_value,
+                                "display": chosen_display or "",
+                            }
+                    st.session_state.auto_confirm_attempts[norm_key] = 0
+                    if base_key != norm_key:
+                        st.session_state.auto_confirm_attempts[base_key] = 0
+
+                confirmed_loc = _location_attachment_from_option(choice)
+                attachments_payload.append(confirmed_loc)
+
+            if drawn_bbox is not None:
+                attachments_payload.append(bounding_box_attachment(drawn_bbox))
+
+            if mc_choice_id and mc_choice_label and isinstance(mc_payload, dict):
+                attachments_payload.append(
+                    multiple_choice_attachment(
+                        option_id=mc_choice_id,
+                        label=(
+                            mc_custom_text.strip()
+                            if mc_choice_id == OTHER_OPTION_ID and mc_custom_text
+                            else mc_choice_label
+                        ),
+                        custom_text=(
+                            mc_custom_text.strip()
+                            if mc_choice_id == OTHER_OPTION_ID and mc_custom_text
+                            else None
+                        ),
+                        prompt=str(mc_payload.get("prompt") or ""),
+                        offered_options=offered_options_from_payload(mc_payload),
+                        allow_other=bool(mc_payload.get("allow_other", True)),
+                        other_label=str(mc_payload.get("other_label") or "Other"),
+                    )
+                )
+
+            detected_lang = st.session_state.last_lang or "en"
+            if confirmed_loc:
+                confirm_en = f"Confirmed location: {confirmed_loc['name']}"
+            elif drawn_bbox:
+                confirm_en = (
+                    f"Confirmed bounding box: [{drawn_bbox[0]:.4f}, {drawn_bbox[1]:.4f}, "
+                    f"{drawn_bbox[2]:.4f}, {drawn_bbox[3]:.4f}]"
+                )
+            elif mc_choice_id:
+                if mc_choice_id == OTHER_OPTION_ID and mc_custom_text:
+                    confirm_en = f"Confirmed answer: {mc_custom_text.strip()}"
+                else:
+                    confirm_en = f"Confirmed choice: {mc_choice_label}"
+            else:
+                confirm_en = "Confirmed input"
+            confirm_ui = (
+                translate_from_english(confirm_en, detected_lang)
+                if detected_lang != "en"
+                else confirm_en
+            )
+            st.session_state.messages.append(UserMessage(role="user", content=confirm_ui))
+            st.session_state.messages_en.append({"role": "user", "content": confirm_en})
+            st.session_state.pending_user_input = None
+            st.session_state.pending_drawn_bbox = None
+            st.session_state.bbox_picker_key = (
+                int(st.session_state.get("bbox_picker_key") or 0) + 1
+            )
+
+            with st.chat_message("assistant"):
+                layout = _make_streaming_turn_placeholders()
+                (
+                    tools_callback,
+                    nodes_callback,
+                    trace_callback,
+                    thinking_callback,
+                    thinking_snapshot,
+                    tool_snapshot,
+                    node_start_snapshot,
+                    timeline_snapshot,
+                    tool_tick,
+                    domain_typewriter_snap,
+                    artifacts_snapshot,
+                ) = _make_streaming_event_handler(layout=layout)
                 try:
-                    english_query = resume.get("user_text") or ""
-                    english_query_augmented = _augment_with_document(english_query)
-                    logger.debug(
-                        f"Resuming after location confirmation: {english_query_augmented[:100]}..."
-                    )
-                    logger.debug(f"Resume state: {resume_state}")
-                    logger.debug(f"Resume patch: {resume_patch}")
-                    logger.debug(f"Field: {field}")
-                    logger.debug(f"Patched value: {patched_value}")
-                    history_for_agent = st.session_state.messages_en[:-1]
-                    confirmed_loc = {
-                        "name": choice.name,
-                        "coordinates": choice.coordinates,
-                        "place_id": choice.place_id,
-                        "osm_id": choice.osm_id,
-                        "osm_type": choice.osm_type,
-                        "osm_type_prefix": choice.osm_type_prefix,
-                    }
-                    result = _invoke_agent_unified(
+                    result = _invoke_agent_with_streaming_display(
                         agent_executor,
-                        english_query_augmented,
-                        chat_history=history_for_agent,
-                        resume=resume,
-                        confirmed_location=confirmed_loc,
-                        stream_callback=live_callback,
+                        layout=layout,
+                        tools_callback=tools_callback,
+                        nodes_callback=nodes_callback,
+                        tools_tick=tool_tick,
+                        domain_typewriter_snap=domain_typewriter_snap,
+                        artifacts_snapshot=artifacts_snapshot,
+                        trace_callback=trace_callback,
+                        thinking_callback=thinking_callback,
+                        english_query="",
+                        resume=True,
+                        attachments=attachments_payload,
+                        conversation_id=st.session_state.conversation_id,
                     )
-                    logger.info(
-                        "Resume after location confirmation completed successfully"
+                    tool_calls = tool_snapshot()
+                    node_start_lines = _turn_node_start_lines(node_start_snapshot)
+                    agent_timeline = _turn_agent_timeline(timeline_snapshot)
+                    node_result_lines = _node_results_from_timeline(agent_timeline)
+                    _append_turn_agent_timeline(agent_timeline)
+                    _store_conversation_id(result.conversation_id)
+                    _store_conversation_title(
+                        result.conversation_id, result.conversation_title
                     )
-                    logger.debug(
-                        f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
-                    )
-
-                    # Check if location confirmation is needed
-                    if result.needs_location_confirmation:
-                        logger.info("Another location confirmation needed")
-                        st.session_state.pending_location_confirmation = {
-                            "needs_location_confirmation": True,
-                            "candidates": result.location_options,
-                            "pause": result.pause_state,
-                        }
+                    pending_next = _pending_from_agent_result(result)
+                    if pending_next:
+                        st.session_state.pending_user_input = pending_next
 
                     assistant_message_en = result.message or ""
                     if not isinstance(assistant_message_en, str):
                         assistant_message_en = str(assistant_message_en)
-
-                    ui_message = assistant_message_en
-                    if isinstance(ui_message, str):
-                        ui_message = translate_from_english(ui_message, detected_lang)
-
+                    ui_message = translate_from_english(assistant_message_en, detected_lang)
+                    layout.set_message(ui_message)
                     st.session_state.messages_en.append(
                         {"role": "assistant", "content": assistant_message_en}
                     )
@@ -859,120 +3630,440 @@ if isinstance(pending, dict) and pending.get("candidates"):
                             content=ui_message,
                             artifacts=result.artifacts,
                             error=result.error,
+                            tool_calls=tool_calls,
+                            node_start_lines=node_start_lines,
+                            node_result_lines=node_result_lines,
+                            agent_timeline=agent_timeline,
+                            thinking_lines=_turn_thinking_lines(thinking_snapshot),
                         )
                     )
+                    if pending_next:
+                        pass
+                    else:
+                        _reset_turn_thinking()
+                        _reset_turn_node_results()
+                        _sync_conversation_from_server()
                 except Exception as e:
                     logger.error(
                         f"Error during resume: {type(e).__name__}: {str(e)}",
                         exc_info=True,
                     )
                     error_msg = f"❌ Error: {str(e)}"
+                    layout.message_placeholder.error(error_msg)
                     st.session_state.messages.append(
                         AssistantMessage(
                             role="assistant",
                             content=error_msg,
                             artifacts=ToolArtifacts(),
                             error=True,
+                            tool_calls=tool_snapshot(),
+                            node_start_lines=_turn_node_start_lines(node_start_snapshot),
+                            agent_timeline=_turn_agent_timeline(timeline_snapshot),
+                            node_result_lines=_node_results_from_timeline(
+                                _turn_agent_timeline(timeline_snapshot)
+                            ),
                         )
                     )
                     st.session_state.messages_en.append(
                         {"role": "assistant", "content": error_msg}
                     )
                 finally:
-                    trace_placeholder.empty()
-
-        st.rerun()
+                    layout.trace_placeholder.empty()
+            st.rerun()
 
 # Normal chat input path (disabled while waiting for confirmation)
+_pending_pause = bool(st.session_state.pending_user_input)
+
+if not _pending_pause:
+    attached = st.session_state.attached_user_inputs
+    chip_cols = st.columns([1, 6])
+    with chip_cols[0]:
+        with st.popover("+", use_container_width=True):
+            st.caption("Attach to message")
+            if st.button("Location", use_container_width=True, key="attach_menu_location"):
+                st.session_state.composer_attach_mode = "location"
+                st.session_state.composer_location_candidates = []
+                st.rerun()
+            if st.button(
+                "Bounding box", use_container_width=True, key="attach_menu_bbox"
+            ):
+                st.session_state.composer_attach_mode = "bounding_box"
+                st.session_state.composer_attach_bbox = None
+                st.session_state.composer_bbox_picker_key = (
+                    int(st.session_state.get("composer_bbox_picker_key") or 0) + 1
+                )
+                st.rerun()
+            if st.button("File", use_container_width=True, key="attach_menu_file"):
+                st.session_state.composer_attach_mode = "file"
+                st.session_state.composer_file_uploader_key = (
+                    int(st.session_state.get("composer_file_uploader_key") or 0) + 1
+                )
+                st.rerun()
+    with chip_cols[1]:
+        chip_parts: list[str] = []
+        caption = _attachment_caption(list((attached or {}).values()))
+        if caption:
+            chip_parts.append(caption)
+        if chip_parts:
+            clear_cols = st.columns([5, 1])
+            with clear_cols[0]:
+                st.caption(" · ".join(chip_parts))
+            with clear_cols[1]:
+                if st.button("Clear", key="clear_attached_inputs"):
+                    st.session_state.attached_user_inputs = {}
+                    st.session_state.composer_attach_mode = None
+                    st.session_state.composer_location_candidates = []
+                    st.session_state.composer_attach_bbox = None
+                    st.rerun()
+
+    mode = st.session_state.composer_attach_mode
+    if mode == "location":
+        with st.container(border=True):
+            st.markdown("**Attach location**")
+            search_cols = st.columns([4, 1])
+            with search_cols[0]:
+                loc_query = st.text_input(
+                    "Search place",
+                    key="composer_location_query",
+                    label_visibility="collapsed",
+                    placeholder="Search a place (Nominatim)…",
+                )
+            with search_cols[1]:
+                do_search = st.button("Search", key="composer_location_search")
+            if do_search:
+                st.session_state.composer_location_candidates = (
+                    search_location_candidates(loc_query or "")
+                )
+            candidates = st.session_state.composer_location_candidates or []
+            if candidates:
+
+                def _loc_label(c: dict) -> str:
+                    return (
+                        f"{c.get('display_name')} "
+                        f"({float(c['lat']):.4f}, {float(c['lon']):.4f})"
+                    )
+
+                choice = st.selectbox(
+                    "Select a location",
+                    options=candidates,
+                    format_func=_loc_label,
+                    key="composer_location_choice",
+                )
+                attach_cols = st.columns(2)
+                with attach_cols[0]:
+                    if st.button(
+                        "Attach",
+                        type="primary",
+                        key="composer_location_attach",
+                        use_container_width=True,
+                    ):
+                        st.session_state.attached_user_inputs = {
+                            **st.session_state.attached_user_inputs,
+                            "location": location_attachment(choice),
+                        }
+                        st.session_state.composer_attach_mode = None
+                        st.session_state.composer_location_candidates = []
+                        st.rerun()
+                with attach_cols[1]:
+                    if st.button(
+                        "Cancel",
+                        key="composer_location_cancel",
+                        use_container_width=True,
+                    ):
+                        st.session_state.composer_attach_mode = None
+                        st.session_state.composer_location_candidates = []
+                        st.rerun()
+            elif do_search:
+                st.warning("No locations found.")
+            else:
+                if st.button("Cancel", key="composer_location_cancel_empty"):
+                    st.session_state.composer_attach_mode = None
+                    st.rerun()
+
+    elif mode == "bounding_box":
+        with st.container(border=True):
+            st.markdown("**Attach bounding box**")
+            drawn = st.session_state.composer_attach_bbox
+            if drawn:
+                st.success(
+                    f"Selected area: [{drawn[0]:.4f}, {drawn[1]:.4f}, "
+                    f"{drawn[2]:.4f}, {drawn[3]:.4f}]"
+                )
+                attach_cols = st.columns(2)
+                with attach_cols[0]:
+                    if st.button(
+                        "Attach",
+                        type="primary",
+                        key="composer_bbox_attach",
+                        use_container_width=True,
+                    ):
+                        st.session_state.attached_user_inputs = {
+                            **st.session_state.attached_user_inputs,
+                            "bounding_box": bounding_box_attachment(drawn),
+                        }
+                        st.session_state.composer_attach_mode = None
+                        st.session_state.composer_attach_bbox = None
+                        st.rerun()
+                with attach_cols[1]:
+                    if st.button(
+                        "Redraw",
+                        key="composer_bbox_redraw",
+                        use_container_width=True,
+                    ):
+                        st.session_state.composer_attach_bbox = None
+                        st.session_state.composer_bbox_picker_key = (
+                            int(st.session_state.get("composer_bbox_picker_key") or 0)
+                            + 1
+                        )
+                        st.rerun()
+            else:
+                st.caption("Use the rectangle tool on the map to select an area.")
+                fmap = folium.Map(location=[46.5, 2.5], zoom_start=6)
+                Draw(
+                    export=False,
+                    draw_options={
+                        "polyline": False,
+                        "polygon": False,
+                        "circle": False,
+                        "circlemarker": False,
+                        "marker": False,
+                        "rectangle": True,
+                    },
+                    edit_options={"edit": True},
+                ).add_to(fmap)
+                map_out = st_folium(
+                    fmap,
+                    key=(
+                        f"composer_bbox_picker_"
+                        f"{st.session_state.composer_bbox_picker_key}"
+                    ),
+                    height=350,
+                    returned_objects=["last_active_drawing", "all_drawings"],
+                    use_container_width=True,
+                )
+                latest_bbox = bbox_from_folium_draw_output(map_out)
+                if latest_bbox is not None:
+                    st.session_state.composer_attach_bbox = latest_bbox
+                    st.rerun()
+                if st.button("Cancel", key="composer_bbox_cancel"):
+                    st.session_state.composer_attach_mode = None
+                    st.session_state.composer_attach_bbox = None
+                    st.rerun()
+
+    elif mode == "file":
+        with st.container(border=True):
+            st.markdown("**Attach file**")
+            picked = st.file_uploader(
+                "Choose a file",
+                key=f"composer_file_uploader_{st.session_state.composer_file_uploader_key}",
+                accept_multiple_files=False,
+            )
+            attach_cols = st.columns(2)
+            with attach_cols[0]:
+                if st.button(
+                    "Attach",
+                    type="primary",
+                    key="composer_file_attach",
+                    disabled=picked is None,
+                    use_container_width=True,
+                ):
+                    if picked is None:
+                        st.warning("Choose a file first.")
+                    else:
+                        try:
+                            stored = upload_file_to_agent(
+                                _agent_server_http_base_url(agent_url),
+                                effective_auth_token or None,
+                                filename=picked.name or "file",
+                                data=picked.getvalue(),
+                                content_type=picked.type or "application/octet-stream",
+                                conversation_id=st.session_state.conversation_id,
+                            )
+                            st.session_state.attached_user_inputs = {
+                                **st.session_state.attached_user_inputs,
+                                "file": file_attachment(
+                                    stored["id"],
+                                    stored.get("original_filename") or picked.name or "file",
+                                ),
+                            }
+                            st.session_state.composer_attach_mode = None
+                            st.session_state.composer_file_uploader_key = (
+                                int(
+                                    st.session_state.get("composer_file_uploader_key")
+                                    or 0
+                                )
+                                + 1
+                            )
+                            st.rerun()
+                        except FileUploadError as exc:
+                            st.error(str(exc))
+            with attach_cols[1]:
+                if st.button(
+                    "Cancel",
+                    key="composer_file_cancel",
+                    use_container_width=True,
+                ):
+                    st.session_state.composer_attach_mode = None
+                    st.session_state.composer_file_uploader_key = (
+                        int(st.session_state.get("composer_file_uploader_key") or 0)
+                        + 1
+                    )
+                    st.rerun()
+
 user_input = st.chat_input(
     "Ask me anything about Earth observation or STAC...",
-    disabled=bool(st.session_state.pending_location_confirmation),
+    disabled=_pending_pause,
 )
 
 if user_input:
     logger.info(f"New user input received: {user_input[:100]}...")
-    st.session_state.messages.append(UserMessage(role="user", content=user_input))
+    _reset_turn_thinking()
+    _reset_turn_node_results()
+    attached_for_send = list((st.session_state.attached_user_inputs or {}).values())
+    st.session_state.attached_user_inputs = {}
+    st.session_state.composer_attach_mode = None
+    st.session_state.composer_location_candidates = []
+    st.session_state.composer_attach_bbox = None
+    st.session_state.messages.append(
+        UserMessage(
+            role="user",
+            content=user_input,
+            attachments=list(attached_for_send),
+        )
+    )
     with st.chat_message("user"):
         st.write(user_input)
+        caption = _attachment_caption(attached_for_send)
+        if caption:
+            st.caption(caption)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            trace_placeholder = st.empty()
-            live_callback = _make_live_trace_updater(trace_placeholder)
+        layout = _make_streaming_turn_placeholders()
+        (
+            tools_callback,
+            nodes_callback,
+            trace_callback,
+            thinking_callback,
+            thinking_snapshot,
+            tool_snapshot,
+            node_start_snapshot,
+            timeline_snapshot,
+            tool_tick,
+            domain_typewriter_snap,
+            artifacts_snapshot,
+        ) = _make_streaming_event_handler(layout=layout)
 
-            try:
-                english_query, detected_lang = detect_and_translate_to_english(
-                    user_input
-                )
-                st.session_state.last_lang = detected_lang
-                st.session_state.messages_en.append(
-                    {"role": "user", "content": english_query}
-                )
+        try:
+            english_query, detected_lang = detect_and_translate_to_english(
+                user_input
+            )
+            st.session_state.last_lang = detected_lang
+            st.session_state.messages_en.append(
+                {"role": "user", "content": english_query}
+            )
 
-                english_query_augmented = _augment_with_document(english_query)
-                logger.debug(
-                    f"Invoking agent with query: {english_query_augmented[:100]}..."
-                )
-                history_for_agent = st.session_state.messages_en[:-1]
-                result = _invoke_agent_unified(
-                    agent_executor,
-                    english_query_augmented,
-                    chat_history=history_for_agent,
-                    stream_callback=live_callback,
-                )
-                logger.info("Agent response received successfully")
-                logger.debug(
-                    f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
-                )
+            english_query_augmented = _augment_with_document(english_query)
+            logger.debug(
+                f"Invoking agent with query: {english_query_augmented[:100]}..."
+            )
+            result = _invoke_agent_with_streaming_display(
+                agent_executor,
+                layout=layout,
+                tools_callback=tools_callback,
+                nodes_callback=nodes_callback,
+                tools_tick=tool_tick,
+                domain_typewriter_snap=domain_typewriter_snap,
+                artifacts_snapshot=artifacts_snapshot,
+                trace_callback=trace_callback,
+                thinking_callback=thinking_callback,
+                english_query=english_query_augmented,
+                conversation_id=st.session_state.conversation_id,
+                attachments=attached_for_send or None,
+            )
+            tool_calls = tool_snapshot()
+            node_start_lines = _turn_node_start_lines(node_start_snapshot)
+            agent_timeline = _turn_agent_timeline(timeline_snapshot)
+            node_result_lines = _node_results_from_timeline(agent_timeline)
+            _append_turn_agent_timeline(agent_timeline)
+            _store_conversation_id(result.conversation_id)
+            _store_conversation_title(
+                result.conversation_id, result.conversation_title
+            )
+            logger.info("Agent response received successfully")
+            logger.debug(
+                f"Result: error={result.error}, needs_confirmation={result.needs_location_confirmation}"
+            )
 
-                # Check if location confirmation is needed
-                if result.needs_location_confirmation:
-                    logger.info("Location confirmation required")
+            # Check if location confirmation is needed
+            if result.needs_input:
+                logger.info("User input required")
 
-                    st.session_state.pending_location_confirmation = {
-                        "needs_location_confirmation": True,
-                        "candidates": result.location_options,
-                        "pause": result.pause_state,
-                    }
+                pending_next = _pending_from_agent_result(result)
+                if pending_next:
+                    st.session_state.pending_user_input = pending_next
 
-                assistant_message_en = result.message or ""
-                if not isinstance(assistant_message_en, str):
-                    assistant_message_en = str(assistant_message_en)
+            assistant_message_en = result.message or ""
+            if not isinstance(assistant_message_en, str):
+                assistant_message_en = str(assistant_message_en)
 
-                ui_message = assistant_message_en
-                if isinstance(ui_message, str):
-                    ui_message = translate_from_english(ui_message, detected_lang)
+            ui_message = assistant_message_en
+            if isinstance(ui_message, str):
+                ui_message = translate_from_english(ui_message, detected_lang)
+            layout.set_message(ui_message)
 
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": assistant_message_en}
+            st.session_state.messages_en.append(
+                {"role": "assistant", "content": assistant_message_en}
+            )
+            st.session_state.messages.append(
+                AssistantMessage(
+                    role="assistant",
+                    content=ui_message,
+                    artifacts=result.artifacts,
+                    error=result.error,
+                    tool_calls=tool_calls,
+                    node_start_lines=node_start_lines,
+                    node_result_lines=node_result_lines,
+                    agent_timeline=agent_timeline,
+                    thinking_lines=_turn_thinking_lines(thinking_snapshot),
                 )
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=ui_message,
-                        artifacts=result.artifacts,
-                        error=result.error,
-                    )
-                )
+            )
+            if result.needs_input:
+                pass
+            else:
+                _reset_turn_thinking()
+                _reset_turn_node_results()
+                _sync_conversation_from_server()
 
-            except Exception as e:
-                logger.error(
-                    f"Error during chat: {type(e).__name__}: {str(e)}"
+        except Exception as e:
+            logger.error(
+                f"Error during chat: {type(e).__name__}: {str(e)}"
+            )
+            error_msg = f"Error: {str(e)}"
+            layout.message_placeholder.error(error_msg)
+            st.session_state.messages.append(
+                AssistantMessage(
+                    role="assistant",
+                    content=error_msg,
+                    artifacts=ToolArtifacts(),
+                    error=True,
+                    tool_calls=tool_snapshot(),
+                    node_start_lines=_turn_node_start_lines(node_start_snapshot),
+                    agent_timeline=_turn_agent_timeline(timeline_snapshot),
+                    node_result_lines=_node_results_from_timeline(
+                        _turn_agent_timeline(timeline_snapshot)
+                    ),
                 )
-                error_msg = f"Error: {str(e)}"
-                st.session_state.messages.append(
-                    AssistantMessage(
-                        role="assistant",
-                        content=error_msg,
-                        artifacts=ToolArtifacts(),
-                        error=True,
-                    )
-                )
-                st.session_state.messages_en.append(
-                    {"role": "assistant", "content": error_msg}
-                )
+            )
+            st.session_state.messages_en.append(
+                {"role": "assistant", "content": error_msg}
+            )
 
-            finally:
-                trace_placeholder.empty()
+        finally:
+            layout.trace_placeholder.empty()
 
-    st.rerun()
+    # Rerun after pause (show collectors) or after a completed turn that
+    # requested a one-shot server history sync.
+    if st.session_state.pending_user_input or st.session_state.pop(
+        "_force_history_reload", False
+    ):
+        st.rerun()

@@ -2,6 +2,8 @@
 Tests for services/translate_service.py - Language detection and translation.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from services.translate_service import (
@@ -12,6 +14,16 @@ from services.translate_service import (
     translate_from_english,
     detect_and_translate_to_english,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_google_translator():
+    """Keep unit tests off the live Google Translate endpoint."""
+    with patch("services.translate_service.GoogleTranslator") as mock_cls:
+        translator = MagicMock()
+        translator.translate.side_effect = lambda text: text
+        mock_cls.return_value = translator
+        yield translator
 
 
 class TestDetectLanguage:
@@ -141,56 +153,74 @@ class TestUnprotect:
 class TestTranslateToEnglish:
     """Tests for translate_to_english function."""
 
-    def test_english_unchanged(self):
+    def test_english_unchanged(self, mock_google_translator):
         text = "Hello world"
+        mock_google_translator.translate.side_effect = None
+        mock_google_translator.translate.return_value = text
         result = translate_to_english(text)
-        assert result == text or "hello" in result.lower()
+        assert result == text
 
-    def test_french_translated(self):
+    def test_french_translated(self, mock_google_translator):
         text = "Bonjour le monde"
+        mock_google_translator.translate.side_effect = None
+        mock_google_translator.translate.return_value = "Hello world"
         result = translate_to_english(text)
-        # Should contain English translation
-        assert isinstance(result, str)
-        assert len(result) > 0
+        assert result == "Hello world"
+        mock_google_translator.translate.assert_called_once()
 
-    def test_preserves_technical_elements(self):
+    def test_preserves_technical_elements(self, mock_google_translator):
         text = "Télécharger sentinel-2 données"
         result = translate_to_english(text)
-        # sentinel-2 should be preserved
-        assert "sentinel-2" in result.lower() or "sentinel" in result.lower()
+        assert "sentinel-2" in result.lower()
+        protected_arg = mock_google_translator.translate.call_args[0][0]
+        assert "<PROTECT>sentinel-2</PROTECT>" in protected_arg
 
     def test_handles_empty_string(self):
         result = translate_to_english("")
         assert result == ""
 
+    def test_translator_error_returns_original(self, mock_google_translator):
+        mock_google_translator.translate.side_effect = RuntimeError("upstream down")
+        text = "Télécharger sentinel-2 données"
+        assert translate_to_english(text) == text
+
 
 class TestTranslateFromEnglish:
     """Tests for translate_from_english function."""
 
-    def test_english_target_unchanged(self):
+    def test_english_target_unchanged(self, mock_google_translator):
         text = "Hello world"
         result = translate_from_english(text, "en")
         assert result == text
+        mock_google_translator.translate.assert_not_called()
 
-    def test_none_target_unchanged(self):
+    def test_none_target_unchanged(self, mock_google_translator):
         text = "Hello world"
         result = translate_from_english(text, None)
         assert result == text
+        mock_google_translator.translate.assert_not_called()
 
-    def test_french_target_translates(self):
+    def test_french_target_translates(self, mock_google_translator):
         text = "Hello world"
+        mock_google_translator.translate.side_effect = None
+        mock_google_translator.translate.return_value = "Bonjour le monde"
         result = translate_from_english(text, "fr")
-        # Should return something (translation)
-        assert isinstance(result, str)
-        assert len(result) > 0
+        assert result == "Bonjour le monde"
+        mock_google_translator.translate.assert_called_once()
 
-    def test_preserves_technical_elements(self):
+    def test_preserves_technical_elements(self, mock_google_translator):
         text = "Download sentinel-2 data from 2024-01-15"
         result = translate_from_english(text, "fr")
-        # Technical elements should be preserved (at least partially)
         assert "sentinel" in result.lower()
-        # Date may be reformatted by translator, just check year is preserved
-        assert "2024" in result
+        assert "2024-01-15" in result
+        protected_arg = mock_google_translator.translate.call_args[0][0]
+        assert "<PROTECT>sentinel-2</PROTECT>" in protected_arg
+        assert "<PROTECT>2024-01-15</PROTECT>" in protected_arg
+
+    def test_translator_error_returns_original(self, mock_google_translator):
+        mock_google_translator.translate.side_effect = RuntimeError("upstream down")
+        text = "Download sentinel-2 data from 2024-01-15"
+        assert translate_from_english(text, "fr") == text
 
 
 class TestDetectAndTranslateToEnglish:
@@ -202,13 +232,13 @@ class TestDetectAndTranslateToEnglish:
         assert lang == "en"
         assert result == text
 
-    def test_french_input_translated(self):
+    def test_french_input_translated(self, mock_google_translator):
         text = "Bonjour, comment allez-vous?"
+        mock_google_translator.translate.side_effect = None
+        mock_google_translator.translate.return_value = "Hello, how are you?"
         result, lang = detect_and_translate_to_english(text)
         assert lang == "fr"
-        assert isinstance(result, str)
-        # Result should be translated to English
-        assert len(result) > 0
+        assert result == "Hello, how are you?"
 
     def test_returns_tuple(self):
         result = detect_and_translate_to_english("Test")

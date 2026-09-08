@@ -10,18 +10,29 @@ websockets>=14.0
 pydantic>=2.5.3
 pydantic-settings>=2.5.2
 
+
+
 # LangChain / LangGraph (Agent framework)
-langchain>=0.3.26
-langchain-aws>=0.2.27
-langchain-core>=0.3.67
+# langchain-aws 1.7+ requires boto3 1.43, which conflicts with aioboto3 15.5.0
+# (aiobotocore==2.25.1 pins botocore>=1.40.46,<1.40.62).
+langchain>=0.3.26,<1.4
+langchain-aws>=1.1.0,<1.2
+langchain-core>=0.3.67,<1.5
 langgraph>=0.5.1
 langgraph-checkpoint>=2.1.0
+langgraph-checkpoint-postgres>=3.1.0
+psycopg[binary]>=3.2.0
 
-# AWS SDK (for Bedrock LLM)
-boto3>=1.41.0
+# Database (async SQLAlchemy + Postgres/Aurora + migrations)
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0
+alembic>=1.13.0
+pgvector>=0.3.0
+aiosqlite==0.22.1
+
 
 # MCP Client (for tool integration)
-mcp>=1.25.0
+mcp>=2.0.0
 httpx>=0.28.1
 httpx-sse>=0.4.1
 
@@ -30,7 +41,9 @@ langdetect>=1.0.9
 deep-translator>=1.11.4
 
 # PDF processing
-pypdf>=5.1.0
+
+# Web search (keyless fallback for the web_search node)
+ddgs>=6.0.0
 
 # Utilities
 python-dotenv>=1.1.1
@@ -39,3 +52,13 @@ requests>=2.32.0
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
+
+debugpy>=1.8.0
+
+# AWS SDK (Bedrock LLM + S3-compatible file storage)
+# Keep boto3/botocore inside the aiobotocore 2.25.1 range used by aioboto3 15.5.0.
+aioboto3>=15.5.0,<16
+boto3>=1.40.46,<1.40.62
+botocore>=1.40.46,<1.40.62
+PyJWT[crypto]>=2.10.0
+python-multipart>=0.0.9

@@ -20,22 +20,25 @@ module "iam" {
   environment                    = var.environment
   aws_region                     = var.aws_region
   aws_account_id                 = var.aws_account_id
+  execution_role_name            = var.execution_role_name
   opentopo_api_key_arn           = var.opentopo_api_key_arn
   map_key_arn                    = var.map_key_arn
   maptiler_api_key_arn           = var.maptiler_api_key_arn
   bdtopo_database_url_secret_arn = var.bdtopo_database_url_secret_arn
   bdtopo_pipeline_enabled        = var.bdtopo_pipeline_enabled
+  cognito_client_secret_arn      = var.cognito_client_secret_arn
 }
 
 # ECR Module
 module "ecr" {
   source = "./modules/ecr"
 
-  project_name      = var.project_name
-  environment       = var.environment
-  aws_region        = var.aws_region
-  aws_account_id    = var.aws_account_id
-  github_repository = var.github_repository
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  aws_account_id     = var.aws_account_id
+  github_repository  = var.github_repository
+  create_github_oidc = var.create_github_oidc
 }
 
 # Service Discovery Module
@@ -56,6 +59,10 @@ module "alb" {
   environment  = var.environment
   vpc_id       = module.vpc.vpc_id
   subnet_ids   = module.vpc.public_subnet_ids
+
+  enable_https      = var.alb_enable_https
+  alb_domain_name   = var.alb_domain_name
+  route53_zone_name = var.route53_zone_name
 }
 
 # Managed PostGIS baseline for BDTOPO full-France workloads
@@ -78,6 +85,33 @@ module "postgis" {
   deletion_protection        = var.postgis_deletion_protection
 }
 
+# CloudFront CDN in front of the Streamlit ALB (edge TLS via *.cloudfront.net)
+module "cloudfront" {
+  source = "./modules/cloudfront"
+  count  = var.cloudfront_enabled ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  alb_dns_name = module.alb.alb_dns_name
+}
+
+locals {
+  # Public HTTPS URL of the app: CloudFront when enabled, else the ALB custom domain/HTTP.
+  cloudfront_url = one(module.cloudfront[*].url)
+
+  # Cognito redirect URIs: explicit tfvars value wins; otherwise derive from CloudFront.
+  cognito_redirect_uri_effective = (
+    var.cognito_redirect_uri != "" ? var.cognito_redirect_uri :
+    local.cloudfront_url != null ? "${local.cloudfront_url}/" :
+    ""
+  )
+  cognito_logout_redirect_uri_effective = (
+    var.cognito_logout_redirect_uri != "" ? var.cognito_logout_redirect_uri :
+    local.cloudfront_url != null ? "${local.cloudfront_url}/" :
+    ""
+  )
+}
+
 # ECS Module with MCP, Streamlit, and Agent services
 module "ecs" {
   source = "./modules/ecs"
@@ -93,6 +127,9 @@ module "ecs" {
   mcp_task_role_arn       = module.iam.mcp_task_role_arn
   agent_task_role_arn     = module.iam.agent_task_role_arn
   streamlit_task_role_arn = module.iam.streamlit_task_role_arn
+
+  # Remote debugging (ECS Exec + debugpy)
+  debug_enabled = var.debug_enabled
 
   # MCP Server configuration
   mcp_server_container_image = "${module.ecr.mcp_repository_url}:latest"
@@ -135,6 +172,21 @@ module "ecs" {
   agent_server_bedrock_model_id        = var.agent_server_bedrock_model_id
   agent_server_bedrock_max_tokens      = var.agent_server_bedrock_max_tokens
   agent_service_discovery_registry_arn = module.service_discovery.agent_server_service_arn
+
+
+  # Cognito / Authentication (shared by Agent Server and Streamlit)
+  auth_enabled                = var.auth_enabled
+  agent_auth_providers        = var.agent_auth_providers
+  cognito_region              = var.cognito_region
+  cognito_user_pool_id        = var.cognito_user_pool_id
+  cognito_domain              = var.cognito_domain
+  cognito_app_client_id       = var.cognito_app_client_id
+  cognito_token_use           = var.cognito_token_use
+  cognito_jwt_leeway_seconds  = var.cognito_jwt_leeway_seconds
+  cognito_client_secret_arn   = var.cognito_client_secret_arn
+  cognito_redirect_uri        = local.cognito_redirect_uri_effective
+  cognito_logout_redirect_uri = local.cognito_logout_redirect_uri_effective
+  cognito_scopes              = var.cognito_scopes
 
   # BDTOPO Pipeline configuration
   bdtopo_pipeline_enabled                    = var.bdtopo_pipeline_enabled

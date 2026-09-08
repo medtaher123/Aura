@@ -3,3 +3,4 @@ psycopg[binary]==3.3.3
 pydantic-settings>=2.7.1
 tqdm>=4.66.0
 
+debugpy

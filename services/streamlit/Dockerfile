@@ -29,7 +29,7 @@ RUN pip3 install --no-cache-dir --ignore-installed -r requirements.txt --break-s
 COPY . .
 
 # Expose ports
-EXPOSE 8501
+EXPOSE 8501 5679
 
 # Copy startup script
 COPY start.sh /app/start.sh

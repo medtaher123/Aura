@@ -1,0 +1,10 @@
+{
+  "servers": [
+    {
+      "slug": "immo-france",
+      "display_name": "Immo France",
+      "port": 8101,
+      "command": "mcp-immo-france"
+    }
+  ]
+}

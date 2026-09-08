@@ -2,12 +2,23 @@
 Pytest configuration and fixtures for Agent Server tests.
 """
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from src.main import app
 from src.config import get_config
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _init_graph_checkpointer():
+    from src.services.graph_runner.checkpointer import init_checkpointer, shutdown_checkpointer
+
+    asyncio.run(init_checkpointer())
+    yield
+    asyncio.run(shutdown_checkpointer())
 
 
 @pytest.fixture

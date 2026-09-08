@@ -1,0 +1,195 @@
+name: Build and Push Node MCP to ECR
+
+on:
+    push:
+        branches:
+            - main
+            - develop
+        paths:
+            - "services/node_mcp/**"
+            - ".github/workflows/node-mcp-ecr.yml"
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: "Environment to deploy to"
+                required: true
+                default: "staging"
+                type: choice
+                options:
+                    - production
+                    - staging
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    AWS_REGION: eu-west-1
+    ECR_REPOSITORY: eo-agent-2-node-mcp
+    SERVICE_PATH: services/node_mcp
+    ECS_CLUSTER: eo-agent-2-cluster
+    ECS_SERVICE: eo-agent-2-node-mcp-service
+
+jobs:
+    build-and-push:
+        name: Build and Push Docker Image
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: read
+
+        outputs:
+            image-tag: ${{ steps.meta.outputs.version }}
+            image-digest: ${{ steps.build-and-push.outputs.digest }}
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+                  role-session-name: GitHubActions-${{ github.run_id }}
+
+            - name: Login to Amazon ECR
+              id: login-ecr
+              uses: aws-actions/amazon-ecr-login@v2
+
+            - name: Extract metadata (tags, labels) for Docker
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+                  tags: |
+                      type=ref,event=branch
+                      type=ref,event=pr
+                      type=sha,prefix={{branch}}-,enable=true
+                      type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main'}}
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}}
+                  flavor: |
+                      latest=auto
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Build and push Docker image
+              id: build-and-push
+              uses: docker/build-push-action@v5
+              with:
+                  context: ./${{ env.SERVICE_PATH }}
+                  file: ./${{ env.SERVICE_PATH }}/Dockerfile
+                  push: ${{ github.event_name != 'pull_request' }}
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+                  platforms: linux/amd64
+                  provenance: false
+
+            - name: Image digest
+              run: |
+                  echo "Image pushed with digest: ${{ steps.build-and-push.outputs.digest }}"
+                  echo "Image tags: ${{ steps.meta.outputs.tags }}"
+
+    deploy:
+        name: Deploy to ECS
+        needs: build-and-push
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: read
+
+        steps:
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+                  role-session-name: GitHubActions-Deploy-${{ github.run_id }}
+
+            - name: Get current task definition
+              id: current-task-def
+              run: |
+                  TASK_DEF_ARN=$(aws ecs describe-services \
+                    --cluster ${{ env.ECS_CLUSTER }} \
+                    --services ${{ env.ECS_SERVICE }} \
+                    --region ${{ env.AWS_REGION }} \
+                    --query 'services[0].taskDefinition' \
+                    --output text)
+                  echo "task-def-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+                  echo "Current task definition: $TASK_DEF_ARN"
+
+            - name: Update ECS service
+              id: update-service
+              run: |
+                  aws ecs update-service \
+                    --cluster ${{ env.ECS_CLUSTER }} \
+                    --service ${{ env.ECS_SERVICE }} \
+                    --force-new-deployment \
+                    --region ${{ env.AWS_REGION }}
+
+                  echo "✅ ECS service update triggered"
+
+            - name: Wait for ECS deployment
+              id: wait-deployment
+              timeout-minutes: 15
+              run: |
+                  echo "Waiting for deployment to stabilize..."
+                  aws ecs wait services-stable \
+                    --cluster ${{ env.ECS_CLUSTER }} \
+                    --services ${{ env.ECS_SERVICE }} \
+                    --region ${{ env.AWS_REGION }}
+
+                  echo "✅ ECS deployment completed successfully"
+
+            - name: Verify deployment health
+              run: |
+                  RUNNING_COUNT=$(aws ecs describe-services \
+                    --cluster ${{ env.ECS_CLUSTER }} \
+                    --services ${{ env.ECS_SERVICE }} \
+                    --region ${{ env.AWS_REGION }} \
+                    --query 'services[0].runningCount' \
+                    --output text)
+
+                  DESIRED_COUNT=$(aws ecs describe-services \
+                    --cluster ${{ env.ECS_CLUSTER }} \
+                    --services ${{ env.ECS_SERVICE }} \
+                    --region ${{ env.AWS_REGION }} \
+                    --query 'services[0].desiredCount' \
+                    --output text)
+
+                  echo "Running tasks: $RUNNING_COUNT / Desired: $DESIRED_COUNT"
+
+                  if [ "$RUNNING_COUNT" != "$DESIRED_COUNT" ]; then
+                    echo "❌ Deployment health check failed"
+                    exit 1
+                  fi
+
+                  echo "✅ All tasks are running and healthy"
+
+            - name: Rollback on failure
+              if: failure() && steps.current-task-def.outputs.task-def-arn
+              run: |
+                  echo "⚠️ Deployment failed, initiating rollback..."
+                  aws ecs update-service \
+                    --cluster ${{ env.ECS_CLUSTER }} \
+                    --service ${{ env.ECS_SERVICE }} \
+                    --task-definition ${{ steps.current-task-def.outputs.task-def-arn }} \
+                    --force-new-deployment \
+                    --region ${{ env.AWS_REGION }}
+
+                  echo "🔄 Rollback initiated to previous task definition"
+
+            - name: Post deployment summary
+              if: always()
+              run: |
+                  echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Image Digest**: ${{ needs.build-and-push.outputs.image-digest }}" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Cluster**: ${{ env.ECS_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Service**: ${{ env.ECS_SERVICE }}" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

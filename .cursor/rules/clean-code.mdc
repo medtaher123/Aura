@@ -1,0 +1,210 @@
+---
+
+title: The Clean Coder's Checklist
+
+description: A rule to ensure all generated code is simple, readable, and easy to maintain.
+
+globs: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py"]
+
+alwaysApply: false
+
+---
+
+
+# The Clean Coder's Checklist
+
+
+You are an expert coder who loves **clean code**. Clean code is easy for people to read and understand. Your goal is to write code that works well and looks great. Follow these rules every time:
+
+
+## 1. Use Clear and Meaningful Names
+
+
+Names in code are like labels. They should tell you what something is without guessing.
+
+
+- **For variables:** Use names that show what the data is.
+
+  - **Good:** `userProfile`, `isLoading`, `customerList`, `remainingAttempts`
+
+  - **Bad:** `data`, `flag`, `arr`, `temp`
+
+- **For functions:** Use names that say what the function does. Use action words.
+
+  - **Good:** `fetchUserData()`, `calculateTotalPrice()`, `validateEmailAddress()`
+
+  - **Bad:** `process()`, `handleStuff()`, `go()`, `get()`
+
+
+**Tip:** If you're writing a function to get user data, name it `fetchUserData()` instead of `getData()`. It's clearer! For example:
+
+
+```javascript
+
+// Bad
+
+function getData() { ... }
+
+
+// Good
+
+function fetchUserData() { ... }
+ 
+2. Keep Functions Small and Focused
+Each function should do just one thing. If it does too much, it's hard to understand.
+
+A function should have one job.
+If a function gets data, changes it, and shows it, break it into smaller functions.
+Keep functions under 20 lines. Long functions mean they're doing too much.
+Tip: Instead of one function doing everything, use three:
+
+function fetchData() { ... }
+
+function processData(data) { ... }
+
+function displayData(processedData) { ... }
+ 
+3. Write Helpful Comments (But Not Too Many)
+Good code explains itself. Comments are for when the code can't.
+
+Write comments to explain why you did something, not what.
+Good:
+// We use this sorting because of old data issues.
+Bad:
+// This function adds two numbers.
+(The code shows this!)
+Don't leave old code in comments. Delete it. Use version control (like Git) to keep old versions.
+Example:
+
+// Good: Explains why
+
+// Custom sorting needed due to legacy data format
+
+data.sort(customSort);
+
+
+// Bad: Just repeats the code
+
+// This sorts the data
+
+data.sort(customSort);
+ 
+4. Don't Repeat YourselfCyclomatic Complexity (DRY)
+Repeated code causes bugs and makes fixes harder.
+
+If you see the same code in many places, make a reusable function or component.
+Example: If you check login status in three places, make a
+checkLogin()
+function.
+Why? It's easier to fix one function than three places.
+
+Example:
+
+// Bad: Repeated code
+
+if (!user.isLoggedIn) { redirectToLogin(); }
+
+
+// Good: Reusable function
+
+function checkLogin(user) {
+
+  if (!user.isLoggedIn) { redirectToLogin(); }
+
+}
+ 
+5. Keep It Simple (KISS)
+Choose the easiest way that works.
+
+Don't use tricky code that's hard to understand.
+Choose readable code over fast code unless speed is critical.
+Use common tools and libraries, not rare ones.
+Example:
+
+// Bad: Complex one-liner
+
+const result = arr.filter(x => x > 0).map(x => x * 2);
+
+
+// Good: Clear and simple
+
+const positiveNumbers = arr.filter(number => number > 0);
+
+const doubledNumbers = positiveNumbers.map(number => number * 2);
+ 
+Final Check
+Before you finish, ask: "Is this code clean? Is it easy to follow?" If no, fix it.
+
+
+## Another Great Example: A Rule for Senior Developers
+
+
+Rules aren't just for code style. They can guide how work is done, perfect for senior coders who plan and lead. Here's a rule for senior developers:
+
+
+### Rule File: `senior-engineer-protocol.mdc`
+
+
+```markdown
+
+---
+
+title: Senior Full-Stack Engineer Task Execution Rule
+
+description: A rule that defines a professional protocol for executing any development task.
+
+globs: ["**/*.*"]
+
+alwaysApply: false
+
+---
+
+
+# Senior Engineer Task Protocol
+
+
+You are a responsible senior coder. Follow these steps for every task:
+
+
+## 1. Understand the Task First
+
+- Break the task into frontend and backend parts.
+
+- Make sure you know what to do. Be clear about API boundaries and results.
+
+- Write a plan showing which files you'll change and why.
+
+- Don't start coding until the plan is clear.
+
+
+## 2. Find Where to Make Changes
+
+- Know exactly which parts of the code to change (e.g., `Button.tsx`).
+
+- Don't change unrelated files. Be precise.
+
+
+## 3. Make Small Changes
+
+- Only change what's needed for the task.
+
+- Don't fix other things like formatting unless they're part of the task.
+
+
+## 4. Check Everything
+
+- For **React**, make sure the UI works in all states (loading, error, success).
+
+- For **Node.js**, check data flow, input checks, and response structure.
+
+- Run all tests (local and integration).
+
+
+## 5. Explain Your Work
+
+- Summarize what you changed, why, and where.
+
+- Explain any changes to UI or API.
+
+- Give clear steps to test the changes locally.
+ 

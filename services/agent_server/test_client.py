@@ -14,13 +14,31 @@ import json
 import sys
 import argparse
 from typing import Any, Optional
-from datetime import datetime
-
+from datetime import datetime, timedelta, timezone
 import httpx
 import websockets
 from websockets.exceptions import WebSocketException
-from src.api.models import ChatResumeMessage
+from src.schemas.websocket import ChatResumeMessage
+import jwt
 
+
+import boto3
+import os
+
+def get_test_token(issuer: str = "metaplanet-local-test-environment") -> str:
+    """Forges a JWT that matches the TestProvider's expected issuer."""
+    payload = {
+        "iss": issuer,
+        "sub": "test_user",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        "iat": datetime.now(timezone.utc),
+        "token_use": "access"
+    }
+    return jwt.encode(payload, "secret", algorithm="HS256")
+
+
+token = get_test_token()
+headers = {"Authorization": f"Bearer {token}"} if token else {}
 
 class AgentServerTestClient:
     """Simple test client for the Agent Server."""
@@ -75,7 +93,7 @@ class AgentServerTestClient:
         self.print_status("Testing WebSocket connection...")
 
         try:
-            async with websockets.connect(self.ws_url) as ws:
+            async with websockets.connect(self.ws_url, additional_headers=headers) as ws:
                 # Wait for connection acknowledgment
                 response = await asyncio.wait_for(ws.recv(), timeout=5.0)
                 data = json.loads(response)
@@ -111,7 +129,8 @@ class AgentServerTestClient:
         self.print_status(f"Testing chat request: '{message}'")
 
         try:
-            async with websockets.connect(self.ws_url) as ws:
+            
+            async with websockets.connect(self.ws_url, additional_headers=headers) as ws:
                 # Wait for connection acknowledgment
                 ack = await asyncio.wait_for(ws.recv(), timeout=5.0)
                 ack_data = json.loads(ack)

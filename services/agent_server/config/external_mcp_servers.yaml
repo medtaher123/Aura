@@ -1,0 +1,61 @@
+# External MCP server registry — source of truth for *additional* MCP servers.
+# Reconciled on every agent_server startup (upsert by slug).
+# Runtime ``enabled`` is toggled in the admin dashboard and preserved across reconciles.
+#
+# Metaplanet MCP is NOT listed here. It is first-party and ensured from
+# MCP_SERVER_URL / agent server config (see MetaplanetMcpProvider).
+#
+# Transports / runners:
+#   - streamable_http: set base_url (…/mcp is appended automatically if missing)
+#       set append_mcp_path: false when base_url is already the MCP endpoint
+#   - runner: node: uses NODE_MCP_URL from .env + port from this file
+#       → {NODE_MCP_URL}:{port}  (e.g. http://localhost:8101)
+#   - stdio: set command + args (+ optional env) — prefer node runner for Node packages
+#
+# Environment placeholders: ${VAR_NAME}.
+
+mcp_servers:
+  - slug: ign-geocontext
+    display_name: IGN GeoContext
+    base_url: https://geollm.beta.ign.fr/geocontext
+    transport: streamable_http
+    enabled: true
+    auth_headers: {}
+
+  - slug: ign-carto
+    display_name: IGN Carto
+    base_url: https://geollm.beta.ign.fr/carto
+    transport: streamable_http
+    enabled: true
+    auth_headers: {}
+
+  - slug: nominatim
+    display_name: Nominatim
+    base_url: https://gateway.pipeworx.io/nominatim/mcp
+    transport: streamable_http
+    enabled: true
+    auth_headers: {}
+
+  - slug: data-gouv
+    display_name: Data Gouv
+    base_url: https://mcp.data.gouv.fr/mcp 
+    transport: streamable_http
+    enabled: true
+    auth_headers: {}
+
+
+  - slug: pappers
+    display_name: Pappers
+    base_url: https://mcp.pappers.fr/${PAPPERS_API_KEY}
+    transport: streamable_http
+    append_mcp_path: false
+    enabled: true
+    auth_headers: {}
+
+ # - slug: immo-france
+ #   display_name: Immo France
+ #   runner: node
+ #   port: 8101
+ #   transport: streamable_http
+ #   enabled: true
+ #   auth_headers: {}

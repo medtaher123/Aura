@@ -84,18 +84,10 @@ class TestDefaults:
 class TestGetChatLLM:
     """Tests for get_chat_llm function (mocked)."""
 
-    def test_get_llm_alias(self):
-        """Test that get_llm is an alias for get_chat_llm."""
-        from src.services.llm_service import get_llm, get_chat_llm
-        # Just verify they exist and have same signature
-        assert callable(get_llm)
-        assert callable(get_chat_llm)
-
     def test_get_chat_llm_module_structure(self):
         """Test that the module has expected structure."""
         from src.services import llm_service
 
         assert hasattr(llm_service, 'get_chat_llm')
-        assert hasattr(llm_service, 'get_llm')
         assert hasattr(llm_service, '_infer_bedrock_provider')
         assert hasattr(llm_service, 'DEFAULT_BEDROCK_MODEL_ID')

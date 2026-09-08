@@ -97,6 +97,10 @@ class MCPServerConfig(BaseSettings):
         default=5000,
         description="Default radius for spatial proximity queries",
     )
+    bdtopo_tile_server_url: str = Field(
+        default="",
+        description="pg_tileserv base URL for BDTOPO vector tiles (browser-reachable)",
+    )
 
     # Maxar Open Data STAC catalog
     maxar_stac_catalog_url: str = Field(
@@ -121,6 +125,19 @@ class MCPServerConfig(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+    )
+
+    terrazard_database_url: str = Field(
+        default="",
+        description="Terrazard database URL",
+    )
+    terrazard_tile_server_url: str = Field(
+        default="",
+        description="pg_tileserv base URL for TerraZard hazard vector tiles",
+    )
+    terrazard_default_model: str = Field(
+        default="flood80",
+        description="Default TerraZard hazard model_id",
     )
 
 
