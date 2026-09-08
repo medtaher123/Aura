@@ -1,10 +1,11 @@
 """Unit tests for FIRMS source selection in fire detection."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from modules.hazards.fire_detection import (
+    RECENT_DAYS,
     _dedupe_fire_dataframe,
     _load_fire_dataframe,
     _needs_api,
@@ -17,27 +18,34 @@ from modules.hazards.fire_detection import (
 TODAY = date(2026, 8, 19)
 
 
+class _FrozenDate(date):
+    @classmethod
+    def today(cls):
+        return TODAY
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("start_date", "end_date", "expect_archive", "expect_api"),
+    ("start_date", "end_date"),
     [
-        ("2026-07-01", "2026-08-31", True, True),
-        ("2026-08-15", "2026-08-19", False, True),
-        ("2024-01-01", "2024-01-07", True, False),
-        # 7-day window crosses the 5-day NRT cutoff → archive + API
-        ("2026-08-12", "2026-08-19", True, True),
-        ("2026-08-01", "2026-08-10", True, False),
+        ("2026-07-01", "2026-08-31"),
+        ("2026-08-15", "2026-08-19"),
+        ("2024-01-01", "2024-01-07"),
+        ("2026-08-12", "2026-08-19"),
+        ("2026-08-01", "2026-08-10"),
     ],
 )
-def test_source_selection_for_date_ranges(
-    start_date, end_date, expect_archive, expect_api
-):
+def test_source_selection_for_date_ranges(start_date, end_date, monkeypatch):
+    monkeypatch.setattr("modules.hazards.fire_detection.date", _FrozenDate)
     start_obj = date.fromisoformat(start_date)
     end_obj = date.fromisoformat(end_date)
+    cutoff = TODAY - timedelta(days=RECENT_DAYS)
+    expect_archive = start_obj < cutoff
+    expect_api = end_obj >= cutoff
     assert _needs_archive(start_obj, today=TODAY) is expect_archive
     assert _needs_api(end_obj, today=TODAY) is expect_api
-    assert should_use_archive(start_date, end_date, today=TODAY) is expect_archive
-    assert should_use_api(start_date, end_date, today=TODAY) is expect_api
+    assert should_use_archive(start_date, end_date) is expect_archive
+    assert should_use_api(start_date, end_date) is expect_api
 
 
 @pytest.mark.unit

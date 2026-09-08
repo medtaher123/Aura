@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, date
 from pathlib import Path
 import io
+import math
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 from core.logger import get_logger
@@ -13,6 +14,62 @@ from utils.map_view_service import (
     view_state_from_points,
 )
 from utils.contracts import ToolArtifacts, ToolCoordinates, ToolResponse
+
+
+def _debug_treated_bbox_layer(bbox: list[float]) -> dict:
+    """TEMPORARY: Pydeck PolygonLayer outlining the treated AOI bbox."""
+    min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+    ring = [
+        [min_lon, min_lat],
+        [max_lon, min_lat],
+        [max_lon, max_lat],
+        [min_lon, max_lat],
+        [min_lon, min_lat],
+    ]
+    return {
+        "type": "PolygonLayer",
+        "data": [{"polygon": ring, "name": "Treated area (debug)"}],
+        "get_polygon": "polygon",
+        "stroked": True,
+        "filled": True,
+        "get_fill_color": [230, 126, 34, 40],
+        "get_line_color": [230, 126, 34, 230],
+        "line_width_min_pixels": 2,
+        "get_line_width": 2,
+        "pickable": False,
+    }
+
+
+def _bbox_from_radius_km(lat: float, lon: float, radius_km: float) -> list[float]:
+    """Approximate search AOI as [min_lat, max_lat, min_lon, max_lon]."""
+    dlat = radius_km / 111.0
+    cos_lat = max(math.cos(math.radians(lat)), 1e-6)
+    dlon = radius_km / (111.0 * cos_lat)
+    return [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+
+
+def _treated_area_box_geojson(bbox: list[float]) -> dict:
+    """GeoJSON Feature for the treated AOI bbox ``[min_lat, max_lat, min_lon, max_lon]``."""
+    min_lat, max_lat, min_lon, max_lon = (float(v) for v in bbox)
+    return {
+        "type": "Feature",
+        "properties": {
+            "name": "Treated area (debug)",
+            "kind": "treated_area_bbox",
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [min_lon, min_lat],
+                    [max_lon, min_lat],
+                    [max_lon, max_lat],
+                    [min_lon, max_lat],
+                    [min_lon, min_lat],
+                ]
+            ],
+        },
+    }
 
 logger = get_logger(__name__)
 config = get_config()
@@ -118,8 +175,10 @@ def find_archive_files_for_range(start_date_obj, end_date_obj):
 
 # Recent queries use NASA FIRMS NRT; older ranges use yearly S3 archives.
 # When a range spans both, load and merge both sources.
-RECENT_DAYS = 7
-FIRMS_NRT_DAYS = 7
+# FIRMS area API day_range is limited to [1..5].
+RECENT_DAYS = 5
+FIRMS_NRT_DAYS = 5
+FIRMS_NRT_DAY_RANGE_MAX = 5
 FIRMS_NRT_SOURCES = (
     "VIIRS_NOAA20_NRT",
     "VIIRS_SNPP_NRT",
@@ -140,16 +199,20 @@ def _needs_api(end_date_obj: date, today: date | None = None) -> bool:
     return end_date_obj >= _recent_cutoff(today)
 
 
-def should_use_api(start_date: str, end_date: str) -> bool:
+def should_use_api(
+    start_date: str, end_date: str, today: date | None = None
+) -> bool:
     """Return True when the query should include NASA FIRMS NRT data."""
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
-    return _needs_api(end_date_obj)
+    return _needs_api(end_date_obj, today=today)
 
 
-def should_use_archive(start_date: str, end_date: str) -> bool:
+def should_use_archive(
+    start_date: str, end_date: str, today: date | None = None
+) -> bool:
     """Return True when the query should include archived FIRMS CSV data."""
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
-    return _needs_archive(start_date_obj)
+    return _needs_archive(start_date_obj, today=today)
 
 
 def _read_firms_api_csv(url: str) -> str:
@@ -191,8 +254,9 @@ def _read_firms_api_dataframe(source: str, day_range: int = FIRMS_NRT_DAYS):
             "MAP_KEY is not configured in the MCP server environment."
         )
 
+    clamped_days = max(1, min(int(day_range), FIRMS_NRT_DAY_RANGE_MAX))
     url = (
-        f"{FIRMS_API_BASE}/{MAP_KEY}/{source}/world/{day_range}"
+        f"{FIRMS_API_BASE}/{MAP_KEY}/{source}/world/{clamped_days}"
     )
     csv_text = _read_firms_api_csv(url)
     _validate_firms_csv_text(csv_text)
@@ -558,25 +622,42 @@ def detect_fire_tool(
             )
         )
 
+        # TEMPORARY DEBUG: draw the search AOI (radius around center; falls
+        # back to geocoded city bbox when coords are unavailable).
+        debug_bbox = None
+        if coords is not None:
+            try:
+                debug_bbox = _bbox_from_radius_km(
+                    float(coords.lat), float(coords.lon), radius_km_f
+                )
+            except (TypeError, ValueError):
+                debug_bbox = None
+        if debug_bbox is None and isinstance(bbox, list) and len(bbox) == 4:
+            debug_bbox = list(bbox)
+
+        map_spec: dict = {
+            "title": "Fires near city",
+            "points": points,
+            "view_state": view_state,
+            "tooltip": {
+                "text": "{acq_date} {acq_time}\nBrightness: {brightness}"
+            },
+            "fill_color": [255, 0, 0, 160],
+            "radius": 5,
+            "radius_units": "pixels",
+            "radius_min_pixels": 2,
+            "radius_max_pixels": 7,
+        }
+        if debug_bbox is not None:
+            map_spec["bbox"] = debug_bbox
+            map_spec["box"] = _treated_area_box_geojson(debug_bbox)
+            map_spec["layers"] = [_debug_treated_bbox_layer(debug_bbox)]
+
         return ToolResponse(
             tool_name="detect_fire_tool",
             message=message,
             artifacts=ToolArtifacts(
-                maps=[
-                    {
-                        "title": "Fires near city",
-                        "points": points,
-                        "view_state": view_state,
-                        "tooltip": {
-                            "text": "{acq_date} {acq_time}\nBrightness: {brightness}"
-                        },
-                        "fill_color": [255, 0, 0, 160],
-                        "radius": 5,
-                        "radius_units": "pixels",
-                        "radius_min_pixels": 2,
-                        "radius_max_pixels": 7,
-                    }
-                ],
+                maps=[map_spec],
                 thumbnails=[],
                 urls=[],
             ),
@@ -584,7 +665,11 @@ def detect_fire_tool(
             end_date=end_date,
             city=display_location,
             coordinates=coords,
-            data={"radius_km": radius_km_f, "nb_fires": nb_fires},
+            data={
+                "radius_km": radius_km_f,
+                "nb_fires": nb_fires,
+                "debug_treated_bbox": debug_bbox,
+            },
             error=False,
         )
 

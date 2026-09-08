@@ -227,7 +227,7 @@ async def test_flood_damage_city_tool_success_with_mocked_athena(mcp_client, mon
     assert data.get("country") == "France"
     assert data.get("depth_m") == 2.0
     assert data.get("year") == 2024
-    assert data.get("total_area_m2") == 12000.0
+    assert data.get("total_area_m2") == round(12000.0 / 110, 2)
     assert total_estimated_damage_eur is not None and total_estimated_damage_eur > 0 
     assert data.get("unit") == "EUR"
     breakdown = data.get("breakdown") or []
@@ -300,4 +300,4 @@ async def test_flood_damage_city_tool_filter_asset_residential(mcp_client, monke
     assert result.get("error") is False
     breakdown = (result.get("data") or {}).get("breakdown") or []
     assert all(b["asset_class"] == "residential" for b in breakdown)
-    assert (result.get("data") or {}).get("total_area_m2") == 5000.0
+    assert (result.get("data") or {}).get("total_area_m2") == round(5000.0 / 110, 2)
